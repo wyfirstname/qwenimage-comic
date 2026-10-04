@@ -1,0 +1,15 @@
+# ComfyUI 模型路径映射模板
+#
+# 用途：让 ComfyUI 直接复用本项目的 models/ 目录，避免模型重复占磁盘。
+# 安装：把本文件复制为  comfyui/extra_model_paths.yaml
+#       （Windows:  copy scripts\extra_model_paths.yaml comfyui\extra_model_paths.yaml）
+#
+# 注意：base_path 是相对于「本文件所在目录」解析的，
+#       本文件放在 comfyui/ 下，因此 ../models 即指向项目根的 models/。
+
+qwenimages:
+    base_path: ../models
+    is_default: true
+    diffusion_models: qwen-image-2.1-unc
+    text_encoders: qwen-image-2.1-unc/text_encoders
+    vae: qwen-image-2.1-unc/vae

@@ -1,0 +1,11 @@
+# Web 应用依赖清单（保证服务 + 占位出图模式可直接运行）
+# 训练/推理重依赖见 requirements-inference.txt
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+python-multipart>=0.0.12
+pillow>=10.4.0
+python-dotenv>=1.0.1
+aiofiles>=24.1.0

@@ -1,0 +1,14 @@
+# 本地推理依赖（体积大，按需安装）
+# 安装前请确认本机 CUDA 版本，并按 https://pytorch.org 的指引安装匹配的 torch
+# 仅使用 mock 占位模式验证界面时，无需安装本文件
+
+torch>=2.4.0
+torchvision
+diffusers>=0.32.0
+transformers>=4.49.0
+accelerate>=1.0.0
+safetensors>=0.4.5
+gguf>=0.10.0
+huggingface_hub>=0.26.0
+sentencepiece
+protobuf

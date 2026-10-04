@@ -1,0 +1,52 @@
+# ============================================================
+#  qwenimage-comic / .gitignore
+#  仅提交「核心代码」；本地依赖、模型权重、运行数据一律不入库
+# ============================================================
+
+# ---------- Python 缓存 / 虚拟环境 ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---------- 环境变量（含密钥，务必本地保留）----------
+.env
+.env.local
+
+# ---------- 模型权重（约 14.6 GB，由 download_models 脚本拉取）----------
+models/
+
+# ---------- 本地推理引擎（第三方仓库，按 README 自行 git clone）----------
+comfyui/
+
+# ---------- 运行时数据（出图、SQLite、日志、导出 PDF）----------
+data/
+backend/data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+*.log
+logs/
+
+# ---------- 构建产物 ----------
+dist/
+build/
+node_modules/
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 会话/工具产物 ----------
+.workbuddy/
+_tmp/
+docs/ui-steps/六项修复验证-项目卡片与剧本.png
