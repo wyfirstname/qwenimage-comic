@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import blobs, repo
 from app.api import comic as comic_api
-from app.api import events, gallery, generate, system
+from app.api import events, gallery, generate, portrait as portrait_api, system
 from app.config import settings
 from app.db import db
 from app.inference import device as dev
@@ -120,6 +120,7 @@ app.include_router(events.router, prefix="/api/v1")
 app.include_router(gallery.router, prefix="/api/v1")
 app.include_router(system.router, prefix="/api/v1")
 app.include_router(comic_api.router, prefix="/api/v1")
+app.include_router(portrait_api.router, prefix="/api/v1")
 
 
 @app.exception_handler(Exception)
@@ -158,7 +159,7 @@ if _frontend.exists():
     async def index():
         # 给脚本/样式带上文件指纹（mtime），文件一变 URL 就变，强制浏览器拉新版
         html = (_frontend / "index.html").read_text(encoding="utf-8")
-        for name in ("style.css", "app.js", "comic.js"):
+        for name in ("style.css", "app.js", "comic.js", "portrait.js"):
             html = html.replace(f"/{name}", f"/{name}?v={_static_version(name)}")
         return Response(content=html, media_type="text/html",
                         headers={"Cache-Control": "no-cache"})

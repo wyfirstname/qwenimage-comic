@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -339,3 +339,37 @@ class ComicExportIn(ComicRenderIn):
 
     rerender: bool = False
     color_mode: str = Field("color", pattern="^(color|bw)$")
+
+
+# ============================================================
+#  人像编辑（Qwen-Image 2.1 图像编辑，官方玩法）
+# ============================================================
+
+
+class PortraitComposeIn(BaseModel):
+    """提示词组装 / 智能改写请求。"""
+
+    preset: str = Field(..., min_length=1, description="玩法 id")
+    values: Dict[str, str] = Field(default_factory=dict, description="玩法变量")
+    image_count: int = Field(0, ge=0, le=8, description="已上传参考图张数")
+    prompt_override: str = Field("", description="手动 / 智能改写后的提示词，非空则直接采用")
+
+
+class PortraitSubmitIn(PortraitComposeIn):
+    """人像编辑出图请求（复用既有出图队列）。"""
+
+    images: List[str] = Field(default_factory=list,
+                              description="有序参考图（base64 或 data URL），第 1 张决定输出尺寸")
+    steps: int = Field(8, ge=1, le=100)
+    seed: int = -1
+    count: int = Field(1, ge=1, le=4)
+    width: int = Field(768, ge=64, le=2048)
+    height: int = Field(1024, ge=64, le=2048)
+    max_mp: float = Field(0.8, ge=0.1, le=4.0, description="参考图像素预算（百万像素）")
+
+    @field_validator("width", "height")
+    @classmethod
+    def _mul64_portrait(cls, v: int) -> int:
+        if v % 64 != 0:
+            raise ValueError("width/height 必须是 64 的整数倍")
+        return v

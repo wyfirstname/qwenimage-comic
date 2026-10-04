@@ -779,3 +779,77 @@ input[type="range"]::-moz-range-thumb {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .export-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
+/* ==================== 人像编辑（Qwen-Image 2.1 图像编辑） ==================== */
+/* 独立类名前缀 pt-，避免与图片生成视图的 .tab/.tab-pane 全局绑定互相干扰 */
+.pt-tabs {
+  display: flex; gap: 4px; border-bottom: 1px solid var(--border);
+  padding: 0 14px; background: var(--surface); flex-wrap: wrap;
+}
+.pt-tab {
+  padding: 9px 14px; background: none; border: none;
+  border-bottom: 2px solid transparent; cursor: pointer;
+  color: var(--text-2); font-size: 13px; font-weight: 550; margin-bottom: -1px;
+}
+.pt-tab:hover { color: var(--text); }
+.pt-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.pt-pane { display: none; padding: 14px; flex: 1; overflow-y: auto; }
+.pt-pane.active { display: block; }
+
+/* 提示词分区（官方结构逐段展示） */
+.pt-sections { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.pt-sec {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-2); padding: 9px 12px;
+}
+.pt-sec-label {
+  display: block; font-size: 12px; font-weight: 650;
+  color: var(--primary); margin-bottom: 4px;
+}
+.pt-sec-text { font-size: 12.5px; line-height: 1.7; color: var(--text-2); white-space: pre-wrap; }
+
+.pt-warn {
+  margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm);
+  background: #fff8e8; border: 1px solid #f0e0bd; color: #7a5b12;
+  font-size: 12.5px; line-height: 1.8;
+}
+.pt-warn ul { margin: 0; padding-left: 18px; }
+
+.pt-help { font-size: 13px; line-height: 1.85; color: var(--text-2); }
+.pt-help h3 {
+  font-size: 13.5px; color: var(--text); margin: 16px 0 8px;
+  padding-bottom: 5px; border-bottom: 1px solid var(--border);
+}
+.pt-help h3:first-child { margin-top: 0; }
+.pt-help code {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--surface-2); padding: 1px 5px; border-radius: 4px;
+}
+.pt-help ul { margin: 6px 0; padding-left: 20px; }
+.pt-help li { margin-bottom: 4px; }
+
+/* 参考图缩略图（带 image_N 编号角标） */
+.pt-thumb {
+  position: relative; width: 88px; height: 88px;
+  border-radius: 7px; overflow: hidden; border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.pt-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pt-thumb .pt-thumb-no {
+  position: absolute; left: 3px; top: 3px; z-index: 2;
+  background: rgba(28, 31, 38, .72); color: #fff;
+  font-size: 10.5px; padding: 1px 6px; border-radius: 20px;
+  font-family: var(--mono);
+}
+.pt-thumb .pt-thumb-del {
+  position: absolute; right: 3px; top: 3px; z-index: 2;
+  width: 18px; height: 18px; line-height: 16px; text-align: center;
+  border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(28, 31, 38, .68); color: #fff; font-size: 12px; padding: 0;
+}
+.pt-thumb .pt-thumb-del:hover { background: var(--danger); }
+.pt-thumb .pt-thumb-first {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  background: rgba(59, 110, 245, .88); color: #fff;
+  font-size: 10px; text-align: center; padding: 2px 0;
+}

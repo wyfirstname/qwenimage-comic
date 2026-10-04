@@ -19,6 +19,7 @@
   <nav class="mainnav" id="mainNav">
     <button class="navitem active" data-view="image">图片生成</button>
     <button class="navitem" data-view="comic">漫画工作室</button>
+    <button class="navitem" data-view="portrait">人像编辑</button>
   </nav>
   <div class="status-area">
     <span id="engineBadge" class="badge badge-mock">加载中…</span>
@@ -183,6 +184,134 @@
   </section>
 </main>
 </div><!-- /view-image -->
+
+<!-- ==================== 人像编辑（Qwen-Image 2.1 图像编辑） ==================== -->
+<div id="view-portrait" class="hidden">
+<main class="layout">
+  <!-- ==================== 左侧控制栏 ==================== -->
+  <aside class="panel">
+    <section class="field">
+      <div class="field-head">
+        <label for="ptPreset">玩法</label>
+        <span class="pill" id="ptLevelTag">—</span>
+      </div>
+      <select id="ptPreset"></select>
+      <p class="hint" id="ptDesc"></p>
+      <p class="hint" id="ptOfficial"></p>
+    </section>
+
+    <section class="field">
+      <div class="field-head">
+        <label>参考图</label>
+        <span class="muted" id="ptImgHint">按上传顺序编号</span>
+        <button class="link-btn" id="ptPickBtn">添加</button>
+      </div>
+      <div id="ptDrop" class="dropzone">
+        <span id="ptDropHint">点击选择，或把图片拖到这里（可多选）</span>
+      </div>
+      <input type="file" id="ptFile" accept="image/*" multiple hidden />
+      <div class="thumbs" id="ptThumbs"></div>
+      <p class="hint muted" id="ptImgTip">第 1 张（image_1）决定输出尺寸</p>
+    </section>
+
+    <section class="field" id="ptVarField">
+      <label>玩法参数</label>
+      <div id="ptVars"></div>
+    </section>
+
+    <section class="field" id="ptMpField">
+      <div class="field-head">
+        <label>参考图像素预算</label>
+        <span class="muted">越大越清晰也越慢</span>
+      </div>
+      <div class="segmented" id="ptMp">
+        <button class="seg" data-mp="0.4">0.4MP</button>
+        <button class="seg active" data-mp="0.8">0.8MP</button>
+        <button class="seg" data-mp="1.2">1.2MP</button>
+      </div>
+    </section>
+
+    <section class="field" id="ptSizeField">
+      <label>输出尺寸（文生图玩法生效）</label>
+      <div class="grid-2">
+        <input type="number" id="ptWidth" value="768" step="64" min="64" max="2048" placeholder="宽" />
+        <input type="number" id="ptHeight" value="1024" step="64" min="64" max="2048" placeholder="高" />
+      </div>
+    </section>
+
+    <section class="field">
+      <div class="field-head">
+        <label for="ptSteps">步数</label>
+        <output id="ptStepsVal">8</output>
+      </div>
+      <div class="slider-row">
+        <input type="range" id="ptSteps" min="4" max="30" step="1" value="8" />
+      </div>
+    </section>
+
+    <section class="field">
+      <div class="field-head">
+        <label for="ptSeed">随机种子</label>
+        <label class="checkbox"><input type="checkbox" id="ptSeedLock" /> 锁定</label>
+        <button class="link-btn" id="ptSeedRandom">随机</button>
+      </div>
+      <input type="number" id="ptSeed" value="-1" />
+    </section>
+
+    <div class="actions">
+      <button id="ptGenerate" class="btn btn-primary">开始生成</button>
+      <button id="ptRewrite" class="btn btn-secondary" title="用本地文本模型按官方结构改写提示词">AI 改写提示词</button>
+    </div>
+    <p class="estimate" id="ptEstimate"></p>
+    <p class="error-text hidden" id="ptError"></p>
+  </aside>
+
+  <!-- ==================== 右侧主区 ==================== -->
+  <section class="content">
+    <div class="pt-tabs">
+      <button class="pt-tab active" data-pttab="result">结果</button>
+      <button class="pt-tab" data-pttab="prompt">提示词</button>
+      <button class="pt-tab" data-pttab="help">玩法说明</button>
+    </div>
+
+    <div class="pt-pane active" id="pt-pane-result">
+      <div class="progress-wrap" id="ptProgressWrap">
+        <div class="progress-bar"><div class="progress-fill" id="ptProgressFill"></div></div>
+        <span class="progress-text" id="ptProgressText">就绪</span>
+      </div>
+      <div class="canvas" id="ptCanvas">
+        <div class="empty" id="ptCanvasEmpty">
+          <div class="empty-icon">◈</div>
+          <p>还没有生成结果</p>
+          <p class="muted">左侧选玩法、上传参考图后点击「开始生成」</p>
+        </div>
+      </div>
+      <div class="thumbs" id="ptResults"></div>
+    </div>
+
+    <div class="pt-pane" id="pt-pane-prompt">
+      <div class="toolbar">
+        <span class="muted">官方结构：锁身份 → 变更内容 → 光线 → 构图 → 禁止项</span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost" id="ptComposeBtn">按模板重新组装</button>
+      </div>
+      <div id="ptSections" class="pt-sections"></div>
+      <div class="field">
+        <div class="field-head">
+          <label for="ptPrompt">最终提示词（可直接编辑）</label>
+          <span class="muted" id="ptPromptState">—</span>
+        </div>
+        <textarea id="ptPrompt" rows="12" placeholder="选择玩法后自动生成…"></textarea>
+      </div>
+      <div id="ptWarnings" class="pt-warn hidden"></div>
+    </div>
+
+    <div class="pt-pane" id="pt-pane-help">
+      <div id="ptHelp" class="pt-help"></div>
+    </div>
+  </section>
+</main>
+</div><!-- /view-portrait -->
 
 <!-- ==================== 漫画工作室 ==================== -->
 <div id="view-comic" class="hidden">
@@ -535,5 +664,6 @@
 
 <script src="/static/app.js"></script>
 <script src="/static/comic.js"></script>
+<script src="/static/portrait.js"></script>
 </body>
 </html>
