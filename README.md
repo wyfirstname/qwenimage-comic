@@ -51,7 +51,7 @@ Qwen-Image 2.1 出图 → 自动拼页与气泡排版。示例为水墨画风《
 </details>
 
 <details>
-<summary><b>🖥 界面截图（六步工作流）</b></summary>
+<summary><b>🖥 界面截图（六步工作流 · 同一项目《水漫金山寺》）</b></summary>
 <br>
 
 | 剧本 | 角色提取 | 场景 |
