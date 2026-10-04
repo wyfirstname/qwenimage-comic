@@ -292,9 +292,18 @@ INFER_TIMEOUT_SECONDS=2400  # 小显存出图慢，超时要留够
 
 如果这个项目对你有帮助，欢迎请我喝杯咖啡
 
-<img src="https://cdn.jsdelivr.net/gh/wyfirstname/qwenimage-comic@main/assets/juanzeng.png" alt="微信赞赏码" width="260">
-
-<sub>微信扫一扫 · 金额随意 · 感谢支持</sub>
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://cdn.jsdelivr.net/gh/wyfirstname/qwenimage-comic@main/assets/juanzeng.png" alt="微信赞赏码" width="220"><br>
+      <sub><b>微信赞赏</b> · 金额随意 · 感谢支持</sub>
+    </td>
+    <td align="center">
+      <img src="https://cdn.jsdelivr.net/gh/wyfirstname/qwenimage-comic@main/assets/gongzhonghao.jpg" alt="公众号二维码" width="190"><br>
+      <sub><b>公众号</b> · 项目更新与教程</sub>
+    </td>
+  </tr>
+</table>
 
 </div>
 

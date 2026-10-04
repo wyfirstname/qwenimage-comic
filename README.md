@@ -367,11 +367,20 @@ qwenimage-comic/
 如果这个项目帮到了你，欢迎请作者喝杯咖啡 ☕
 
 <div align="center">
-  <img src="assets/juanzeng.png" alt="微信赞赏码" width="280">
-  <p><sub>微信扫一扫 · 金额随意，您的支持是持续更新的动力</sub></p>
+  <table>
+    <tr>
+      <td align="center">
+        <img src="assets/juanzeng.png" alt="微信赞赏码" width="230"><br>
+        <sub><b>微信赞赏</b> · 金额随意，您的支持是持续更新的动力</sub>
+      </td>
+      <td align="center">
+        <img src="assets/gongzhonghao.jpg" alt="公众号二维码" width="200"><br>
+        <sub><b>公众号</b> · 扫码关注，获取项目更新与教程</sub>
+      </td>
+    </tr>
+  </table>
+  <p><sub>也可以通过这些方式支持：给项目点个 <b>Star ⭐</b>、提交 Issue / PR、把项目分享给需要的朋友。</sub></p>
 </div>
-
-也可以通过这些方式支持：给项目点个 **Star ⭐**、提交 Issue / PR、把项目分享给需要的朋友。
 
 ---
 
