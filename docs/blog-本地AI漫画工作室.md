@@ -225,7 +225,6 @@ path = _resolve_stored_path(record["path"]) or _resolve_stored_path(record["url"
 ## 怎么装
 
 > 完整步骤在仓库 README，这里给最短路径。
-> **不想折腾环境的，直接跳到文末「🎁 懒人版：一键启动包」。**
 
 **先试水（不需要显卡、不装模型、不装 torch）：**
 
@@ -284,33 +283,6 @@ INFER_TIMEOUT_SECONDS=2400  # 小显存出图慢，超时要留够
 如果你也在折腾本地 AI 绘画、或者只是想要一个不联网的漫画工具，欢迎拿去看看。项目还有一些粗糙的地方，尤其是低显存下的速度，Issue 和 PR 都很欢迎。
 
 如果这个项目帮到了你，**给个 Star ⭐ 就是最大的鼓励**。
-
----
-
-## 🎁 懒人版：一键启动包
-
-上面那套安装流程步骤不少——装推理依赖、clone ComfyUI、配路径映射、下 14.6GB 模型。如果你不想折腾环境，我另外打了一个 **Windows 绿色版一键启动包**：
-
-- **解压即用**：内置 Python 运行时与全部依赖、ComfyUI 与 GGUF 插件，不用装 Python、不用配环境
-- **双击 `start.bat` 就能起服务**：自动生成配置，并拉起 ComfyUI 子进程
-- **模型权重按需下载**：包内附下载脚本走国内镜像，支持断点续传（14.6GB 不塞进包里）
-- **包体约 5.2GB**，**不含任何用户数据**，纯净可直接分发
-
-> 📦 **获取方式：在公众号文章底部获取**
->
-> 一键启动包的下载链接放在公众号文章里，扫码关注后即可在文末找到 👇
-
-<div align="center">
-
-<img src="https://cdn.jsdelivr.net/gh/wyfirstname/qwenimage-comic@main/assets/gongzhonghao.jpg" alt="公众号二维码" width="200">
-
-<sub><b>扫码关注公众号「莹百游素材铺」</b></sub>
-
-<sub>查看文章：<a href="https://mp.weixin.qq.com/s/6Bp_fZj9VkcAPohwb5Jq-A">《我在 6GB 显存的游戏本上，做了一个完全离线的 AI 漫画工作室》</a></sub>
-
-<sub>👉 一键启动包链接在文章底部</sub>
-
-</div>
 
 ---
 
