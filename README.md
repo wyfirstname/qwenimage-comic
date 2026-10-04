@@ -29,15 +29,40 @@ AI 智能分镜 → 逐格出图（角色 + 场景融合）→ 拼页排版（�
 > ⚠️ 面向**有 NVIDIA 显卡**的本地玩家：6GB 显存（RTX 2060）实测可跑，但速度较慢（768×768 / 8 步约 18 分钟/张）；
 > 显存越大越快。没有显卡也能跑「占位模式」体验完整界面与流程。
 
-## 界面预览
+## 效果预览
+
+下面整部漫画**从剧本到成页全程本地生成**：AI 写剧本 → AI 提取角色/场景 → AI 智能分镜 →
+Qwen-Image 2.1 出图 → 自动拼页与气泡排版。示例为水墨画风《水漫金山寺》：
+
+| 第 1 页 | 第 2 页 |
+|:---:|:---:|
+| ![水漫金山寺 第1页](docs/preview/page-1.jpg) | ![水漫金山寺 第2页](docs/preview/page-2.jpg) |
+
+<details>
+<summary><b>📖 查看全部 8 页</b></summary>
+<br>
+
+| 1 | 2 | 3 | 4 |
+|:---:|:---:|:---:|:---:|
+| ![第1页](docs/preview/page-1.jpg) | ![第2页](docs/preview/page-2.jpg) | ![第3页](docs/preview/page-3.jpg) | ![第4页](docs/preview/page-4.jpg) |
+| **5** | **6** | **7** | **8** |
+| ![第5页](docs/preview/page-5.jpg) | ![第6页](docs/preview/page-6.jpg) | ![第7页](docs/preview/page-7.jpg) | ![第8页](docs/preview/page-8.jpg) |
+
+</details>
+
+<details>
+<summary><b>🖥 界面截图（六步工作流）</b></summary>
+<br>
 
 | 剧本 | 角色提取 | 场景 |
-|---|---|---|
+|:---:|:---:|:---:|
 | ![剧本](docs/ui-steps/script.png) | ![角色](docs/ui-steps/character.png) | ![场景](docs/ui-steps/scene.png) |
 
 | 分镜 | 出图 | 排版导出 |
-|---|---|---|
+|:---:|:---:|:---:|
 | ![分镜](docs/ui-steps/panel.png) | ![出图](docs/ui-steps/draw.png) | ![导出](docs/ui-steps/export.png) |
+
+</details>
 
 ---
 
