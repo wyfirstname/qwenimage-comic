@@ -136,6 +136,16 @@ async def unhandled(request: Request, exc: Exception):
 if settings.data_dir_path.exists():
     app.mount("/data", StaticFiles(directory=str(settings.data_dir_path)), name="data")
 
+# 画风库缩略图：/style-thumbs/FA-001.webp（目录可不抓取；存在才挂载）
+try:
+    from app.style_library import THUMBS_DIR as _style_thumbs
+
+    if _style_thumbs.exists():
+        app.mount("/style-thumbs", StaticFiles(directory=str(_style_thumbs)),
+                  name="style-thumbs")
+except Exception:  # pragma: no cover - 防御性
+    pass
+
 # 前端页面
 _frontend = settings.frontend_dir_path
 if _frontend.exists():

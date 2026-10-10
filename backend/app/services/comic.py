@@ -24,6 +24,7 @@ from typing import Any, Optional
 from PIL import Image, ImageDraw, ImageFont
 
 from app import comic_repo as crepo
+from app import rhythm
 from app.comic_defaults import (
     ANATOMY_POSITIVE,
     CHARACTER_NEGATIVE_EXTRA,
@@ -33,12 +34,18 @@ from app.comic_defaults import (
     SCENE_NEGATIVE_EXTRA,
 )
 from app.config import settings
+from app.gen_profiles import DEFAULT_PROFILE, get_profile, list_profiles
 from app.models_util import new_id, now_iso, relative_url, resolve_stored, stored_path
+from app.style_library import attribution as style_attribution
+from app.style_library import expand_style, library as style_library
 
 # ============================================================
 #  预设
 # ============================================================
 
+# 本项目原有 5 个画风 key（jp_bw / jp_color / american / ink / webtoon）保留为
+# STYLE_PRESETS，供 comic_ai 的旧逻辑与存量项目做兼容查询；
+# 实际出图的画风解析一律走 style_library.expand_style()（内含这 5 个的别名条目）。
 STYLE_PRESETS: dict[str, dict[str, Any]] = {
     "jp_bw": {
         "name": "日式黑白漫画",
@@ -101,6 +108,64 @@ _AUTO_SHOT_CYCLE = ["wide", "medium", "close", "medium", "full", "extreme", "med
 
 _SHOT_NAME_TO_KEY = {v["name"]: k for k, v in SHOT_PRESETS.items()}
 _SHOT_NAME_TO_KEY.update({"全景": "full", "动作镜头": "action", "过肩镜头": "over", "背影": "back"})
+
+
+# ------------------------------------------------------------
+#  画风 / 主题色 / 分镜节奏：统一的解析入口
+# ------------------------------------------------------------
+
+def resolve_style(project: dict) -> dict:
+    """把项目的画风解析成可注入提示词的完整口径（兼容旧 key / FA-xxx / 001）。"""
+    return expand_style(project.get("style") or "jp_bw")
+
+
+def style_prompt_text(project: dict) -> str:
+    """该项目的画风提示词文本（keep_style 关闭时返回空串）。"""
+    if not project.get("keep_style", 1):
+        return ""
+    return resolve_style(project).get("prompt_text") or ""
+
+
+def theme_prompt_text(project: dict) -> str:
+    """主题色提示词（一行文本，如 `主题色：克莱因蓝（Klein Blue）。`）。
+
+    主题色还能"外溢"到排版阶段：气泡底色 / 页码 / 页边框都会跟着走（见 _theme_rgb）。
+    """
+    parts: list[str] = []
+    for key in ("theme_color", "theme_color2"):
+        line = style_library().color_prompt(project.get(key))
+        if line and line not in parts:
+            parts.append(line)
+    return " ".join(parts)
+
+
+def project_style_grayscale(project: dict) -> bool:
+    return bool(resolve_style(project).get("grayscale"))
+
+
+# 主题色 hex → RGB；缺省回落到中性灰（用于排版配色）
+_DEFAULT_THEME_RGB = (18, 18, 18)
+_DEFAULT_THEME2_RGB = (120, 126, 138)
+
+
+def _hex_to_rgb(hex_str: str) -> Optional[tuple[int, int, int]]:
+    s = (hex_str or "").strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join(c * 2 for c in s)
+    if len(s) != 6:
+        return None
+    try:
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+    except ValueError:
+        return None
+
+
+def _theme_rgb(project: dict) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """返回 (主色, 点缀色) 的 RGB；未设置时回落到默认黑 + 灰。"""
+    lib = style_library()
+    main = _hex_to_rgb(lib.color_hex(project.get("theme_color")))
+    accent = _hex_to_rgb(lib.color_hex(project.get("theme_color2")))
+    return (main or _DEFAULT_THEME_RGB, accent or main or _DEFAULT_THEME2_RGB)
 
 # 反向提示词常量统一放在 app/comic_defaults.py（数据层迁移也要用同一份文本）
 
@@ -237,6 +302,7 @@ def parse_script(text: str) -> list[dict[str, Any]]:
         panels.append({
             "page": max(1, page),
             "shot": shot_key,
+            "shot_explicit": explicit_shot,
             "scene": scene,
             "dialogue": dialogue,
             "sfx": sfx,
@@ -505,7 +571,7 @@ def build_prompt(project: dict, panel: dict, characters: list[dict],
       * 有图 → 按 Qwen-Image 2.1 官方编辑用法，用 image_1 / image_2 指代参考图，
         并明确"人物要自然融入场景"，而不是把参考图并排贴出来。
     """
-    style = STYLE_PRESETS.get(project.get("style") or "jp_bw", STYLE_PRESETS["jp_bw"])
+    style = resolve_style(project)
     shot = SHOT_PRESETS.get(panel.get("shot") or "medium", SHOT_PRESETS["medium"])
 
     slots = list(ref_slots or [])
@@ -515,9 +581,14 @@ def build_prompt(project: dict, panel: dict, characters: list[dict],
 
     parts: list[str] = []
     if project.get("keep_style", 1):
-        parts.append(style["en"])
+        parts.append(style.get("prompt_text") or "")
         parts.append("single comic panel, consistent art style across the whole comic")
     parts.append(shot["en"])
+
+    # 主题色：一行文本注入（handraw 机制），显存零压力，还能外溢到排版配色
+    theme_line = theme_prompt_text(project)
+    if theme_line:
+        parts.append(theme_line)
 
     scene = (panel.get("scene") or "").strip()
 
@@ -864,7 +935,8 @@ async def enqueue_panel(panel_id: str, strength: float | None = None,
         "guidance_scale": 1.0 if ref["refs"] else float(project["guidance"]),
         "seed": seed,
         "batch_size": 1,
-        "count": 1,
+        # 候选张数：16GB 下 batch 2~4 一次出多张挑（本机默认 1，避免机时翻倍）
+        "count": max(1, int(project.get("batch") or 1)),
         "mode": "txt2img",
         "strength": 1.0,
         "channel": "auto",
@@ -978,11 +1050,14 @@ def on_panel_error(panel_id: str, message: str) -> None:
 
 def build_scene_prompt(project: dict, scene: dict) -> tuple[str, str]:
     """场景概念图提示词：环境全景、无人物，作为整部漫画的背景锚点。"""
-    style = STYLE_PRESETS.get(project.get("style") or "jp_bw", STYLE_PRESETS["jp_bw"])
+    style_text = style_prompt_text(project)
     parts: list[str] = []
-    if project.get("keep_style", 1):
-        parts.append(style["en"])
+    if style_text:
+        parts.append(style_text)
     parts.append("background concept art, environment only, no people")
+    theme_line = theme_prompt_text(project)
+    if theme_line:
+        parts.append(theme_line)
     if scene.get("prompt"):
         parts.append(scene["prompt"].strip())
     detail = "；".join(x for x in (
@@ -1106,10 +1181,13 @@ def build_character_prompt(project: dict, character: dict) -> tuple[str, str]:
     用半身像做图生图参考时脸部占比更大，形象（尤其是五官）传导更准；
     全身小人的话脸部只有几十像素，图生图时根本锁不住长相。
     """
-    style = STYLE_PRESETS.get(project.get("style") or "jp_bw", STYLE_PRESETS["jp_bw"])
+    style_text = style_prompt_text(project)
     parts: list[str] = []
-    if project.get("keep_style", 1):
-        parts.append(style["en"])
+    if style_text:
+        parts.append(style_text)
+    theme_line = theme_prompt_text(project)
+    if theme_line:
+        parts.append(theme_line)
     parts.append("single character reference, exactly one person only, "
                  "upper body portrait, waist up, front view facing camera, "
                  "plain neutral gray background, clear detailed face, "
@@ -1388,8 +1466,12 @@ def _wrap_cjk(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[s
 
 
 def _draw_bubble(page: Image.Image, box: tuple[int, int, int, int], text: str,
-                 position: str = "auto", index: int = 0, font_scale: float = 1.0) -> None:
-    """在指定格内绘制对话气泡（圆角矩形 + 尾巴 + 自动换行）。"""
+                 position: str = "auto", index: int = 0, font_scale: float = 1.0,
+                 ink: tuple[int, int, int] = (20, 20, 20)) -> None:
+    """在指定格内绘制对话气泡（圆角矩形 + 尾巴 + 自动换行）。
+
+    ink：气泡描边与文字颜色，跟随项目主题色（未设主题色时是近黑色）。
+    """
     x0, y0, x1, y1 = box
     cell_w = x1 - x0
     cell_h = y1 - y0
@@ -1427,26 +1509,27 @@ def _draw_bubble(page: Image.Image, box: tuple[int, int, int, int], text: str,
     draw = ImageDraw.Draw(page)
     radius = max(8, int(min(bubble_w, bubble_h) * 0.22))
     draw.rounded_rectangle([bx0, by0, bx1, by1], radius=radius,
-                           fill=(255, 255, 255), outline=(20, 20, 20), width=2)
+                           fill=(255, 255, 255), outline=ink, width=2)
 
     # 尾巴：朝下的三角（或朝上）
     tail_w = max(10, int(cell_w * 0.03))
     cx = bx0 + bubble_w // 2
     if anchor == "top":
         draw.polygon([(cx - tail_w, by1 - 2), (cx + tail_w // 2, by1 + tail_w), (cx + tail_w, by1 - 2)],
-                     fill=(255, 255, 255), outline=(20, 20, 20))
+                     fill=(255, 255, 255), outline=ink)
     else:
         draw.polygon([(cx - tail_w, by0 + 2), (cx + tail_w // 2, by0 - tail_w), (cx + tail_w, by0 + 2)],
-                     fill=(255, 255, 255), outline=(20, 20, 20))
+                     fill=(255, 255, 255), outline=ink)
 
     ty = by0 + padding
     for line in lines:
         lw = font.getlength(line)
-        draw.text((bx0 + (bubble_w - lw) / 2, ty), line, font=font, fill=(15, 15, 15))
+        draw.text((bx0 + (bubble_w - lw) / 2, ty), line, font=font, fill=ink)
         ty += line_h
 
 
-def _draw_sfx(page: Image.Image, box: tuple[int, int, int, int], text: str) -> None:
+def _draw_sfx(page: Image.Image, box: tuple[int, int, int, int], text: str,
+              ink: tuple[int, int, int] = (15, 15, 15)) -> None:
     x0, y0, x1, y1 = box
     cell_w, cell_h = x1 - x0, y1 - y0
     font = _load_font(max(18, int(cell_w * 0.13)), bold=True)
@@ -1455,7 +1538,7 @@ def _draw_sfx(page: Image.Image, box: tuple[int, int, int, int], text: str) -> N
     draw = ImageDraw.Draw(page)
     for dx, dy in ((-3, 0), (3, 0), (0, -3), (0, 3), (-2, -2), (2, 2), (-2, 2), (2, -2)):
         draw.text((tx + dx, ty + dy), text, font=font, fill=(255, 255, 255))
-    draw.text((tx, ty), text, font=font, fill=(15, 15, 15))
+    draw.text((tx, ty), text, font=font, fill=ink)
 
 
 def _cover_paste(page: Image.Image, img: Image.Image, box: tuple[int, int, int, int],
@@ -1516,7 +1599,12 @@ def render_project_pages(
     grayscale: bool | None = None,
     show_page_number: bool = True,
 ) -> dict:
-    """把已生成的分镜排版成漫画页，返回生成的成品列表。"""
+    """把已生成的分镜排版成漫画页，返回生成的成品列表。
+
+    P4 参数重定：气泡字号、边框线宽、页脚字号都改成**按页宽比例**算
+    （原来是按 768 页宽调的固定系数），这样页宽从 1240 拉到 1800 也不会失调。
+    主题色若已设置，气泡描边 / 页码 / 分格边框都会跟着走，整本立刻成套。
+    """
     project = crepo.get_project(project_id)
     if not project:
         raise ComicError("项目不存在")
@@ -1534,14 +1622,21 @@ def render_project_pages(
     # 灰度烘焙进成品页后彩色就再也找不回来了）
     grayscale = bool(grayscale)
 
+    # 主题色（主色 + 点缀色）：跟随项目设置，未设时是近黑 + 中灰
+    ink, accent = _theme_rgb(project)
+
     page_width = max(600, min(int(page_width), 2400))
+    # 页宽比例（相对 1240 的基准）——所有线宽 / 字号 / 间距按它缩放
+    scale = page_width / 1240.0
+    margin = max(12, int(margin * scale))
+    gutter = max(6, int(gutter * scale))
     inner_w = page_width - margin * 2
     cell_w = int((inner_w - gutter * (cols - 1)) / cols)
     aspect = float(project.get("height") or 768) / float(project.get("width") or 768)
     cell_h = int(cell_w * max(0.5, min(2.0, aspect)))
 
     body_h = rows * cell_h + gutter * (rows - 1)
-    footer = 34 if show_page_number else 0
+    footer = max(24, int(34 * scale)) if show_page_number else 0
     page_h = margin * 2 + body_h + footer
 
     # 成品页与分镜图/角色图/场景图放在同一个项目目录里
@@ -1571,17 +1666,19 @@ def render_project_pages(
                 draw.rectangle(box, fill=(238, 239, 242), outline=(180, 184, 192))
                 continue
 
-            draw.rectangle(box, outline=(18, 18, 18), width=max(2, int(cell_w * 0.006)))
+            # 分格边框：跟随主题色（原来写死近黑）
+            draw.rectangle(box, outline=ink, width=max(2, int(cell_w * 0.006)))
             if panel.get("dialogue"):
-                _draw_bubble(page, box, panel["dialogue"], position=bubble_position, index=slot)
+                _draw_bubble(page, box, panel["dialogue"], position=bubble_position,
+                             index=slot, font_scale=scale, ink=ink)
             if panel.get("sfx"):
-                _draw_sfx(page, box, panel["sfx"])
+                _draw_sfx(page, box, panel["sfx"], ink=accent if accent != ink else ink)
 
         if show_page_number:
             f = _load_font(max(13, int(page_width * 0.014)))
             label = f"{project['title']}  ·  {page_idx + 1} / {total_pages}"
             w = f.getlength(label)
-            draw.text(((page_width - w) / 2, page_h - margin - 16), label, font=f, fill=(90, 95, 105))
+            draw.text(((page_width - w) / 2, page_h - margin - 16), label, font=f, fill=accent)
 
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         fname = f"{ts}_{project_id[-6:]}_p{page_idx + 1}.png"
@@ -1749,8 +1846,55 @@ def page_size_for_layout(layout: str | None) -> int:
     return int(lay["cols"]) * int(lay["rows"])
 
 
-def presets() -> dict:    return {
-        "styles": [{"key": k, **v} for k, v in STYLE_PRESETS.items()],
+def presets() -> dict:
+    """前端预设：画风库（分组 + 全量索引）、主题色、景别、排版、生成档位、节奏模板。
+
+    画风库是全量 327 条但有分组，前端可分组筛选 / 搜索；这里一次性下发**轻量索引**
+    （key / 分组 / 名称 / 参考作者 / 是否有缩略图），不含 traits 长文本，
+    避免 bootstrap 就把 ~130KB 全塞给前端。
+    """
+    lib = style_library()
+    styles_light = []
+    for s in lib.list_styles():
+        styles_light.append({
+            "key": s.get("key"),
+            "group": s.get("group") or "",
+            "name": s.get("name") or "",
+            "name_en": s.get("name_en") or "",
+            "reference": s.get("reference") or "",
+            "legacy": bool(s.get("legacy")),
+            "thumb": bool(lib.reference_image(s.get("key"))),
+        })
+    colors = []
+    for c in lib.colors:
+        colors.append({
+            "key": c.get("id"),
+            "name": c.get("name_zh") or "",
+            "name_en": c.get("name_en") or "",
+            "category": c.get("category_zh") or "",
+            "quote": c.get("quote_zh") or "",
+            "hex": lib.color_hex(c.get("id")),
+        })
+    rhythms = []
+    for x in lib.sb_templates():
+        info = rhythm.build(x.get("id")) or {}
+        rhythms.append({
+            "key": x.get("id"),
+            "name": x.get("name") or "",
+            "name_en": x.get("name_en") or "",
+            "keywords": x.get("keywords") or [],
+            "family": info.get("family") or "",
+            "family_name": info.get("family_name") or "其他",
+            "degraded": bool(info.get("degraded")),
+        })
+    return {
+        "styles": styles_light,
+        "style_groups": lib.groups(),
+        "colors": colors,
+        "profiles": list_profiles(),
+        "default_profile": DEFAULT_PROFILE,
+        "rhythms": rhythms,
+        "rhythm_families": rhythm.list_families(),
         "shots": [{"key": k, **v} for k, v in SHOT_PRESETS.items()],
         "layouts": [{"key": k, **v} for k, v in LAYOUT_PRESETS.items()],
         "bubble_positions": [
@@ -1758,6 +1902,17 @@ def presets() -> dict:    return {
             {"key": "top", "name": "统一顶部"},
             {"key": "bottom", "name": "统一底部"},
         ],
+        "attribution": style_attribution(),
+    }
+
+
+def style_detail(key: str) -> dict:
+    """单个画风的完整口径（含 traits 长文本），供前端"详情卡"按需拉取。"""
+    lib = style_library()
+    info = lib.expand(key)
+    return {
+        **info,
+        "thumb": lib.thumb_url(key),
     }
 
 
@@ -1787,6 +1942,7 @@ def panel_generation_info(panel_id: str) -> dict:
     refs = [c for c in selected
             if (rp := resolve_stored(c.get("ref_path"))) and rp.exists()]
     ref_names = {c["id"] for c in refs}
+    lib = style_library()
     return {
         "prompt": prompt,
         "negative_prompt": negative,
@@ -1802,6 +1958,19 @@ def panel_generation_info(panel_id: str) -> dict:
         "seed": int(panel.get("seed") or -1),
         "shot": panel.get("shot"),
         "style": project.get("style"),
+        # 画风完整口径（供「词」面板展示到底注入了什么）
+        "style_info": {
+            "key": lib.style(project.get("style")).get("key"),
+            "name": lib.style(project.get("style")).get("name"),
+            "group": lib.style(project.get("style")).get("group"),
+            "reference": lib.style(project.get("style")).get("reference"),
+            "legacy": lib.style(project.get("style")).get("legacy"),
+        },
+        "theme_color": project.get("theme_color") or "",
+        "theme_color2": project.get("theme_color2") or "",
+        "theme_line": theme_prompt_text(project),
+        "profile": project.get("profile") or "",
+        "batch": int(project.get("batch") or 1),
         "negative_is_default": not (project.get("negative") or "").strip(),
         "char_negative_is_default": not (project.get("char_negative") or "").strip(),
     }
@@ -1838,10 +2007,26 @@ def _scene_stats(project_id: str) -> dict:
 
 
 def create_panels_from_script(project_id: str, text: str, replace: bool = True) -> dict:
-    """解析剧本并写入分镜。"""
+    """解析剧本并写入分镜。
+
+    若项目选了分镜节奏模板（handraw SB-xxx），则按模板的镜头序列重排景别
+    （**逐格通路**下的轻量用法：只影响这一页几格与镜头序列，不改出图方式）。
+    """
     parsed = parse_script(text)
     if not parsed:
         raise ComicError("没有解析出任何分镜，请检查剧本内容")
+
+    project = crepo.get_project(project_id) or {}
+
+    # 节奏模板：只覆盖"自动分配"的景别，用户显式标注的 [特写] 不覆盖
+    rhythm_shots = rhythm.shot_cycle(project.get("rhythm_template"))
+    if rhythm_shots:
+        auto_i = 0
+        for item in parsed:
+            if item.get("shot_explicit"):
+                continue                     # 尊重剧本里显式写的景别
+            item["shot"] = rhythm_shots[auto_i % len(rhythm_shots)]
+            auto_i += 1
 
     if replace:
         for p in crepo.list_panels(project_id):
@@ -1850,7 +2035,6 @@ def create_panels_from_script(project_id: str, text: str, replace: bool = True) 
     else:
         start_seq = crepo.next_seq(project_id)
 
-    project = crepo.get_project(project_id) or {}
     lay = LAYOUT_PRESETS.get(project.get("layout") or "grid_2x2", LAYOUT_PRESETS["grid_2x2"])
     per_page = int(lay["cols"]) * int(lay["rows"])
 
@@ -1894,20 +2078,33 @@ def save_character_ref(character_id: str, data_url: str) -> dict:
 
 def new_project_from_payload(data: dict) -> dict:
     title = (data.get("title") or "").strip() or f"未命名漫画 {now_iso()[5:16]}"
-    style = data.get("style") if data.get("style") in STYLE_PRESETS else "jp_bw"
+    # 画风 / 版式：兼容旧 key（jp_bw…）与新编号（FA-001…）；非法值回落到默认
+    style_key = str(data.get("style") or "").strip()
+    style = style_key or "jp_bw"
     layout = data.get("layout") if data.get("layout") in LAYOUT_PRESETS else "grid_2x2"
     try:
         ref_strength = float(data.get("ref_strength") or 0.55)
     except Exception:
         ref_strength = 0.55
+
+    # 生成档位（dev / target）：显式给了尺寸/步数就用显式值，否则用档位默认值。
+    # 不传档位时退回 .env 的 DEFAULT_*，保持与旧行为一致。
+    profile_key = str(data.get("profile") or "").strip().lower()
+    prof = get_profile(profile_key)
+    width = int(data.get("width") or (prof["width"] if prof else settings.default_width))
+    height = int(data.get("height") or (prof["height"] if prof else settings.default_height))
+    steps = int(data.get("steps") or (prof["steps"] if prof else settings.default_steps))
+    guidance = float(data.get("guidance") or (prof["guidance"] if prof else settings.default_guidance))
+    batch = int(data.get("batch") or (prof["batch"] if prof else 1))
+
     return crepo.create_project(
         title=title,
         style=style,
         layout=layout,
-        width=int(data.get("width") or 768),
-        height=int(data.get("height") or 768),
-        steps=int(data.get("steps") or 8),
-        guidance=float(data.get("guidance") or 4.0),
+        width=width,
+        height=height,
+        steps=steps,
+        guidance=guidance,
         # 默认就把反向提示词填好，压制畸形 / 多指 / 怪表情
         negative=(data.get("negative") or "").strip() or DEFAULT_PROJECT_NEGATIVE,
         char_negative=(data.get("char_negative") or "").strip() or DEFAULT_CHAR_NEGATIVE,
@@ -1915,4 +2112,9 @@ def new_project_from_payload(data: dict) -> dict:
         synopsis=(data.get("synopsis") or "").strip(),
         keep_style=bool(data.get("keep_style", True)),
         use_ref=bool(data.get("use_ref", True)),
+        profile=profile_key if prof else "",
+        theme_color=str(data.get("theme_color") or "").strip(),
+        theme_color2=str(data.get("theme_color2") or "").strip(),
+        rhythm_template=str(data.get("rhythm_template") or "").strip(),
+        batch=max(1, min(4, batch)),
     )

@@ -87,8 +87,15 @@ _QUOTE_RE = re.compile(r"[「『“\"]([^」』”\"]{1,80})[」』”\"]")
 
 
 def _style_name(project: dict) -> str:
-    p = STYLE_PRESETS.get(project.get("style") or "", {})
-    return p.get("name") or "日式黑白漫画"
+    # 画风名统一走画风库解析（兼容旧 key / FA-xxx / 001）
+    try:
+        from app.style_library import library as _sl
+
+        info = _sl().style(project.get("style"))
+        return info.get("name") or "日式黑白漫画"
+    except Exception:
+        p = STYLE_PRESETS.get(project.get("style") or "", {})
+        return p.get("name") or "日式黑白漫画"
 
 
 def _cast_block(project: dict) -> str:

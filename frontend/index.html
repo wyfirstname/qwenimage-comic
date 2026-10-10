@@ -334,8 +334,15 @@
     <div id="newProjectForm" class="mini-form hidden">
       <input type="text" id="newProjectTitle" placeholder="作品名，例如：潘金莲与西门庆初遇" />
       <div class="grid-2">
-        <select id="newProjectStyle"></select>
+        <div class="style-pick">
+          <select id="newProjectStyle"></select>
+          <button type="button" class="link-btn" id="btnBrowseStyleNew" title="按缩略图浏览画风库">浏览</button>
+        </div>
         <select id="newProjectLayout"></select>
+      </div>
+      <div class="grid-2">
+        <select id="newProjectProfile" title="生成档位"></select>
+        <select id="newProjectTheme" title="主题色（可选）"></select>
       </div>
       <button class="btn btn-primary" id="btnCreateProject">创建项目</button>
     </div>
@@ -370,8 +377,24 @@
       <div id="projectSettings">
         <div class="settings-col">
           <div class="grid-2">
-            <select id="setStyle" title="画风"></select>
+            <div class="style-pick">
+              <select id="setStyle" title="画风"></select>
+              <button type="button" class="link-btn" id="btnBrowseStyle" title="按缩略图浏览画风库">浏览</button>
+            </div>
             <select id="setLayout" title="排版"></select>
+          </div>
+          <div class="grid-2">
+            <select id="setProfile" title="生成档位：分辨率 / 步数 / CFG 一组切换"></select>
+            <select id="setBatch" title="一次出几张候选">
+              <option value="1">1 张（默认）</option>
+              <option value="2">2 张候选</option>
+              <option value="3">3 张候选</option>
+              <option value="4">4 张候选</option>
+            </select>
+          </div>
+          <div class="grid-2">
+            <select id="setTheme" title="主题色（跟随排版配色）"></select>
+            <select id="setRhythm" title="分镜节奏模板（handraw SB-*）"></select>
           </div>
           <div class="grid-2">
             <select id="setSize" title="单格尺寸">
@@ -379,15 +402,20 @@
               <option value="640x800">640×800 竖</option>
               <option value="768x1024">768×1024 竖</option>
               <option value="1024x1024">1024×1024 方</option>
+              <option value="1024x1536">1024×1536 竖</option>
+              <option value="1536x1024">1536×1024 横</option>
             </select>
             <select id="setSteps" title="步数">
               <option value="4">4 步（最快）</option>
               <option value="6">6 步</option>
-              <option value="8">8 步（默认）</option>
+              <option value="8">8 步（开发档）</option>
               <option value="12">12 步</option>
               <option value="20">20 步</option>
+              <option value="24">24 步（目标档）</option>
+              <option value="30">30 步</option>
             </select>
           </div>
+          <p class="hint" id="profileHint"></p>
           <div class="slider-row">
             <span>引导系数</span>
             <input type="range" id="setGuidance" min="0" max="10" step="0.5" value="4" />
@@ -618,6 +646,7 @@
     </section>
 
   </div>
+  <p class="comic-attr" id="comicAttr"></p>
 </div>
 
 <!-- 提示词预览弹窗 -->
@@ -628,6 +657,25 @@
       <button class="link-btn" id="promptModalClose">关闭</button>
     </div>
     <div class="modal-body" id="promptModalBody">加载中…</div>
+  </div>
+</div>
+
+<!-- 画风库浏览器（分组 + 搜索 + 缩略图网格） -->
+<div class="modal-mask hidden" id="styleModal">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3>画风库 <span class="muted" id="styleModalMeta"></span></h3>
+      <button class="link-btn" id="styleModalClose">关闭</button>
+    </div>
+    <div class="modal-body">
+      <div class="style-toolbar">
+        <input type="search" id="styleSearch" placeholder="搜索：编号 / 名称 / 参考作者 / 分组" />
+        <div class="style-groups" id="styleGroups"></div>
+      </div>
+      <div class="style-grid" id="styleGrid"></div>
+      <p class="style-more" id="styleMore"></p>
+      <p class="hint" id="styleAttr"></p>
+    </div>
   </div>
 </div>
 

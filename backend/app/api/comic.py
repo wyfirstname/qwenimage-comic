@@ -60,9 +60,68 @@ def _require_scene(scene_id: str) -> dict:
 
 
 # ---------------- 预设 ----------------
-@router.get("/presets", summary="风格 / 景别 / 排版预设")
+@router.get("/presets", summary="风格 / 主题色 / 景别 / 排版 / 档位 / 节奏模板预设")
 async def presets():
     return cs.presets()
+
+
+@router.get("/styles", summary="画风库列表（分组 / 搜索 / 分页）")
+async def list_styles(group: str = "", keyword: str = "", page: int = 1, page_size: int = 60):
+    """全量 327 条太大，改由前端分页拉取，别一次全吐给浏览器。
+
+    group 为空时返回全部（含「常用」5 个旧画风）。
+    keyword 命中 key / 名称 / 参考作者。
+    """
+    from app.style_library import library as sl
+
+    items = sl().list_styles()
+    if group:
+        items = [x for x in items if (x.get("group") or "") == group]
+    kw = (keyword or "").strip().lower()
+    if kw:
+        items = [x for x in items if kw in (
+            f"{x.get('key','')} {x.get('name','')} {x.get('name_en','')} "
+            f"{x.get('reference','')} {x.get('group','')}".lower())]
+    total = len(items)
+    page = max(1, int(page or 1))
+    page_size = max(1, min(200, int(page_size or 60)))
+    start = (page - 1) * page_size
+    chunk = items[start:start + page_size]
+    out = []
+    for s in chunk:
+        out.append({
+            "key": s.get("key"),
+            "group": s.get("group") or "",
+            "name": s.get("name") or "",
+            "name_en": s.get("name_en") or "",
+            "reference": s.get("reference") or "",
+            "legacy": bool(s.get("legacy")),
+            "thumb": sl().thumb_url(s.get("key")),
+        })
+    return {"total": total, "page": page, "page_size": page_size, "items": out,
+            "groups": sl().groups()}
+
+
+@router.get("/styles/{key}", summary="单个画风详情（含 traits 长文本与缩略图）")
+async def style_detail(key: str):
+    try:
+        return cs.style_detail(key)
+    except Exception as exc:  # pragma: no cover - 防御性
+        raise _fail(exc, 404)
+
+
+@router.get("/rhythms", summary="分镜节奏模板列表（handraw SB-*）")
+async def list_rhythms():
+    from app import rhythm
+    from app.style_library import library as sl
+
+    return {
+        "items": [
+            {**x, "detail": rhythm.build(x.get("id"))}
+            for x in sl().sb_templates()
+        ],
+        "families": rhythm.list_families(),
+    }
 
 
 @router.get("/defaults", summary="默认提示词（反向提示词等）")

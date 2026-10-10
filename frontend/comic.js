@@ -66,6 +66,70 @@ function fillSelect(sel, items, current) {
     .join("");
 }
 
+/* 画风库：按分组做 <optgroup>，全量 327 条（+「常用」5 个旧画风） */
+function fillGroupedStyleSelect(sel, groups, styles, current) {
+  if (!sel) return;
+  const byGroup = {};
+  styles.forEach((s) => {
+    const g = s.group || "未分组";
+    (byGroup[g] = byGroup[g] || []).push(s);
+  });
+  const order = (groups && groups.length ? groups.map((g) => g.group) : Object.keys(byGroup));
+  let html = "";
+  order.forEach((g) => {
+    const list = byGroup[g];
+    if (!list || !list.length) return;
+    html += `<optgroup label="${escapeHtml(g)}">`;
+    list.forEach((s) => {
+      const label = s.reference ? `${s.key} · ${s.name}（${s.reference}）` : `${s.key} · ${s.name}`;
+      html += `<option value="${s.key}"${s.key === current ? " selected" : ""}>${escapeHtml(label)}</option>`;
+    });
+    html += `</optgroup>`;
+  });
+  sel.innerHTML = html;
+}
+
+/* 生成档位：dev / target / 自定义（空值=用手填的尺寸与步数） */
+function fillProfileSelect(sel, profiles, current) {
+  if (!sel) return;
+  const opts = ['<option value="">自定义（用下方尺寸 / 步数）</option>'];
+  (profiles || []).forEach((p) => {
+    opts.push(`<option value="${p.key}"${p.key === current ? " selected" : ""}>${escapeHtml(p.name)}</option>`);
+  });
+  sel.innerHTML = opts.join("");
+}
+
+/* 主题色：36 色（handraw），第一项为「不使用」 */
+function fillColorSelect(sel, colors, current) {
+  if (!sel) return;
+  const opts = ['<option value="">（不使用主题色）</option>'];
+  (colors || []).forEach((c) => {
+    const label = `${c.name} ${c.name_en}${c.quote ? " · " + c.quote : ""}`;
+    opts.push(`<option value="${c.key}"${c.key === current ? " selected" : ""}>${escapeHtml(label)}</option>`);
+  });
+  sel.innerHTML = opts.join("");
+}
+
+/* 分镜节奏模板：handraw SB-*（按节奏家族分组） */
+function fillRhythmSelect(sel, rhythms, current) {
+  if (!sel) return;
+  const opts = ['<option value="">（默认节奏：自动交替景别）</option>'];
+  const byFam = {};
+  (rhythms || []).forEach((r) => {
+    const fam = r.family_name || "其他";
+    (byFam[fam] = byFam[fam] || []).push(r);
+  });
+  Object.keys(byFam).forEach((fam) => {
+    opts.push(`<optgroup label="${escapeHtml(fam)}">`);
+    byFam[fam].forEach((r) => {
+      const dg = r.degraded ? "（逐格降级可用）" : "";
+      opts.push(`<option value="${r.key}"${r.key === current ? " selected" : ""}>${escapeHtml(r.key + " " + r.name + dg)}</option>`);
+    });
+    opts.push("</optgroup>");
+  });
+  sel.innerHTML = opts.join("");
+}
+
 function presetName(group, key) {
   const list = (S.presets && S.presets[group]) || [];
   const hit = list.find((x) => x.key === key);
@@ -87,12 +151,19 @@ function shotLabel(key) {
 async function loadPresets() {
   if (S.presets) return S.presets;
   S.presets = await api("/comic/presets");
-  const { styles, layouts, shots } = S.presets;
-  fillSelect($("newProjectStyle"), styles, "jp_bw");
+  const { styles, style_groups, colors, profiles, layouts, shots, rhythms } = S.presets;
+  const defProfile = S.presets.default_profile || "dev";
+  fillGroupedStyleSelect($("newProjectStyle"), style_groups, styles, "jp_bw");
+  fillGroupedStyleSelect($("setStyle"), style_groups, styles, "jp_bw");
   fillSelect($("newProjectLayout"), layouts, "grid_2x2");
-  fillSelect($("setStyle"), styles, "jp_bw");
   fillSelect($("setLayout"), layouts, "grid_2x2");
   fillSelect($("renderLayout"), layouts, "grid_2x2");
+  fillProfileSelect($("newProjectProfile"), profiles, defProfile);
+  fillProfileSelect($("setProfile"), profiles, "");
+  fillColorSelect($("newProjectTheme"), colors, "");
+  fillColorSelect($("setTheme"), colors, "");
+  fillRhythmSelect($("setRhythm"), rhythms, "");
+  renderAttr();
   const legend = $("scriptLegend");
   if (legend) {
     legend.innerHTML =
@@ -102,9 +173,121 @@ async function loadPresets() {
   return S.presets;
 }
 
+/* 画风库署名（MIT 要求保留原仓库地址） */
+function renderAttr() {
+  const a = (S.presets && S.presets.attribution) || null;
+  const box = $("comicAttr");
+  if (!box || !a) return;
+  box.innerHTML = `画风库 / 主题色 / 分镜节奏数据来自 ` +
+    `<a href="${a.url}" target="_blank" rel="noopener">${escapeHtml(a.source)}</a>` +
+    ` v${escapeHtml(a.version)}（MIT）· ${a.styles} 风格 / ${a.colors} 主题色 / ${a.layouts} 排版图型`;
+  const sm = $("styleAttr");
+  if (sm) sm.innerHTML = `数据来源：<a href="${a.url}" target="_blank" rel="noopener">${escapeHtml(a.source)}</a> v${escapeHtml(a.version)}（MIT）`;
+}
+
+
 /* ============================================================
-   本地文本模型状态
+   画风库浏览器（分组 + 搜索 + 缩略图网格；缩略图缺失时降级为编号块）
    ============================================================ */
+const SB = { target: "set", group: "", keyword: "", page: 1, pageSize: 60, total: 0, loading: false };
+
+async function openStyleBrowser(target) {
+  SB.target = target || "set";
+  SB.group = "";
+  SB.keyword = "";
+  SB.page = 1;
+  $("styleModal").classList.remove("hidden");
+  $("styleSearch").value = "";
+  renderStyleGroups();
+  await loadStyles();
+}
+
+function closeStyleBrowser() { $("styleModal").classList.add("hidden"); }
+
+function renderStyleGroups() {
+  const box = $("styleGroups");
+  if (!box) return;
+  const groups = (S.presets && S.presets.style_groups) || [];
+  const chips = [{ group: "", count: (S.presets && S.presets.styles || []).length, label: "全部" }]
+    .concat(groups.map((g) => ({ group: g.group, count: g.count })));
+  box.innerHTML = chips.map((c) => {
+    const on = (c.group || "") === SB.group ? " on" : "";
+    const label = c.group === "" ? "全部" : shortenGroup(c.group);
+    return `<button class="style-chip${on}" data-group="${escapeHtml(c.group)}">${escapeHtml(label)} <b>${c.count}</b></button>`;
+  }).join("");
+  els(".style-chip", box).forEach((b) => {
+    b.onclick = () => { SB.group = b.dataset.group || ""; SB.page = 1; renderStyleGroups(); loadStyles(); };
+  });
+}
+
+function shortenGroup(g) {
+  // "FA 国际社论幽默 / Editorial & Humor Doodle" → "FA 国际社论幽默"
+  const s = String(g || "");
+  return s.split("/")[0].trim() || s;
+}
+
+async function loadStyles() {
+  if (SB.loading) return;
+  SB.loading = true;
+  try {
+    const q = new URLSearchParams({
+      group: SB.group, keyword: SB.keyword, page: String(SB.page), page_size: String(SB.pageSize),
+    });
+    const d = await api(`/comic/styles?${q.toString()}`);
+    SB.total = d.total || 0;
+    if (SB.page === 1) $("styleGrid").innerHTML = "";
+    (d.items || []).forEach((it) => $("styleGrid").appendChild(styleCard(it)));
+    $("styleModalMeta").textContent = `共 ${d.total} 个${SB.group ? "（" + shortenGroup(SB.group) + "）" : ""}`;
+    $("styleMore").innerHTML = (SB.page * SB.pageSize < SB.total)
+      ? `<button class="link-btn" id="styleMoreBtn">加载更多（已显示 ${$("styleGrid").children.length}/${d.total}）</button>`
+      : `已全部显示`;
+    const mb = $("styleMoreBtn");
+    if (mb) mb.onclick = () => { SB.page += 1; loadStyles(); };
+  } catch (e) {
+    toast("画风库加载失败：" + e.message);
+  } finally {
+    SB.loading = false;
+  }
+}
+
+function styleCard(it) {
+  const node = document.createElement("div");
+  node.className = "style-card";
+  node.dataset.key = it.key;
+  const thumb = it.thumb
+    ? `<img src="${it.thumb}" alt="" loading="lazy" />`
+    : `<div class="style-noimg">${escapeHtml((it.key || "").split("-")[0])}<br/>${escapeHtml((it.key || "").split("-")[1] || "")}</div>`;
+  node.innerHTML = `
+    <div class="style-thumb">${thumb}</div>
+    <div class="style-meta">
+      <div class="style-name" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}</div>
+      <div class="style-ref">${escapeHtml(it.key)}${it.reference ? " · " + escapeHtml(it.reference) : ""}</div>
+    </div>`;
+  node.onclick = () => pickStyle(it.key);
+  return node;
+}
+
+function pickStyle(key) {
+  const selId = SB.target === "new" ? "newProjectStyle" : "setStyle";
+  const sel = $(selId);
+  if (sel) {
+    if (!Array.from(sel.options).some((o) => o.value === key)) {
+      // 该画风不在下拉里（不该发生，兜底补一个）
+      const opt = document.createElement("option");
+      opt.value = key; opt.textContent = key;
+      sel.appendChild(opt);
+    }
+    sel.value = key;
+  }
+  closeStyleBrowser();
+  if (SB.target === "set" && S.project) {
+    saveProjectSettings(true).then(() => toast(`画风已切换为 ${key}`));
+  } else {
+    toast(`画风已选：${key}`);
+  }
+}
+
+
 async function loadLlmStatus() {
   try {
     const st = await api("/comic/llm/status");
@@ -209,7 +392,9 @@ async function createProject() {
     title,
     style: $("newProjectStyle").value,
     layout: $("newProjectLayout").value,
-    width: 768, height: 768, steps: 8, guidance: 4.0,
+    profile: $("newProjectProfile").value || "",
+    theme_color: $("newProjectTheme").value || "",
+    // 不传尺寸/步数：由后端按档位（dev/target）决定；选了「自定义」则用 .env 默认值
   };
   try {
     const p = await api("/comic/projects", { method: "POST", body: JSON.stringify(body) });
@@ -253,9 +438,13 @@ function applyDetail(d) {
     $("curProjectTitle").textContent = "未选择项目";
   } else {
     $("curProjectTitle").textContent = S.project.title || "未命名";
+    const prof = profileInfo(S.project.profile);
+    const theme = ((S.presets && S.presets.colors) || []).find((c) => c.key === S.project.theme_color);
     $("curMeta").textContent =
       `${presetName("styles", S.project.style)} · ${presetName("layouts", S.project.layout)} · ` +
-      `单格 ${S.project.width}×${S.project.height} / ${S.project.steps} 步`;
+      `单格 ${S.project.width}×${S.project.height} / ${S.project.steps} 步` +
+      (prof ? ` · ${prof.name}` : "") +
+      (theme ? ` · 主题色 ${theme.name}` : "");
   }
   fillSettingsForm();
   renderBadges();
@@ -292,9 +481,13 @@ function fillSettingsForm() {
   if (isEditing("#projectSettings") || isEditing("#scriptText")) return;
   $("setStyle").value = p.style;
   $("setLayout").value = p.layout;
-  $("setSize").value = `${p.width}x${p.height}`;
-  if (!$("setSize").value) $("setSize").value = "768x768";
-  $("setSteps").value = String(p.steps);
+  if ($("setProfile")) $("setProfile").value = p.profile || "";
+  if ($("setBatch")) $("setBatch").value = String(p.batch || 1);
+  if ($("setTheme")) $("setTheme").value = p.theme_color || "";
+  if ($("setRhythm")) $("setRhythm").value = p.rhythm_template || "";
+  setSizeSelect(p.width, p.height);
+  setStepsSelect(p.steps);
+  updateProfileHint(p.profile);
   $("setGuidance").value = String(p.guidance);
   $("setGuidanceVal").textContent = Number(p.guidance).toFixed(1);
   const rs = Number(p.ref_strength || 0.55);
@@ -305,6 +498,47 @@ function fillSettingsForm() {
   $("setNegative").value = p.negative || "";
   $("setCharNegative").value = p.char_negative || "";
   $("renderLayout").value = p.layout;
+}
+
+/* 尺寸 / 步数下拉：项目值不在候选里时动态补一个选项，避免下拉显示错位 */
+function setSizeSelect(w, h) {
+  const sel = $("setSize");
+  const val = `${w}x${h}`;
+  if (sel && !Array.from(sel.options).some((o) => o.value === val)) {
+    const opt = document.createElement("option");
+    opt.value = val;
+    opt.textContent = `${w}×${h}`;
+    sel.appendChild(opt);
+  }
+  sel.value = val;
+}
+
+function setStepsSelect(steps) {
+  const sel = $("setSteps");
+  const val = String(steps);
+  if (sel && !Array.from(sel.options).some((o) => o.value === val)) {
+    const opt = document.createElement("option");
+    opt.value = val;
+    opt.textContent = `${val} 步`;
+    sel.appendChild(opt);
+  }
+  sel.value = val;
+}
+
+function profileInfo(key) {
+  const list = (S.presets && S.presets.profiles) || [];
+  return list.find((x) => x.key === key) || null;
+}
+
+function updateProfileHint(key) {
+  const hint = $("profileHint");
+  if (!hint) return;
+  const p = profileInfo(key);
+  if (p) {
+    hint.textContent = `${p.name}：${p.desc}（${p.width}×${p.height} / ${p.steps} 步）`;
+  } else {
+    hint.textContent = "自定义档：分辨率 / 步数 / 引导系数按下方手填值生效（本机 6GB 建议 768 / 8 步）。";
+  }
 }
 
 /* 恢复默认反向提示词（与后端 comic_defaults 保持一致，由接口下发） */
@@ -333,6 +567,10 @@ async function saveProjectSettings(silent = false) {
   const body = {
     style: $("setStyle").value,
     layout: $("setLayout").value,
+    profile: $("setProfile") ? ($("setProfile").value || "") : "",
+    theme_color: $("setTheme") ? ($("setTheme").value || "") : "",
+    rhythm_template: $("setRhythm") ? ($("setRhythm").value || "") : "",
+    batch: $("setBatch") ? Number($("setBatch").value || 1) : 1,
     width: w, height: h,
     steps: Number($("setSteps").value),
     guidance: Number($("setGuidance").value),
@@ -1095,10 +1333,17 @@ async function showPanelPrompt(panelId) {
         ? "融合编辑 · 场景 + 角色参考图（Qwen-Image 2.1 官方通道，CFG=1）"
         : "融合编辑 · 角色参考图（Qwen-Image 2.1 官方通道，CFG=1）";
     const bits = [
-      `<p><strong>画风：</strong>${escapeHtml(presetName("styles", d.style))} · ` +
-      `<strong>景别：</strong>${escapeHtml(shotLabel(d.shot))} · ` +
+      `<p><strong>画风：</strong>${escapeHtml(presetName("styles", d.style))}` +
+      (d.style_info && d.style_info.reference ? `（参考 ${escapeHtml(d.style_info.reference)}）` : "") +
+      ` · <strong>景别：</strong>${escapeHtml(shotLabel(d.shot))} · ` +
       `<strong>出图方式：</strong>${kindText}</p>`,
     ];
+    if (d.theme_line) bits.push(`<p><strong>主题色：</strong>${escapeHtml(d.theme_line)}</p>`);
+    if (d.profile) {
+      const pf = profileInfo(d.profile);
+      bits.push(`<p class="muted">生成档位：${escapeHtml(pf ? pf.name : d.profile)}` +
+        (d.batch > 1 ? ` · 候选 ${d.batch} 张` : "") + `</p>`);
+    }
     if (charSlots.length) {
       bits.push(`<p class="muted">参考图顺序：${escapeHtml(
         slots.map((s) => `${s.slot}=${s.kind === "scene" ? "场景" : ""}${s.name}`).join("、"))}` +
@@ -1463,6 +1708,35 @@ function bindComicEvents() {
   $("renderWidth").oninput = (e) => { $("renderWidthVal").textContent = e.target.value; };
   $("setSize").onchange = updateComicEstimate;
   $("setSteps").onchange = updateComicEstimate;
+
+  // 生成档位切换：自动带出该档位的尺寸 / 步数，并给出提示
+  if ($("setProfile")) {
+    $("setProfile").onchange = () => {
+      const p = profileInfo($("setProfile").value);
+      if (p) {
+        setSizeSelect(p.width, p.height);
+        setStepsSelect(p.steps);
+        $("setGuidance").value = String(p.guidance);
+        $("setGuidanceVal").textContent = Number(p.guidance).toFixed(1);
+      }
+      updateProfileHint($("setProfile").value);
+      updateComicEstimate();
+    };
+  }
+
+  // 画风库浏览器
+  if ($("btnBrowseStyle")) $("btnBrowseStyle").onclick = () => openStyleBrowser("set");
+  if ($("btnBrowseStyleNew")) $("btnBrowseStyleNew").onclick = () => openStyleBrowser("new");
+  if ($("styleModalClose")) $("styleModalClose").onclick = closeStyleBrowser;
+  if ($("styleModal")) $("styleModal").onclick = (e) => { if (e.target.id === "styleModal") closeStyleBrowser(); };
+  if ($("styleSearch")) {
+    let st = null;
+    $("styleSearch").oninput = (e) => {
+      clearTimeout(st);
+      const v = e.target.value;
+      st = setTimeout(() => { SB.keyword = v.trim(); SB.page = 1; loadStyles(); }, 300);
+    };
+  }
 
   $("promptModalClose").onclick = () => $("promptModal").classList.add("hidden");
   $("promptModal").onclick = (e) => { if (e.target.id === "promptModal") $("promptModal").classList.add("hidden"); };

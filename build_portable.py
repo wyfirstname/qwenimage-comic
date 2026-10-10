@@ -306,7 +306,8 @@ def write_scripts() -> None:
         "COMFYUI_AUTOSTART=true\r\n"
         "COMFYUI_DIR=comfyui\r\n"
         "COMFYUI_PORT=8188\r\n"
-        "COMFYUI_EXTRA_ARGS=--lowvram\r\n"
+        "# 16GB+ : leave empty for full speed. 6GB cards: set to --lowvram\r\n"
+        "COMFYUI_EXTRA_ARGS=\r\n"
         "\r\n"
         "# Models (under models/qwen-image-2.1-unc)\r\n"
         "MODEL_DIR=models/qwen-image-2.1-unc\r\n"
@@ -314,18 +315,20 @@ def write_scripts() -> None:
         "TEXT_ENCODER_FILE=text_encoders/qwen3vl_8b_int8_convrot.safetensors\r\n"
         "VAE_FILE=vae/qwen_image_2.1_vae_bf16.safetensors\r\n"
         "\r\n"
-        "# RTX 2060 6GB tuned defaults; raise on bigger GPUs\r\n"
-        "DEFAULT_WIDTH=768\r\n"
-        "DEFAULT_HEIGHT=768\r\n"
-        "DEFAULT_STEPS=8\r\n"
+        "# Generation defaults (per-project \"profile\" in the UI overrides these)\r\n"
+        "# 16GB target profile: 1024 / 24 steps. 6GB dev profile: 768 / 8 steps\r\n"
+        "DEFAULT_WIDTH=1024\r\n"
+        "DEFAULT_HEIGHT=1024\r\n"
+        "DEFAULT_STEPS=24\r\n"
         "DEFAULT_GUIDANCE=4.0\r\n"
         "MAX_BATCH=4\r\n"
-        "MAX_PIXELS=2073600\r\n"
-        "INFER_TIMEOUT_SECONDS=2400\r\n"
+        "MAX_PIXELS=2361960\r\n"
+        "INFER_TIMEOUT_SECONDS=3600\r\n"
         "MAX_QUEUE_SIZE=20\r\n"
         "\r\n"
         "DEVICE=cuda:0\r\n"
-        "TEXT_ENCODER_DEVICE=cpu\r\n"
+        "# 16GB+ : put the text encoder on GPU (much faster). 6GB cards: use cpu\r\n"
+        "TEXT_ENCODER_DEVICE=cuda:0\r\n"
         "DTYPE=float16\r\n"
         "KEEP_LOADED=true\r\n"
         "IDLE_UNLOAD_SECONDS=1800\r\n"
@@ -361,8 +364,12 @@ def write_scripts() -> None:
   .env              配置文件（首次启动自动从 .env.example 生成）
 
 四、硬件要求
-  NVIDIA 显卡，建议 6GB 显存以上（6GB 已按低显存模式调优）。
-  768x768 / 8 步实测约 18 分钟；参数越大越慢，界面上会给出耗时预警。
+  NVIDIA 显卡。本包默认按 16GB 显存调优（1024 / 24 步，文本编码器上 GPU）：
+  界面里新建项目时选「生成档位」即可切换：
+    · 目标档 · 16GB 画质（1024×1024 / 24 步）—— 画质与画风还原用这档测
+    · 开发档 · 6GB 友好（768×768 / 8 步）—— 小显存机器选这档，
+      并把 .env 里 COMFYUI_EXTRA_ARGS 改回 --lowvram、TEXT_ENCODER_DEVICE 改回 cpu
+  画风库 / 主题色数据来自 yang0/handraw-style（MIT）。
 
 五、常见问题
   * 提示端口占用：关闭已开实例，或改 .env 中 PORT

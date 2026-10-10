@@ -25,7 +25,7 @@ models/
 comfyui/
 
 # ---------- 运行时数据（出图、SQLite、日志、导出 PDF）----------
-data/
+/data/
 backend/data/
 *.db
 *.db-wal
@@ -50,3 +50,12 @@ desktop.ini
 .workbuddy/
 _tmp/
 docs/ui-steps/六项修复验证-项目卡片与剧本.png
+
+# ---------- 画风库缩略图（第三方快照，体积大，不进 git）----------
+# 由 scripts/fetch_style_library.py 一次性抓取；绿色包构建时打进包。
+backend/app/style_library/thumbs/
+
+# ---------- 画风库数据（必须入库）----------
+# styles/layouts/colors/alias/model_capabilities/colors_hex 均为几十 KB 的
+# 结构化基础数据（MIT，来自 yang0/handraw-style），运行必需，务必随仓库分发。
+!backend/app/style_library/data/

@@ -29,6 +29,13 @@ def create_project(
     synopsis: str = "",
     keep_style: bool = True,
     use_ref: bool = True,
+    output_dir: str = "",
+    profile: str = "",
+    theme_color: str = "",
+    theme_color2: str = "",
+    style_ref_enabled: bool = False,
+    rhythm_template: str = "",
+    batch: int = 1,
 ) -> dict:
     pid = new_id("cmic")
     ts = now_iso()
@@ -37,13 +44,18 @@ def create_project(
             """
             INSERT INTO comic_projects (id, title, style, layout, width, height, steps,
                                         guidance, negative, char_negative, ref_strength,
-                                        synopsis, keep_style, use_ref,
+                                        synopsis, keep_style, use_ref, output_dir, profile,
+                                        theme_color, theme_color2, style_ref_enabled,
+                                        rhythm_template, batch,
                                         created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (pid, title, style, layout, width, height, steps, guidance, negative,
              char_negative, float(ref_strength),
-             synopsis, 1 if keep_style else 0, 1 if use_ref else 0, ts, ts),
+             synopsis, 1 if keep_style else 0, 1 if use_ref else 0, output_dir or "",
+             profile or "", theme_color or "", theme_color2 or "",
+             1 if style_ref_enabled else 0, rhythm_template or "", max(1, int(batch or 1)),
+             ts, ts),
         )
     return get_project(pid)  # type: ignore[return-value]
 

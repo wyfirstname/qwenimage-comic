@@ -170,21 +170,28 @@ class ComicProjectIn(BaseModel):
     title: str = ""
     style: str = "jp_bw"
     layout: str = "grid_2x2"
-    width: int = Field(768, ge=64, le=1536)
-    height: int = Field(768, ge=64, le=1536)
-    steps: int = Field(8, ge=1, le=60)
-    guidance: float = Field(4.0, ge=0.0, le=20.0)
+    # 尺寸 / 步数 / 引导：None = 未指定，由生成档位（profile）或 .env 默认值决定
+    width: Optional[int] = Field(None, ge=64, le=1536)
+    height: Optional[int] = Field(None, ge=64, le=1536)
+    steps: Optional[int] = Field(None, ge=1, le=60)
+    guidance: Optional[float] = Field(None, ge=0.0, le=20.0)
     negative: str = ""
     char_negative: str = ""
     ref_strength: float = Field(0.55, ge=0.2, le=0.95)
     synopsis: str = ""
     keep_style: bool = True
     use_ref: bool = True
+    # ---- handraw-style 接入 ----
+    profile: str = ""                       # 生成档位 dev|target|''（''=用自定义值 / .env 默认）
+    theme_color: str = ""                   # 主题色 id（如 C-01）
+    theme_color2: str = ""                  # 点缀色 id
+    rhythm_template: str = ""               # 分镜节奏模板（SB-xxx）
+    batch: int = Field(1, ge=1, le=4)       # 一次出几张候选
 
     @field_validator("width", "height")
     @classmethod
-    def _mul64(cls, v: int) -> int:
-        if v % 64 != 0:
+    def _mul64(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v % 64 != 0:
             raise ValueError("尺寸必须是 64 的整数倍")
         return v
 
@@ -202,6 +209,12 @@ class ComicProjectPatch(BaseModel):
     ref_strength: Optional[float] = Field(None, ge=0.2, le=0.95)
     keep_style: Optional[bool] = None
     use_ref: Optional[bool] = None
+    profile: Optional[str] = None
+    theme_color: Optional[str] = None
+    theme_color2: Optional[str] = None
+    rhythm_template: Optional[str] = None
+    style_ref_enabled: Optional[bool] = None
+    batch: Optional[int] = Field(None, ge=1, le=4)
 
 
 class ComicCharacterIn(BaseModel):

@@ -88,6 +88,13 @@ CREATE TABLE IF NOT EXISTS comic_projects (
     synopsis    TEXT DEFAULT '',                    -- 故事梗概 / 原始剧本
     keep_style  INTEGER DEFAULT 1,                  -- 是否强制统一画风
     use_ref     INTEGER DEFAULT 1,                  -- 角色已有形象图时是否走图生图保持形象
+    output_dir  TEXT DEFAULT '',                    -- 项目专属出图目录（相对 output_dir）
+    profile     TEXT DEFAULT '',                    -- 生成档位 dev|target|''（配置分辨率/步数/CFG）
+    theme_color TEXT DEFAULT '',                    -- 主题色 id（handraw 36 色，如 C-01）
+    theme_color2 TEXT DEFAULT '',                   -- 点缀色 id（可选）
+    style_ref_enabled INTEGER DEFAULT 0,            -- 是否挂画风参考图兜底
+    rhythm_template TEXT DEFAULT '',                -- 分镜节奏模板（handraw SB-xxx）
+    batch       INTEGER DEFAULT 1,                  -- 一次出几张候选
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
@@ -379,6 +386,18 @@ class Database:
         # 项目专属出图目录（相对 output_dir，形如 comics/雨夜天台_1a2b3c）；
         # 持久化后项目改名不会导致已有图片搬家，新图继续落在同一目录
         ("comic_projects", "output_dir", "TEXT DEFAULT ''"),
+        # ---- handraw-style 接入（画风库 / 主题色 / 分镜节奏）----
+        # 生成档位：dev（6GB 开发档）/ target（16GB 目标档）/ 空（沿用项目自带值）
+        ("comic_projects", "profile", "TEXT DEFAULT ''"),
+        # 主题色（handraw 36 色，存颜色 id 如 C-01；空=不注入）
+        ("comic_projects", "theme_color", "TEXT DEFAULT ''"),
+        ("comic_projects", "theme_color2", "TEXT DEFAULT ''"),
+        # 是否挂画风参考图兜底（P2，默认关；16GB 实测后再决定）
+        ("comic_projects", "style_ref_enabled", "INTEGER DEFAULT 0"),
+        # 分镜节奏模板（handraw SB-xxx，空=用项目排版预设的默认节奏）
+        ("comic_projects", "rhythm_template", "TEXT DEFAULT ''"),
+        # 一次出几张候选（16GB 下 batch 2~4 很实用；默认 1）
+        ("comic_projects", "batch", "INTEGER DEFAULT 1"),
     )
 
     def _migrate(self, conn: _ResilientConnection) -> None:
