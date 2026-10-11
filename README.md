@@ -315,7 +315,6 @@ ENGINE_MODE=comfy
 | `COMFYUI_EXTRA_ARGS` | `--lowvram` | ComfyUI 启动参数；显存 ≥12GB 可删除以提速 |
 | `MODEL_DIR` | `models/qwen-image-2.1-unc` | 模型目录 |
 | `DEVICE` | `cuda:0` | 扩散模型设备 |
-| `TEXT_ENCODER_DEVICE` | `cpu` | 文本编码器放 CPU，**6GB 显存必开**（省 9~17GB 显存） |
 | `LOW_VRAM` | `false` | 显存不足时把部分计算卸载到内存 |
 | `DEFAULT_WIDTH/HEIGHT` | `768` | 默认出图尺寸（64 的倍数） |
 | `DEFAULT_STEPS` | `8` | 默认采样步数 |
@@ -413,7 +412,7 @@ qwenimage-comic/
 <details>
 <summary><b>CUDA out of memory</b></summary>
 
-降到 768×768、保持 `TEXT_ENCODER_DEVICE=cpu`、开启 `LOW_VRAM=true`、`COMFYUI_EXTRA_ARGS=--lowvram`，
+降到 768×768（或直接选「开发档」）、开启 `LOW_VRAM=true`、`COMFYUI_EXTRA_ARGS=--lowvram`，
 并关闭其他占显存的程序。
 </details>
 
@@ -422,6 +421,32 @@ qwenimage-comic/
 
 6GB 显存下单格约 18 分钟，批量是串行的，N 格 = N×18 分钟，属正常。界面顶部有进度条；
 超过 40 分钟无进展再刷新页面，后端会按任务真实状态自动校正。
+</details>
+
+<details>
+<summary><b>后台卡住了 / 进度长时间不动，怎么恢复</b></summary>
+
+进度条旁边有「中断并恢复」按钮（正常情况下它是隐藏的，出现「疑似卡住」提示时才会亮出来）。
+点它会结束当前任务、复位推理引擎，必要时重启 ComfyUI 子进程，**不需要重启整个服务**。
+
+后端自身也有兜底，不用你盯着：
+
+| 情况 | 触发条件 | 后端动作 |
+|---|---|---|
+| 疑似卡死 | AI 任务超过 240 秒没有任何进度 | 任务打上 `stuck` 标记，界面提示并亮出恢复按钮 |
+| 取消不退出 | 取消后 45 秒工作线程仍在跑 | 自动升级为「硬恢复」：中断 + 重启 ComfyUI |
+| 硬超时 | 超过 `LLM_TIMEOUT_SECONDS` + 120 秒无进展 | 自动硬恢复并把任务标为失败（可重试） |
+| 后端进程重启 | 启动时 | 把上次遗留的 `running/queued` 任务标为中断，并收敛分镜/场景/角色图的「排队中」状态 |
+
+恢复采用「换世代」机制：即使某个推理线程真的永远回不来，它也不会再占住任务队列，
+新任务照常执行。想手动触发系统级恢复（含失联的出图任务）：
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/system/recover?hard=true"
+```
+
+若日志提示「ComfyUI 不是由本服务拉起的」，说明 ComfyUI 是你自己启动的，程序不会替你杀进程，
+请手动重启它（或改由 `start.bat` 拉起）。
 </details>
 
 <details>

@@ -32,6 +32,11 @@ from app.config import settings
 from app.inference import comfy_http
 from app.inference.base import EngineResult
 
+# ComfyUI 子进程句柄放在**模块级**，不挂在实例上。
+# manager.unload() 会把引擎实例丢掉，但子进程还在跑；句柄一丢就既杀不掉也拉不起来
+# （8188 端口被占），「卡死后自动重启引擎」这条路会直接失效。
+_COMFY_PROC: Optional[subprocess.Popen] = None
+
 
 class ComfyEngine:
     """通过 ComfyUI 服务端推理。"""
@@ -39,12 +44,20 @@ class ComfyEngine:
     name = "comfy"
 
     def __init__(self) -> None:
-        self._proc: Optional[subprocess.Popen] = None
         self._ready = False
         self.last_error: Optional[str] = None
         self.last_load_seconds: Optional[float] = None
         self.client_id = f"qwenimages-{uuid.uuid4().hex[:8]}"
         self._current_prompt_id: Optional[str] = None
+
+    @property
+    def _proc(self) -> Optional[subprocess.Popen]:
+        return _COMFY_PROC
+
+    @_proc.setter
+    def _proc(self, value: Optional[subprocess.Popen]) -> None:
+        global _COMFY_PROC
+        _COMFY_PROC = value
 
     # ================= 生命周期 =================
     @property
@@ -148,6 +161,68 @@ class ComfyEngine:
             comfy_http.open(req, timeout=10)
         except Exception:
             pass
+
+    # ================= 卡死恢复 =================
+    def interrupt_all(self) -> bool:
+        """软恢复：清空 ComfyUI 队列 + 中断当前执行 + 释放显存。不重启进程。"""
+        ok = False
+        calls = (
+            ("/queue", json.dumps({"clear": True}).encode()),
+            ("/interrupt", b""),
+            ("/free", json.dumps({"unload_models": False, "free_memory": True}).encode()),
+        )
+        for path, payload in calls:
+            try:
+                req = urllib.request.Request(
+                    f"{settings.comfyui_url}{path}", data=payload,
+                    headers={"Content-Type": "application/json"}, method="POST",
+                )
+                with comfy_http.open(req, timeout=10):
+                    ok = True
+            except Exception:
+                continue
+        self._current_prompt_id = None
+        return ok
+
+    def hard_restart(self, graceful_seconds: float = 15.0) -> tuple[bool, str]:
+        """硬恢复：结束本服务拉起的 ComfyUI 子进程并重新拉起。
+
+        卡死的典型形态是 ComfyUI 进程本身失去响应（依赖冲突导致启动即退、
+        CUDA 上下文崩溃、显存被别的进程抢光），这时 /interrupt 也一起失效，
+        只有重启进程才能解开——挂起的 socket 一断，卡在等待里的调用方线程
+        必然抛错退出。
+
+        只处理自己拉起的子进程；若 ComfyUI 是用户手动启动的，退回软中断并
+        明确告知，不替用户杀进程。
+        """
+        self.interrupt_all()  # 先尽力让正在跑的 prompt 收尾
+        proc, self._proc = self._proc, None
+        self._ready = False
+
+        if proc is None or proc.poll() is not None:
+            self.last_error = (
+                "ComfyUI 不是由本服务拉起的（未持有进程句柄），无法自动重启；"
+                "已请求中断，若仍无响应请手动重启 ComfyUI。"
+            )
+            return False, self.last_error
+
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=graceful_seconds)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=10)
+        except Exception as exc:  # pragma: no cover - 平台相关
+            self.last_error = f"结束 ComfyUI 进程失败：{exc}"
+            return False, self.last_error
+
+        try:
+            self.load()  # 进程已退出，load() 会重新 _spawn 并等待就绪
+        except Exception as exc:
+            self.last_error = f"ComfyUI 重启失败：{exc}"
+            return False, self.last_error
+        return True, f"ComfyUI 已重启并就绪（{self.last_load_seconds}s）"
 
     # ================= 工作流 =================
     def _build_workflow(self, *, prompt: str, negative: str, width: int, height: int,

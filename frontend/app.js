@@ -31,7 +31,12 @@ async function api(path, options = {}) {
   if (!res.ok) {
     const detail = data && data.detail ? data.detail : data;
     const msg = typeof detail === "string" ? detail : (detail && detail.message) || res.statusText;
-    throw new Error(msg || `请求失败 (${res.status})`);
+    const err = new Error(msg || `请求失败 (${res.status})`);
+    // 带上状态码与原始响应：调用方需要区分「后端没起来/重启了」和「业务报错」，
+    // 例如轮询 AI 任务时 404 意味着服务重启、任务已丢失，应直接提示重试而不是死等。
+    err.status = res.status;
+    err.detail = detail;
+    throw err;
   }
   return data;
 }

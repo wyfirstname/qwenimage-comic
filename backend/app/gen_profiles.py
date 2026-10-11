@@ -26,7 +26,6 @@ from typing import Any, Optional
 #   guidance     引导系数（融合路径会被强制 CFG=1，此处对 txt2img 生效）
 #   batch        一次出几张候选（1=不做候选）
 #   low_vram     是否走 --lowvram（6GB 建议 true；16GB 建议 false）
-#   text_encoder_device 文本编码器设备（6GB 必须 cpu；16GB 可 cuda）
 #   keep_loaded  是否常驻显存
 PROFILES: dict[str, dict[str, Any]] = {
     "dev": {
@@ -39,7 +38,6 @@ PROFILES: dict[str, dict[str, Any]] = {
         "guidance": 4.0,
         "batch": 1,
         "low_vram": True,
-        "text_encoder_device": "cpu",
         "keep_loaded": True,
     },
     "target": {
@@ -52,7 +50,6 @@ PROFILES: dict[str, dict[str, Any]] = {
         "guidance": 4.0,
         "batch": 1,
         "low_vram": False,
-        "text_encoder_device": "cuda:0",
         "keep_loaded": True,
     },
 }

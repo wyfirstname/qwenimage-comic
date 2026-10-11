@@ -327,8 +327,6 @@ def write_scripts() -> None:
         "MAX_QUEUE_SIZE=20\r\n"
         "\r\n"
         "DEVICE=cuda:0\r\n"
-        "# 16GB+ : put the text encoder on GPU (much faster). 6GB cards: use cpu\r\n"
-        "TEXT_ENCODER_DEVICE=cuda:0\r\n"
         "DTYPE=float16\r\n"
         "KEEP_LOADED=true\r\n"
         "IDLE_UNLOAD_SECONDS=1800\r\n"
@@ -364,11 +362,12 @@ def write_scripts() -> None:
   .env              配置文件（首次启动自动从 .env.example 生成）
 
 四、硬件要求
-  NVIDIA 显卡。本包默认按 16GB 显存调优（1024 / 24 步，文本编码器上 GPU）：
+  NVIDIA 显卡。本包默认按 16GB 显存调优（1024 / 24 步）：
   界面里新建项目时选「生成档位」即可切换：
     · 目标档 · 16GB 画质（1024×1024 / 24 步）—— 画质与画风还原用这档测
     · 开发档 · 6GB 友好（768×768 / 8 步）—— 小显存机器选这档，
-      并把 .env 里 COMFYUI_EXTRA_ARGS 改回 --lowvram、TEXT_ENCODER_DEVICE 改回 cpu
+      并把 .env 里 COMFYUI_EXTRA_ARGS 改回 --lowvram
+  文本编码器的设备由 ComfyUI 自己调度，无需在 .env 里配。
   画风库 / 主题色数据来自 yang0/handraw-style（MIT）。
 
 五、常见问题

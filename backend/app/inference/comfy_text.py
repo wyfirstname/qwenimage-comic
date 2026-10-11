@@ -10,8 +10,11 @@
 * 工作流：CLIPLoader → TextGenerate → SaveText（TextGenerate 本身不是输出节点，
   必须挂一个输出节点，否则 ComfyUI 会以 `prompt_no_outputs` 拒绝工作流）。
 * 生成结果直接取自 `/history` 的 `outputs[node]["text"][0]`，不必读盘。
-* 硬件实测量级（RTX 2060 6GB，文本编码器在 CPU）：约 20 秒完成一次短输出，
-  225 字输出约 7 分钟。因此调用方必须按「长耗时任务」处理，带进度与超时。
+* 硬件实测量级（RTX 2060 6GB + `--lowvram`）：24 token 约 16 秒，
+  320 token 约 7 分钟。因此调用方必须按「长耗时任务」处理，带进度与超时。
+  慢的原因不是设备错——文本编码器实测在 GPU 上（生成期间 nvidia-smi 显示
+  利用率 70~100%、显存 5.4GB），而是 8.7GB 的 int8 编码器塞不进 6GB 显存，
+  ComfyUI 走 DynamicVRAM 逐层从磁盘/内存搬运，瓶颈在搬运带宽。
 """
 
 from __future__ import annotations
@@ -100,10 +103,12 @@ class ComfyTextEngine:
                         temperature: Optional[float], seed: int) -> dict:
         g = self._graph
         nodes: dict[str, Any] = {}
-        # 注意：文本生成必须用 ComfyUI 的默认设备（cuda）。
-        # .env 里的 TEXT_ENCODER_DEVICE=cpu 是为「出图」工作流的显存布局调的，
-        # 在 TextGenerate 的 generate 路径上会直接报 "Expected a cuda device, but got: cpu"。
-        # 这里交给 ComfyUI 自己调度（--lowvram 下会自动在显存/内存间搬运）。
+        # 设备必须是 "default"，不能写 "cpu"：
+        # CLIPLoader 的 device 枚举只有 default / cpu，而 "cpu" 会让 CLIP 的
+        # load_device 变成 CPU，TextGenerate 的 generate() 路径随即抛
+        # `Expected a cuda device, but got: cpu`（已实测复现）。
+        # "default" 表示交给 ComfyUI 自己调度 → load_device 由
+        # model_management.text_encoder_device() 决定；出图工作流同理。
         nodes["1"] = g(
             "CLIPLoader",
             clip_name=Path(settings.text_encoder_file).name,
@@ -246,7 +251,8 @@ class ComfyTextEngine:
                         self.cancel()
                         raise LocalTextError(
                             f"文本生成超时（>{int(budget)} 秒）。"
-                            "本机文本推理在 CPU 上较慢，可减小 max_length 或精简剧本后重试。"
+                            "本机文本推理较慢（大权重逐层搬运），可减小 max_length "
+                            "或精简剧本后重试。"
                         )
                     record = self._history(prompt_id)
                     if record is not None:

@@ -97,6 +97,35 @@ class ModelManager:
     def touch(self) -> None:
         self.last_used_at = time.time()
 
+    # ---------------- 卡死恢复 ----------------
+    def recover_engine(self, hard: bool = True) -> tuple[bool, str]:
+        """复位推理引擎，供「卡死恢复」使用。
+
+        hard=False —— 软恢复：请求 ComfyUI 清队列 / 中断 / 释放显存；
+        hard=True  —— 硬恢复：额外结束并重新拉起 ComfyUI 子进程（仅限本服务拉起的）。
+
+        引擎尚未创建时也会先创建：此时没有卡住的连接，恢复等价于空操作，
+        但能保证后续状态查询是准的。
+        """
+        with self._lock:
+            if self._engine is None:
+                self._engine = self._create_engine()
+            engine = self._engine
+        try:
+            if hard:
+                fn = getattr(engine, "hard_restart", None)
+                if fn is None:
+                    return True, "当前引擎不持有可重启的推理进程（mock/local），无需恢复"
+                return fn()
+            fn = getattr(engine, "interrupt_all", None)
+            if fn is None:
+                return True, "当前引擎无需中断"
+            fn()
+            return True, "已请求中断当前推理并释放显存"
+        except Exception as exc:  # pragma: no cover - 平台相关
+            self.last_error = str(exc)
+            return False, f"引擎恢复失败：{exc}"
+
     # ---------------- 状态 ----------------
     def status(self) -> dict:
         total, free = dev.vram_info_gb()
@@ -116,7 +145,6 @@ class ModelManager:
             "loaded": self.is_loaded(),
             "loading": self._loading,
             "device": settings.device,
-            "text_encoder_device": settings.text_encoder_device,
             "keep_loaded": settings.keep_loaded,
             "vram_total_gb": total,
             "vram_free_gb": free,

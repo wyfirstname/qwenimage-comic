@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException
 
 from app import comic_repo as crepo
@@ -371,7 +373,36 @@ async def get_ai_task(task_id: str):
 async def cancel_ai_task(task_id: str):
     if not cai.ai_tasks.cancel(task_id):
         raise _fail(ComicError("任务不存在或已结束"), 409)
-    return OkOut(message="已取消")
+    return OkOut(message="已请求取消；若模型未在 45 秒内退出，将自动升级为强制恢复")
+
+
+@router.post("/ai/tasks/{task_id}/recover", summary="中断卡住的 AI 任务并恢复引擎")
+async def recover_ai_task(task_id: str, hard: bool = True):
+    """卡死恢复：结束该任务 + 复位推理引擎（hard=true 会重启 ComfyUI 子进程）。
+
+    真实推理可能长时间不返回，这里放到线程池里执行，避免堵住事件循环
+    （重启 ComfyUI 要等它重新就绪，最坏几十秒）。
+    """
+    task = cai.ai_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "任务不存在"})
+    if task["status"] not in ("queued", "running"):
+        raise _fail(ComicError("任务已结束，无需恢复"), 409)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None, lambda: cai.ai_tasks.recover(task_id=task_id, hard=hard,
+                                           reason="用户点击「中断并恢复」")
+    )
+
+
+@router.post("/ai/recover", summary="一键恢复卡住的 AI 任务（不需任务 ID）")
+async def recover_ai(hard: bool = True):
+    """不指定任务：把当前所有排队/运行中的 AI 任务结束掉，并复位引擎、清理队列。"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None, lambda: cai.ai_tasks.recover(task_id=None, hard=hard,
+                                           reason="用户点击「一键恢复」")
+    )
 
 
 # ---------------- 场景 ----------------

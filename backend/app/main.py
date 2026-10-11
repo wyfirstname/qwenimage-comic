@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from app import blobs, repo
+from app import blobs, comic_repo as crepo, repo
 from app.api import comic as comic_api
 from app.api import events, gallery, generate, portrait as portrait_api, system
 from app.config import settings
@@ -51,6 +51,18 @@ async def lifespan(app: FastAPI):
         repo.mark_job_done(job["id"], "failed", error="服务重启导致中断")
     for job in repo.list_jobs(limit=200, status="queued"):
         repo.mark_job_done(job["id"], "failed", error="服务重启导致中断")
+
+    # 上面把残留任务判为中断后，漫画的分镜 / 场景图 / 角色图可能还停在
+    # 「排队中」——不回写它们，界面会永远转圈、一直轮询，用户也没有重试入口。
+    try:
+        from app.services import comic as comic_service
+
+        fixed = sum(comic_service.reconcile_project(p["id"])
+                    for p in crepo.list_projects())
+        if fixed:
+            print(f"[启动] 已收敛上次中断遗留的漫画状态 {fixed} 处")
+    except Exception as exc:  # pragma: no cover - 防御性，绝不阻塞启动
+        print(f"[启动] 漫画状态收敛跳过：{exc}")
 
     # 任务参数里的参考图临时文件（data/blobs）此时全部作废：上面刚把排队中的
     # 任务标记为失败，它们的参数不会再被读取

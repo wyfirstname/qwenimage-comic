@@ -20,6 +20,8 @@ const S = {
   llm: null,
   aiTask: null,          // 正在轮询的 AI 任务
   aiTimer: null,
+  aiRecoverTimer: null,  // 「取消后仍不退出」的提示计时器
+  aiFailures: 0,         // 连续轮询失败次数（卡死恢复的判断依据）
   pollTimer: null,
   jobSource: null,
   timers: {},            // 自动保存防抖
@@ -659,49 +661,116 @@ async function runAiTask(path, body, label, onDone) {
   if (S.aiTask) return toast("已有 AI 任务在跑，请等它结束或取消");
   setComicProgress(4, `${label} 提交中…`);
   $("btnCancelAi").classList.remove("hidden");
+  $("btnRecoverAi").classList.add("hidden");
   try {
     const task = await api(path, { method: "POST", body: JSON.stringify(body || {}) });
     S.aiTask = task;
-    toast(`${label} 已开始：本地 CPU 推理较慢，短任务约 1 分钟，长任务可能 5-10 分钟`, 6000);
+    S.aiFailures = 0;
+    toast(`${label} 已开始：本地推理较慢，短任务约 1 分钟，长任务可能 5-10 分钟`, 6000);
     pollAiTask(onDone);
   } catch (e) {
-    $("btnCancelAi").classList.add("hidden");
-    setComicProgress(0, "失败");
+    stopAiUi(0, "失败");
     toast(`${label} 提交失败：${e.message}`);
   }
+}
+
+/* 收尾：清轮询、隐藏任务相关按钮 */
+function stopAiUi(percent, text) {
+  S.aiTask = null;
+  S.aiFailures = 0;
+  clearTimeout(S.aiTimer);
+  clearTimeout(S.aiRecoverTimer);
+  $("btnCancelAi").classList.add("hidden");
+  $("btnRecoverAi").classList.add("hidden");
+  if (percent !== null && percent !== undefined) setComicProgress(percent, text);
+  else if (text) setComicProgress(null, text);
 }
 
 function pollAiTask(onDone) {
   clearTimeout(S.aiTimer);
   S.aiTimer = setTimeout(async () => {
     if (!S.aiTask) return;
+    let t = null;
     try {
-      const t = await api(`/comic/ai/tasks/${S.aiTask.id}`);
-      S.aiTask = t;
-      const secs = Math.round(t.elapsed || 0);
-      setComicProgress(
-        t.status === "running" ? 45 : 10,
-        `${t.label}：${t.message || ""}${secs ? `（${secs}s）` : ""}`
-      );
-      if (t.status === "running" || t.status === "queued") return pollAiTask(onDone);
-      S.aiTask = null;
-      $("btnCancelAi").classList.add("hidden");
-      if (t.status === "done") {
-        setComicProgress(100, `${t.label} 完成（${Math.round(t.elapsed)}s）`);
-        toast(aiSuccessMessage(t), 7000);
-        await refreshDetail();
-        if (onDone) onDone(t);
-      } else {
-        setComicProgress(0, `${t.label} 失败`);
-        toast((t.error || "任务失败").slice(0, 220), 8000);
-      }
+      t = await api(`/comic/ai/tasks/${S.aiTask.id}`);
     } catch (e) {
-      S.aiTask = null;
-      $("btnCancelAi").classList.add("hidden");
-      setComicProgress(0, "任务轮询失败");
-      toast("任务状态获取失败：" + e.message);
+      // 轮询本身失败：要区分「后端重启 → 任务永久丢失」和「瞬时抽风」
+      if (e.status === 404) {
+        stopAiUi(0, "任务已丢失（后端可能重启过）");
+        toast("后端已重启，这个任务不会再继续了，请重新发起", 9000);
+        return;
+      }
+      S.aiFailures = (S.aiFailures || 0) + 1;
+      if (S.aiFailures <= 5) {
+        setComicProgress(null, `状态查询失败，重试中（第 ${S.aiFailures} 次）…`);
+        return pollAiTask(onDone);
+      }
+      // 连续查不到：不再死等，直接把恢复入口亮出来
+      $("btnRecoverAi").classList.remove("hidden");
+      setComicProgress(null, "后端无响应，可点「中断并恢复」");
+      toast("连续多次查不到任务状态，后端可能已卡死；点「中断并恢复」可复位推理引擎", 9000);
+      return pollAiTask(onDone);
+    }
+
+    S.aiTask = t;
+    S.aiFailures = 0;
+    const secs = Math.round(t.elapsed || 0);
+    const stalled = Math.round(t.stalled_seconds || 0);
+
+    if (t.status === "running" || t.status === "queued") {
+      if (t.stuck) {
+        // 心跳断流：进度条不再假装在动，明确说「疑似卡死」并给出恢复入口
+        $("btnRecoverAi").classList.remove("hidden");
+        setComicProgress(null,
+          `${t.label}：已 ${stalled} 秒没有任何进展（疑似卡死），可点「中断并恢复」`);
+      } else {
+        $("btnRecoverAi").classList.add("hidden");
+        setComicProgress(t.status === "running" ? 45 : 10,
+          `${t.label}：${t.message || ""}${secs ? `（${secs}s）` : ""}`);
+      }
+      return pollAiTask(onDone);
+    }
+
+    // 终态
+    const wasCanceled = t.status === "canceled";
+    stopAiUi(null, "");
+    if (t.status === "done") {
+      setComicProgress(100, `${t.label} 完成（${Math.round(t.elapsed)}s）`);
+      toast(aiSuccessMessage(t), 7000);
+      await refreshDetail();
+      if (onDone) onDone(t);
+    } else if (wasCanceled) {
+      setComicProgress(0, `${t.label} 已取消`);
+    } else {
+      setComicProgress(0, `${t.label} 失败`);
+      toast((t.error || "任务失败").slice(0, 260), 9000);
     }
   }, 2000);
+}
+
+/* 中断并恢复：结束卡住的任务 + 复位推理引擎（hard 会重启 ComfyUI 子进程）
+   有 AI 任务时走 AI 专用恢复；否则走系统级恢复（含失联的出图任务与漫画中间态）。 */
+async function recoverAiTask(hard = true) {
+  const btn = $("btnRecoverAi");
+  const taskId = S.aiTask && S.aiTask.id;
+  if (!confirm(
+    "将中断当前所有推理任务并复位推理引擎（会重新拉起 ComfyUI，可能需要几十秒）。\n\n继续吗？"
+  )) return;
+  btn.disabled = true;
+  setComicProgress(null, "正在恢复：中断任务、重启推理引擎…");
+  try {
+    const res = taskId
+      ? await api(`/comic/ai/tasks/${taskId}/recover?hard=${hard}`, { method: "POST" })
+      : await api(`/system/recover?hard=${hard}`, { method: "POST" });
+    stopAiUi(0, "已恢复，可重新发起任务");
+    toast(res.message || res.engine_message || "已恢复", 8000);
+    await refreshDetail();
+  } catch (e) {
+    toast("恢复失败：" + e.message, 9000);
+    setComicProgress(null, "恢复失败，可重启服务再试");
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function aiSuccessMessage(t) {
@@ -720,14 +789,25 @@ function aiSuccessMessage(t) {
 
 async function cancelAiTask() {
   if (!S.aiTask) return;
+  const taskId = S.aiTask.id;
   try {
-    await api(`/comic/ai/tasks/${S.aiTask.id}/cancel`, { method: "POST" });
-    toast("已请求取消");
-  } catch (e) { toast(e.message); }
-  S.aiTask = null;
+    await api(`/comic/ai/tasks/${taskId}/cancel`, { method: "POST" });
+    toast("已请求取消；若模型 45 秒内没退出，会自动升级为强制恢复", 7000);
+  } catch (e) {
+    toast(e.message);
+  }
   clearTimeout(S.aiTimer);
   $("btnCancelAi").classList.add("hidden");
-  setComicProgress(0, "已取消");
+  setComicProgress(null, "已请求取消，等待模型退出…");
+  // 继续轮询：取消不是「立即结束」，要等线程真的退出。退不出就把恢复入口亮出来
+  // （后端看门狗也会在同一时间自动做硬恢复，这里只是让用户看得见、也能手动催）。
+  clearTimeout(S.aiRecoverTimer);
+  S.aiRecoverTimer = setTimeout(() => {
+    if (!S.aiTask) return;
+    $("btnRecoverAi").classList.remove("hidden");
+    setComicProgress(null, "取消后模型仍未退出，可点「中断并恢复」");
+  }, 50000);
+  pollAiTask(null);
 }
 
 function aiScript() {
@@ -1452,7 +1532,11 @@ async function generateAll(onlyMissing) {
 }
 
 function setComicProgress(percent, text) {
-  $("comicProgressFill").style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  // percent 传 null/undefined 表示「只更新文案，不动进度条」
+  // （例如「疑似卡死」「状态查询失败」这类不该假装在推进的提示）
+  if (percent !== null && percent !== undefined && !Number.isNaN(Number(percent))) {
+    $("comicProgressFill").style.width = `${Math.max(0, Math.min(100, Number(percent)))}%`;
+  }
   if (text) $("comicProgressText").textContent = text;
 }
 
@@ -1487,16 +1571,27 @@ function hasActiveWork() {
 
 function startPolling() {
   if (S.pollTimer) return;
+  let lastDone = -1;
+  let lastChange = Date.now();
   S.pollTimer = setInterval(async () => {
     if (!S.project) return;
     try { await refreshDetail(); } catch { /* 忽略瞬时错误 */ }
     const s = S.stats || {};
     const total = s.total || 0;
     const done = s.done || 0;
+    if (done !== lastDone) { lastDone = done; lastChange = Date.now(); }
     if (total) setComicProgress(Math.round((done / total) * 100), `已完成 ${done}/${total} 格`);
+    // 有任务在跑但很久没有任何一格完成 —— 不再假装在推进，把恢复入口亮出来
+    const idleMs = Date.now() - lastChange;
+    if (hasActiveWork() && idleMs > 10 * 60 * 1000) {
+      $("btnRecoverAi").classList.remove("hidden");
+      setComicProgress(null,
+        `已有 ${Math.round(idleMs / 60000)} 分钟没有任何一格完成，疑似卡住，可点「中断并恢复」`);
+    }
     if (!hasActiveWork()) {
       clearInterval(S.pollTimer);
       S.pollTimer = null;
+      $("btnRecoverAi").classList.add("hidden");
       setComicProgress(100, "就绪");
     }
   }, 5000);
@@ -1686,6 +1781,7 @@ function bindComicEvents() {
   $("btnAiScenes").onclick = aiScenes;
   $("btnAiStoryboard").onclick = aiStoryboard;
   $("btnCancelAi").onclick = cancelAiTask;
+  $("btnRecoverAi").onclick = () => recoverAiTask(true);
 
   $("btnAddCharacter").onclick = addCharacter;
   $("btnDrawCharacters").onclick = drawCharacters;

@@ -52,7 +52,11 @@ class Settings(BaseSettings):
 
     # ---------------- 设备 ----------------
     device: str = "cuda:0"
-    text_encoder_device: str = "cpu"
+    # 注意：文本编码器（Qwen3-VL-8B）的落点**没有**配置项。
+    # ComfyUI 的 CLIPLoader 只接受 default / cpu 两个取值，且 TextGenerate 路径
+    # 要求 cuda——显式传 cpu 会直接抛 `Expected a cuda device, but got: cpu`。
+    # 因此统一用 default，由 ComfyUI 的 model_management / DynamicVRAM 按当前
+    # 显存状态自行调度（详见 inference/comfy_text.py 的说明）。
     dtype: str = "float16"
     keep_loaded: bool = True
     idle_unload_seconds: int = 1800

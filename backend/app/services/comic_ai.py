@@ -747,15 +747,39 @@ def _salvage_objects(text: str) -> list[dict]:
 #  本地 AI 任务管理
 # ============================================================
 #
-# 本机文本推理在 CPU 上很慢（200 字输出可能 5-10 分钟），如果直接放在
+# 本机文本推理很慢（短输出几十秒，200 字以上 5-10 分钟），如果直接放在
 # HTTP 请求里会超时、也会堵住事件循环。这里统一做成单并发后台任务，
 # 前端提交后轮询进度，体验和出图队列一致。
+#
+# ---- 卡死了怎么办 ------------------------------------------------------
+# 界面上「进度不动」和「后台真的卡死」长得一模一样，所以任务带心跳 + 看门狗：
+#   * 每次进度回调 / 阶段提示都会刷新 last_progress_at（心跳）；
+#   * 超过 STALL_SECONDS 没有心跳 → 标记 stuck，界面即可提示并提供「中断并恢复」；
+#   * 超过硬超时（llm_timeout_seconds + 余量）仍无心跳 → 自动硬恢复并结束任务；
+#   * 用户取消后 CANCEL_GRACE_SECONDS 内工作线程没退出 → 判定线程被卡住，同样恢复。
+#
+# Python 线程无法被强制杀死，因此恢复的核心是「换世代」：卡住的旧线程即便某天
+# 醒过来，也不再消费队列。这样即便旧线程永远回不来，整个服务也不用重启，
+# 队列立刻恢复可用。
 
 import queue  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 import uuid  # noqa: E402
 from inspect import signature as _signature  # noqa: E402
+
+from app.config import settings  # noqa: E402
+
+# 心跳断流多久算「疑似卡死」（只提示，不动手）
+STALL_SECONDS = 240.0
+# 取消后多久线程仍不退出，判定为卡死并触发恢复
+CANCEL_GRACE_SECONDS = 45.0
+# 看门狗扫描间隔
+WATCHDOG_INTERVAL = 5.0
+# 硬超时 = LLM_TIMEOUT_SECONDS + 余量（内层已有自己的超时，这里是兜底）
+HARD_TIMEOUT_EXTRA = 120.0
+# 同一个任务最多自动恢复几次，避免反复重启引擎
+MAX_AUTO_RECOVERIES = 2
 
 KIND_LABELS = {
     "script_generate": ("AI 写剧本", "generate_script"),
@@ -778,13 +802,36 @@ class AiTaskManager:
         self._lock = threading.RLock()
         self._queue: "queue.Queue[Optional[str]]" = queue.Queue()
         self._worker: Optional[threading.Thread] = None
+        self._worker_epoch = -1          # 当前工作线程所属「世代」
+        self._epoch = 0                  # 换世代计数（recover 时 +1）
+        self._busy_task_id: Optional[str] = None   # 线程此刻正在跑的任务（存活信号）
+        self._watchdog: Optional[threading.Thread] = None
+        self.stall_seconds = STALL_SECONDS
+        self.last_recovery: Optional[dict] = None
         self._boot()
+        self._boot_watchdog()
 
     def _boot(self) -> None:
-        if self._worker and self._worker.is_alive():
+        """确保有一个「当前世代」的工作线程在消费队列。"""
+        with self._lock:
+            if (self._worker and self._worker.is_alive()
+                    and self._worker_epoch == self._epoch):
+                return
+            epoch = self._epoch
+            self._worker_epoch = epoch
+            worker = threading.Thread(
+                target=self._loop, args=(epoch,), name=f"comic-ai-{epoch}", daemon=True
+            )
+            self._worker = worker
+        worker.start()
+
+    def _boot_watchdog(self) -> None:
+        if self._watchdog and self._watchdog.is_alive():
             return
-        self._worker = threading.Thread(target=self._loop, name="comic-ai", daemon=True)
-        self._worker.start()
+        self._watchdog = threading.Thread(
+            target=self._watchdog_loop, name="comic-ai-watchdog", daemon=True
+        )
+        self._watchdog.start()
 
     # ---------- 对外 ----------
     def submit(self, kind: str, project_id: str, **params: Any) -> dict:
@@ -793,6 +840,7 @@ class AiTaskManager:
         self._boot()
         task_id = "ait_" + uuid.uuid4().hex[:12]
         label, _func = KIND_LABELS[kind]
+        now = time.time()
         task = {
             "id": task_id,
             "kind": kind,
@@ -804,7 +852,12 @@ class AiTaskManager:
             "message": "已排队",
             "result": None,
             "error": None,
-            "created_at": time.time(),
+            "created_at": now,
+            # ---- 心跳与卡死诊断（前端据此显示「疑似卡住 / 可恢复」）----
+            "last_progress_at": now,
+            "stalled_seconds": 0.0,
+            "stuck": False,
+            "recoveries": 0,
         }
         with self._lock:
             self._tasks[task_id] = task
@@ -835,26 +888,191 @@ class AiTaskManager:
         return None
 
     def cancel(self, task_id: str) -> bool:
+        """请求取消。
+
+        注意这里**不**立刻把任务改成终态：只有工作线程真的退出了才算结束。
+        否则界面会显示「已取消」，而线程其实还卡在模型调用里、队列也没恢复，
+        用户看到的就是「点了取消，但后面所有任务都不动了」。
+        """
         with self._lock:
             task = self._tasks.get(task_id)
             if not task or task["status"] not in ("queued", "running"):
                 return False
-            task["status"] = "canceled"
-            task["message"] = "已取消"
+            task["cancel_requested"] = True
+            task["canceled_at"] = time.time()
+            if task["status"] == "queued":
+                task["status"] = "canceled"
+                task["message"] = "已取消（尚未开始执行）"
+                task["finished_at"] = time.time()
+            else:
+                task["message"] = "已请求取消，等待模型退出…"
         text_engine.cancel()
+        # 只做软中断：模型若没退出，看门狗会在 CANCEL_GRACE_SECONDS 后自动升级为
+        # 硬恢复，不必让用户再点一次。
         return True
 
-    # ---------- 执行 ----------
-    def _loop(self) -> None:
+    # ---------- 卡死恢复 ----------
+    def recover(self, task_id: Optional[str] = None, hard: bool = True,
+                reason: str = "用户手动恢复", drop_queue: Optional[bool] = None) -> dict:
+        """一键恢复：结束卡住的任务 + 复位推理引擎。
+
+        两条腿一起走：
+          * 软恢复——清 ComfyUI 队列 + /interrupt，让卡在 HTTP 等待里的线程自己退出；
+          * 硬恢复——额外结束并重新拉起 ComfyUI 子进程，socket 一断，卡住的线程必然
+            抛错退出（只处理本服务自己拉起的子进程）。
+        无论线程能否醒来都会「换世代」，旧线程不再消费队列，所以队列立刻可用，
+        不需要重启整个服务。
+
+        drop_queue：是否连带丢弃排队中的任务。
+          默认「按任务恢复」只结束这一个任务，队列留给新线程继续跑；
+          「一键恢复」（不带 task_id）则连队列一起清空，给用户一个干净的状态。
+        """
+        from app.inference.manager import manager
+
+        if drop_queue is None:
+            drop_queue = task_id is None
+
+        now = time.time()
+        ended: list[str] = []
+        with self._lock:
+            candidates = [task_id] if task_id else list(self._order)
+            for tid in candidates:
+                t = self._tasks.get(tid)
+                if not t or t["status"] not in ("queued", "running"):
+                    continue
+                t["status"] = "failed"
+                t["error"] = f"{reason}，该任务已中断，可直接重新发起"
+                t["message"] = "已中断（可重试）"
+                t["stuck"] = False
+                t["stalled_seconds"] = 0.0
+                t["finished_at"] = now
+                ended.append(tid)
+            if task_id and not ended:
+                return {"ok": False, "message": "任务不存在或已结束，无需恢复",
+                        "ended_tasks": [], "dropped_queued": 0,
+                        "engine_ok": True, "engine_message": "", "hard": bool(hard)}
+
+            # 队列里排着的任务：一键恢复时一并作废，避免界面一直显示「已排队」
+            dropped = 0
+            if drop_queue:
+                while True:
+                    try:
+                        self._queue.get_nowait()
+                        dropped += 1
+                    except queue.Empty:
+                        break
+                for t in self._tasks.values():
+                    if t["status"] == "queued":
+                        t["status"] = "failed"
+                        t["error"] = f"{reason}，排队中的任务已取消，可直接重新发起"
+                        t["message"] = "已取消（可重试）"
+                        ended.append(t["id"])
+
+            # 换世代：卡住的旧线程即便醒来也不再消费队列
+            self._epoch += 1
+            self._busy_task_id = None
+        self._boot()
+
+        text_engine.cancel()                       # 软：清队列 + 中断
+        ok, msg = manager.recover_engine(hard=hard)
+        result = {
+            "ok": bool(ok),
+            "ended_tasks": ended,
+            "dropped_queued": dropped,
+            "engine_ok": bool(ok),
+            "engine_message": msg,
+            "hard": bool(hard),
+            "message": ("已中断卡住的任务并重启推理引擎：" if hard else "已中断卡住的任务并请求引擎停止：")
+                       + (msg or ""),
+            "at": now,
+        }
+        self.last_recovery = result
+        print(f"[漫画AI恢复] {result['message']} 结束任务={ended}", flush=True)
+        return result
+
+    def stuck_task(self) -> Optional[dict]:
+        """当前疑似卡住的任务（供状态接口展示）。"""
+        with self._lock:
+            for t in reversed([self._tasks[i] for i in self._order if i in self._tasks]):
+                if t.get("stuck") and t["status"] == "running":
+                    return dict(t)
+        return None
+
+    def _watchdog_loop(self) -> None:
         while True:
-            task_id = self._queue.get()
+            time.sleep(WATCHDOG_INTERVAL)
+            try:
+                self._scan()
+            except Exception:  # pragma: no cover - 看门狗自己绝不能挂
+                pass
+
+    def _scan(self) -> None:
+        """扫一遍任务：标记疑似卡死，超硬超时 / 取消不退出则自动恢复。"""
+        now = time.time()
+        hard_limit = float(settings.llm_timeout_seconds) + HARD_TIMEOUT_EXTRA
+        with self._lock:
+            running = [t for t in self._tasks.values() if t["status"] == "running"]
+            canceling = [t for t in running if t.get("cancel_requested")]
+            busy = self._busy_task_id
+
+        for t in running:
+            if t.get("cancel_requested"):
+                continue                      # 正在取消，不再报「疑似卡死」
+            idle = now - float(t.get("last_progress_at") or t.get("started_at") or now)
+            with self._lock:
+                t["stalled_seconds"] = round(idle, 1)
+                t["stuck"] = bool(idle >= self.stall_seconds)
+            if idle >= hard_limit and t["recoveries"] < MAX_AUTO_RECOVERIES:
+                with self._lock:
+                    t["recoveries"] += 1
+                self.recover(task_id=t["id"], hard=True,
+                             reason=f"已 {int(idle)} 秒无任何进展（硬超时）")
+
+        # 取消后线程仍不退出 —— 说明它被卡在等待里，替用户升级成硬恢复
+        for t in canceling:
+            if t["id"] != busy:               # 线程已经不在跑它了，属于正常退出
+                continue
+            if now - float(t.get("canceled_at") or now) < CANCEL_GRACE_SECONDS:
+                continue
+            if t["recoveries"] >= MAX_AUTO_RECOVERIES:
+                continue
+            with self._lock:
+                t["recoveries"] += 1
+            self.recover(task_id=None, hard=True, reason="取消后推理线程未退出")
+
+    # ---------- 执行 ----------
+    def _loop(self, epoch: int) -> None:
+        while True:
+            if epoch != self._epoch:
+                # 已换世代：本线程是被 recover 落在后面的旧线程，直接退出
+                return
+            try:
+                # 带超时地取任务，才能在一秒内察觉「换世代」并让位；
+                # 否则空转的旧线程会一直阻塞在这里，直到有新任务把它唤醒——
+                # 而它一醒来又会先把任务吞掉再退出（任务凭空消失）。
+                task_id = self._queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
             if task_id is None:
+                return
+            if epoch != self._epoch:
+                # 已经换世代了，但任务已经被拿到手上：必须放回队列交给新线程，
+                # 不能就这么退出，否则这个任务永远不会被执行。
+                self._queue.put(task_id)
                 return
             with self._lock:
                 task = self._tasks.get(task_id)
-            if not task or task["status"] == "canceled":
+            if not task or task["status"] in ("canceled", "failed") \
+                    or task.get("cancel_requested"):
                 continue
-            self._run(task)
+            with self._lock:
+                self._busy_task_id = task_id
+            try:
+                self._run(task)
+            finally:
+                with self._lock:
+                    if self._busy_task_id == task_id:
+                        self._busy_task_id = None
 
     def _run(self, task: dict) -> None:
         project = crepo.get_project(task["project_id"])
@@ -864,13 +1082,22 @@ class AiTaskManager:
 
         with self._lock:
             task["status"] = "running"
-            task["message"] = "本地模型推理中（CPU 推理较慢，请耐心等待）"
+            task["message"] = "本地模型推理中，请耐心等待"
             task["started_at"] = time.time()
+            task["last_progress_at"] = time.time()
+
+        def heartbeat(message: str = "", seconds: Optional[float] = None) -> None:
+            """刷新心跳。看门狗完全依赖它判断「有没有在动」。"""
+            with self._lock:
+                task["last_progress_at"] = time.time()
+                task["stuck"] = False
+                if seconds is not None:
+                    task["elapsed"] = seconds
+                if message:
+                    task["message"] = message
 
         def on_progress(seconds: float) -> None:
-            with self._lock:
-                task["elapsed"] = seconds
-                task["message"] = f"本地模型推理中，已用 {int(seconds)} 秒"
+            heartbeat(f"本地模型推理中，已用 {int(seconds)} 秒", seconds)
 
         params = dict(task["params"])
         try:
@@ -891,20 +1118,38 @@ class AiTaskManager:
             self._finish(task, error=f"{exc.__class__.__name__}: {exc}")
 
     def _note(self, task: dict, text: str) -> None:
-        """更新任务提示（不覆盖进度时间）。"""
+        """更新任务提示（同时刷新心跳：有阶段推进就算「在动」）。"""
         with self._lock:
             if task["status"] in ("queued", "running"):
                 task["message"] = text
+                task["last_progress_at"] = time.time()
+                task["stuck"] = False
 
     def _finish(self, task: dict, result: Any = None, error: str = "") -> None:
         with self._lock:
-            if task["status"] == "canceled":
+            if task["status"] in ("canceled", "failed"):
+                # 已被取消 / 已被「卡死恢复」判定结束：保留那个更准确的结果，不覆盖
+                task["stuck"] = False
+                task["stalled_seconds"] = 0.0
+                return
+            if task.get("cancel_requested"):
+                # 用户请求过取消，线程此刻真的退出了 —— 现在才算取消完成
+                task["status"] = "canceled"
+                task["message"] = "已取消"
+                task["error"] = None
+                task["result"] = None
+                task["finished_at"] = time.time()
+                task["stuck"] = False
+                task["stalled_seconds"] = 0.0
                 return
             task["status"] = "failed" if error else "done"
             task["error"] = error or None
             task["result"] = result
             task["elapsed"] = round(task.get("elapsed") or 0, 1)
             task["message"] = error or f"完成，用时 {task['elapsed']} 秒"
+            task["finished_at"] = time.time()
+            task["stuck"] = False
+            task["stalled_seconds"] = 0.0
 
 
 ai_tasks = AiTaskManager()
@@ -915,7 +1160,12 @@ def llm_status() -> dict:
     st["shots"] = [v["name"] for v in SHOT_PRESETS.values()]
     st["styles"] = [v["name"] for v in STYLE_PRESETS.values()]
     st["speed_note"] = (
-        "本机为 CPU 文本推理：短输出约 20-60 秒，200 字以上可能 5-10 分钟，"
+        "本机文本推理较慢（短输出约 20-60 秒，200 字以上可能 5-10 分钟），"
         "请耐心等待，期间不要重复提交。"
     )
+    # 卡死诊断：界面据此在「疑似卡住」时给出「中断并恢复」入口
+    st["stall_seconds"] = ai_tasks.stall_seconds
+    st["stuck_task"] = ai_tasks.stuck_task()
+    st["last_recovery"] = ai_tasks.last_recovery
+    return st
     return st

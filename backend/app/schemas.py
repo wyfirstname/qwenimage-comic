@@ -111,7 +111,6 @@ class ModelStatus(BaseModel):
     loaded: bool
     loading: bool
     device: str
-    text_encoder_device: str
     keep_loaded: bool
     queue_size: int
     running_job: Optional[str] = None
