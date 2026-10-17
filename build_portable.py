@@ -392,6 +392,29 @@ def write_scripts() -> None:
         encoding="ascii", errors="strict",
     )
 
+    _write(STAGE / "check.bat",
+        "@echo off\r\n"
+        "setlocal\r\n"
+        "title Workflow self-check\r\n"
+        "cd /d \"%~dp0\"\r\n"
+        "\r\n"
+        "rem Answers one question: will reference images actually reach the model?\r\n"
+        "rem Replacing runtime\\ or any Scripts folder never changes this - the logic\r\n"
+        "rem lives in engine\\ and shared\\. This script reads the code and reports which\r\n"
+        "rem build it is, then validates the workflow against ComfyUI's own schema.\r\n"
+        "rem Takes ~5 seconds, no GPU, no model loading.\r\n"
+        "\r\n"
+        "if not exist \"runtime\\python\\python.exe\" (\r\n"
+        "  echo [ERROR] runtime\\python\\python.exe not found\r\n"
+        "  pause\r\n"
+        "  exit /b 1\r\n"
+        ")\r\n"
+        "\r\n"
+        "set PYTHONIOENCODING=utf-8\r\n"
+        "\"runtime\\python\\python.exe\" scripts\\check_workflow.py\r\n"
+        "echo.\r\n"
+        "pause\r\n")
+
     _write(STAGE / "install_tts.bat",
         "@echo off\r\n"
         "setlocal\r\n"
@@ -621,6 +644,7 @@ def write_scripts() -> None:
     run_engine.bat                  引擎单独跑一个进程，门户用 ENGINE_TRANSPORT=http 连
     run_tts.bat                     手动启动旁白服务（默认 edge-tts，开箱即用）
     install_tts.bat                 可选：装本地高清旁白 IndexTTS-2（约 5.5 GB）
+    check.bat                       自检：这份代码的参考图能否真进模型（5 秒，不用显卡）
 
 四、显存与旁白
   旁白默认走 edge-tts（微软在线合成）：不下载任何模型、不占显存、秒级出声，

@@ -135,7 +135,32 @@ def check(name: str, workflow: dict, table: dict) -> list[str]:
     return problems
 
 
+def _code_marker() -> str:
+    """报告本机这份代码是哪一版。
+
+    只替换 Scripts / runtime 这类解释器目录不会改变任何业务逻辑，真正决定
+    「参考图进不进模型」的是 engine/infer/comfy_engine.py 里那几行键名。
+    这里直接看文件内容，比问用户"你更新了没"可靠。
+    """
+    import datetime as _dt
+
+    p = ROOT / "engine" / "infer" / "comfy_engine.py"
+    if not p.exists():
+        return "❌ 找不到 engine/infer/comfy_engine.py，工程文件不完整"
+    src = p.read_text(encoding="utf-8", errors="replace")
+    fixed = 'images.image_' in src
+    stamp = _dt.datetime.fromtimestamp(p.stat().st_mtime).strftime("%m-%d %H:%M")
+    size = p.stat().st_size / 1024
+    tag = "✓ 修复版（扁平键 images.image_N）" if fixed else "✗ 旧版（嵌套字典，参考图会被丢弃）"
+    return f"{tag}  comfy_engine.py {stamp} / {size:.1f} KB"
+
+
 def main() -> int:
+    print("=" * 62)
+    print("工作流自检（不加载权重、不占显存）")
+    print("本机代码：", _code_marker())
+    print("=" * 62)
+
     table = _load_schema_providers()
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
@@ -176,11 +201,14 @@ def main() -> int:
             print(f"           参考图接线：{json.dumps(ref, ensure_ascii=False)}")
 
     if all_problems:
-        print("\n发现问题：")
+        print("\n❌ 失败：下列输入会被 ComfyUI 静默丢弃，参考图不会生效——")
         for p in all_problems:
             print("  -", p)
+        print("\n结论：这份代码不能让分镜角色保持一致，请更新 engine/ 与 shared/ 目录。")
         return 1
-    print("\n全部通过：每个输入键都能到达节点，参考图已登记为动态槽位。")
+    print("\n✅ 通过：每个输入键都能到达节点，参考图已登记为动态槽位。")
+    print("   若要确认运行期也没断，出图时看控制台是否出现：")
+    print("   [engine] 融合编辑：1 张参考图 → images.image_1")
     return 0
 
 

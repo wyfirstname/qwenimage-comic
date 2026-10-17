@@ -31,6 +31,7 @@ from PIL import Image
 from shared.config import settings
 from engine.infer import comfy_http
 from engine.infer.base import EngineResult
+from engine.infer.schema_guard import ensure_inputs_reach
 
 # ComfyUI 子进程句柄放在**模块级**，不挂在实例上。
 # manager.unload() 会把引擎实例丢掉，但子进程还在跑；句柄一丢就既杀不掉也拉不起来
@@ -362,7 +363,11 @@ class ComfyEngine:
             data = json.loads(resp.read())
         return data.get("name", name)
 
-    def _post_prompt(self, workflow: dict) -> str:
+    def _post_prompt(self, workflow: dict, expect_refs: int = 0) -> str:
+        # 提交前先向真实服务核对节点契约：动态输入写错会被 ComfyUI 静默丢弃，
+        # 那种失败不报错、只表现为"角色每格都不一样"，必须在这里拦住。
+        ensure_inputs_reach(workflow, expect_refs=expect_refs)
+
         req = urllib.request.Request(
             f"{settings.comfyui_url}/prompt",
             data=json.dumps(workflow).encode(),
@@ -486,7 +491,7 @@ class ComfyEngine:
             names = ", ".join(f"images.image_{i}" for i in range(1, len(ref_names) + 1))
             print(f"[engine] 融合编辑：{len(ref_names)} 张参考图 → {names}", flush=True)
         started = time.time()
-        prompt_id = self._post_prompt(workflow)
+        prompt_id = self._post_prompt(workflow, expect_refs=len(ref_names or []))
         self._current_prompt_id = prompt_id
         if progress_cb:
             progress_cb(5, "排队中")
