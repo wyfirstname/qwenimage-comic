@@ -80,6 +80,38 @@ class Settings(BaseSettings):
     infer_timeout_seconds: int = 600
     max_queue_size: int = 20
 
+    # ---------------- 外部工具 ----------------
+    # ffmpeg 位置：可填可执行文件，也可填它所在目录；留空则按
+    # runtime/ffmpeg → runtime/bin → tools/ffmpeg → PATH 的顺序查找
+    ffmpeg_path: str = ""
+
+    # ---------------- 显存槽位（单卡跑多个模型的核心开关）----------------
+    # 出图与 TTS 共用一个 GPU，互相会顶掉对方的权重。开启后：
+    #   用哪个就把哪个装进来，另一个当场卸载；两个都闲着超过
+    #   slot_idle_unload_seconds 秒就全部卸掉，把显存还给系统。
+    model_slots_enabled: bool = True
+    slot_idle_unload_seconds: int = 600
+
+    # ---------------- TTS（IndexTTS-2，独立进程）----------------
+    # 必须独立进程 + 独立 venv：IndexTTS-2 要求 python>=3.10,<3.12 且
+    # transformers 锁在 4.52.1，而主环境是 3.13 + transformers 5.x，
+    # 装在一起会把 ComfyUI 的 GGUF 通道一起拖死。
+    tts_enabled: bool = True
+    tts_url: str = "http://127.0.0.1:8190"
+    # index-tts 仓库目录（其下的 .venv 会被自动使用）
+    tts_home: str = ""
+    # 直接指定 TTS 解释器，优先于 tts_home
+    tts_python: str = ""
+    tts_autostart: bool = True
+    # 权重目录（相对 tts_home）；2.0 用 checkpoints_2，2.5 用 checkpoints
+    tts_models_dir: str = "checkpoints_2"
+    # 2 = IndexTTS-2，2.5 = IndexTTS-2.5（多语言 / 语速可控）
+    tts_model_version: str = "2"
+    tts_use_fp16: bool = True
+    # 默认音色参考音频（相对 tts_home 或绝对路径）；留空则用内置示例
+    tts_speaker: str = ""
+    tts_timeout_seconds: int = 300
+
     # ---------------- 本地文本模型（剧本 / 角色提取 / 场景提取）----------------
     # 复用 Qwen-Image 自带的 Qwen3-VL-8B 文本编码器，经 ComfyUI 的 TextGenerate 节点
     # 做本地文本生成，不引入任何云端 API、不额外下载模型。
@@ -142,6 +174,11 @@ class Settings(BaseSettings):
     @property
     def db_path_abs(self) -> Path:
         return self._abs(self.db_path)
+
+    @property
+    def tts_home_path(self) -> Path:
+        """IndexTTS 仓库目录（未配置时为项目下的 tools/index-tts）。"""
+        return self._abs(self.tts_home or "tools/index-tts")
 
     # ---- 平台 / 应用目录 ----
     @property

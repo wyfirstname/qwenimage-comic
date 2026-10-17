@@ -23,22 +23,20 @@
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
-import subprocess
 import tempfile
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+from shared import ffmpeg as ffm
 from shared.config import settings
 from shared.promptlib import shots as shotlib
 
 from apps.storyboard.backend import store
-from apps.storyboard.backend.service import aspect_of
+from apps.storyboard.backend.service import VOICE_TAIL, aspect_of
 
 
 class RenderError(Exception):
@@ -49,90 +47,26 @@ FPS = 30
 XFADE = 0.5
 MAX_SEGMENTS = 16
 
-_ROOT = Path(__file__).resolve().parents[3]
 
-_FFMPEG_LOCK = threading.Lock()
-_FFMPEG_CACHE: Optional[str] = None
-_FFMPEG_PROBED = False
-
-
-# ============================================================
-#  找 ffmpeg
-# ============================================================
-
-def _candidates() -> list[str]:
-    names = ["ffmpeg.exe", "ffmpeg"] if os.name == "nt" else ["ffmpeg"]
-    dirs = [
-        _ROOT / "runtime" / "ffmpeg" / "bin",   # 便携包
-        _ROOT / "runtime" / "bin",
-        _ROOT / "tools" / "ffmpeg" / "bin",
-        _ROOT / "ffmpeg" / "bin",
-        _ROOT,
-    ]
-    out: list[str] = []
-    for d in dirs:
-        for n in names:
-            p = d / n
-            if p.exists():
-                out.append(str(p))
-    which = shutil.which("ffmpeg")
-    if which:
-        out.append(which)
-    return out
-
+# ------------------------------------------------------------
+#  ffmpeg 相关一律转发到 shared/ffmpeg.py（视频引擎将来也要用同一套）
+# ------------------------------------------------------------
 
 def find_ffmpeg() -> Optional[str]:
-    """找可用的 ffmpeg。结果缓存——每次渲染都扫盘没必要。"""
-    global _FFMPEG_CACHE, _FFMPEG_PROBED
-    with _FFMPEG_LOCK:
-        if _FFMPEG_PROBED:
-            return _FFMPEG_CACHE
-        for cand in _candidates():
-            try:
-                r = subprocess.run([cand, "-version"], capture_output=True, timeout=12)
-            except Exception:
-                continue
-            if r.returncode == 0 and b"ffmpeg" in (r.stdout or b"").lower():
-                _FFMPEG_CACHE = cand
-                break
-        _FFMPEG_PROBED = True
-        return _FFMPEG_CACHE
+    return ffm.find_ffmpeg()
 
 
 def ffmpeg_status() -> dict:
-    ff = find_ffmpeg()
-    if not ff:
-        return {"available": False,
-                "reason": "未找到 ffmpeg。把它放进 runtime/ffmpeg/bin/ 或加入 PATH 即可导出成片（其余功能不受影响）。"}
-    ver = ""
-    try:
-        r = subprocess.run([ff, "-version"], capture_output=True, timeout=12)
-        first = (r.stdout or b"").decode("utf-8", "ignore").splitlines()[:1]
-        ver = first[0] if first else ""
-    except Exception:
-        pass
-    return {"available": True, "path": ff, "version": ver}
-
-
-_FILTER_CACHE: dict[str, bool] = {}
+    return ffm.status()
 
 
 def has_filter(name: str) -> bool:
-    """某个 ffmpeg 滤镜在不在。缓存结果——每次渲染都扫一遍 -filters 太浪费。"""
-    if name in _FILTER_CACHE:
-        return _FILTER_CACHE[name]
-    ff = find_ffmpeg()
-    if not ff:
-        _FILTER_CACHE[name] = False
-        return False
-    try:
-        r = subprocess.run([ff, "-hide_banner", "-filters"], capture_output=True,
-                           timeout=20)
-        ok = name.encode() in (r.stdout or b"")
-    except Exception:
-        ok = False
-    _FILTER_CACHE[name] = ok
-    return ok
+    return ffm.has_filter(name)
+
+
+def reset_ffmpeg_cache() -> None:
+    ffm.reset_cache()
+
 
 
 # ============================================================
@@ -142,15 +76,9 @@ def has_filter(name: str) -> bool:
 def _run(args: list[str], *, cwd: Path, timeout: float = 600) -> str:
     """跑一条 ffmpeg，失败时把 stderr 尾部抛出来（这是唯一有用的报错）。"""
     try:
-        proc = subprocess.run(args, cwd=str(cwd), capture_output=True,
-                              timeout=timeout)
-    except subprocess.TimeoutExpired:
-        raise RenderError(f"ffmpeg 超时（{timeout:.0f} 秒），可能是图片损坏或分辨率过大")
-    if proc.returncode != 0:
-        err = (proc.stderr or b"").decode("utf-8", "ignore").strip().splitlines()
-        tail = "\n".join(err[-6:]) if err else "（无输出）"
-        raise RenderError(f"ffmpeg 失败：\n{tail}")
-    return (proc.stdout or b"").decode("utf-8", "ignore")
+        return ffm.run(args, cwd=cwd, timeout=timeout)
+    except ffm.FFmpegError as exc:
+        raise RenderError(str(exc)) from exc
 
 
 def _even(v: int) -> int:
@@ -251,6 +179,15 @@ def concat_segments(*, segs: list[dict], out: Path, xfade: float,
         filters.append("[0:v]setpts=PTS-STARTPTS[vout]")
         vlabel = "[vout]"
         note = "单镜头"
+    elif xfade <= 0.001:
+        # 硬切：有旁白时必须走这条路。xfade 会让相邻两段在时间轴上重叠，
+        # 而旁白是一条连续音轨——重叠 0.5 秒就意味着后面每句都提前 0.5 秒，
+        # 越到片尾错得越多。宁可少一层淡入，也不要音画不同步。
+        filters.append(
+            "".join(f"[{i}:v]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vout]"
+        )
+        vlabel = "[vout]"
+        note = f"{n} 段硬切"
     else:
         # offset 累计：第 k 次 xfade 的起点 = 上一段结束 - 转场时长
         offset = 0.0
@@ -298,6 +235,49 @@ def concat_segments(*, segs: list[dict], out: Path, xfade: float,
                                    burn_subtitles=False) + "（字幕烧制失败，已跳过）"
         raise
     return note
+
+
+def build_voice_track(*, segs: list[dict], out: Path, cwd: Path) -> Optional[Path]:
+    """把逐格旁白拼成一条与画面对齐的音轨。
+
+    关键在「每段都补齐到该格时长」：TTS 合成出来每句长短不一，
+    直接 concat 会让后面的句子整体前移。这里用 apad/atrim 把每段精确
+    钳到对应画面时长（缺旁白的格子补等长静音），音画就永远对得上。
+
+    返回 None 表示整片没有一句旁白——调用方仍会铺一条静音轨。
+    """
+    parts = [(s.get("audio"), float(s["duration"])) for s in segs]
+    if not any(p[0] for p in parts):
+        return None
+
+    ff = find_ffmpeg()
+    if not ff:
+        raise RenderError("未找到 ffmpeg，无法拼接旁白")
+
+    args = [ff, "-y", "-hide_banner", "-loglevel", "error"]
+    filters: list[str] = []
+    n = 0
+    for i, (aud, dur) in enumerate(parts):
+        if aud:
+            args += ["-i", str(aud)]
+        else:
+            # 缺旁白补静音，保证时间轴仍然连续
+            args += ["-f", "lavfi", "-t", f"{dur:.3f}",
+                     "-i", "anullsrc=r=44100:cl=stereo"]
+        filters.append(
+            f"[{i}:a]aformat=sample_fmts=fltp:sample_rates=44100:"
+            f"channel_layouts=stereo,"
+            f"atrim=0:{dur:.3f},apad=whole_dur={dur:.3f},"
+            f"asetpts=PTS-STARTPTS[a{i}]"
+        )
+        n += 1
+    filters.append(
+        "".join(f"[a{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[aout]"
+    )
+    args += ["-filter_complex", ";".join(filters), "-map", "[aout]",
+             "-c:a", "aac", "-b:a", "160k", out.name]
+    _run(args, cwd=cwd, timeout=300)
+    return out
 
 
 def write_srt(*, segs: list[dict], path: Path, xfade: float) -> None:
@@ -350,7 +330,6 @@ def render_project(project: dict, *,
     skipped = len([b for b in (project.get("beats") or [])]) - len(beats)
     aspect = aspect_of(project.get("aspect"))
     out_w, out_h = aspect["out"]
-    xfade = min(float(project.get("xfade") or XFADE), 1.0)
 
     pid = str(project.get("id") or "sb")
     tmp = store.data_dir() / "_tmp" / pid
@@ -363,10 +342,31 @@ def render_project(project: dict, *,
     final = out_dir / f"{pid}.mp4"
 
     try:
-        segs: list[dict] = []
-        total_n = len(beats)
+        # ---- 第一遍：把旁白归位并量出真实时长 -------------------------
+        # 画面时长跟着声音走，而不是反过来。否则一句 6 秒的旁白配在 3 秒的
+        # 镜头上，只能靠加速或截断，两个都难听。
+        plans: list[dict] = []
         for i, b in enumerate(beats):
-            step(0.02 + 0.78 * (i / max(1, total_n)),
+            plan = float(b.get("duration") or 3.0)
+            src_audio = _beat_audio(b)
+            local_audio = ""
+            if src_audio and src_audio.exists():
+                local_audio = f"a{i}{src_audio.suffix.lower() or '.wav'}"
+                shutil.copyfile(src_audio, tmp / local_audio)
+                spoke = ffm.duration_of(src_audio, 0.0)
+                if spoke > 0.05:
+                    plan = max(1.2, spoke + VOICE_TAIL)
+            plans.append({"beat": b, "duration": plan, "audio": local_audio})
+
+        has_voice = any(p["audio"] for p in plans)
+        # 有旁白 → 硬切（xfade 会让时间轴重叠，导致后面每句都提前）
+        xfade = 0.0 if has_voice else min(float(project.get("xfade") or XFADE), 1.0)
+
+        segs: list[dict] = []
+        total_n = len(plans)
+        for i, item in enumerate(plans):
+            b = item["beat"]
+            step(0.02 + 0.72 * (i / max(1, total_n)),
                  f"渲染第 {i + 1}/{total_n} 格…")
             src = _resolve(_image_path(b))
             if not src.exists():
@@ -376,24 +376,34 @@ def render_project(project: dict, *,
             shutil.copyfile(src, local)
             seg_name = f"seg{i}.mp4"
             build_segment(image=local, out=tmp / seg_name,
-                          duration=float(b.get("duration") or 3.0),
+                          duration=item["duration"],
                           camera=str(b.get("camera") or ""),
                           out_w=out_w, out_h=out_h, cwd=tmp)
             segs.append({"file": seg_name,
-                         "duration": float(b.get("duration") or 3.0),
+                         "duration": item["duration"],
+                         "audio": item["audio"],
                          "narration": b.get("narration") or ""})
 
-        step(0.82, "拼接片段…")
+        step(0.80, "对齐旁白…")
+        audio: Optional[Path] = None
+        voice_note = ""
+        if has_voice:
+            audio = build_voice_track(segs=segs, out=tmp / "narration.m4a", cwd=tmp)
+            spoke_n = sum(1 for p in plans if p["audio"])
+            voice_note = f"{spoke_n} 句旁白"
+        else:
+            # 兼容：整片一条外部配音（旧行为，没有逐格旁白时才用）
+            voice = project.get("voice") or {}
+            if voice.get("path"):
+                ap = _resolve(voice["path"])
+                if ap.exists():
+                    shutil.copyfile(ap, tmp / "voice.m4a")
+                    audio = tmp / "voice.m4a"
+                    voice_note = "整片配音"
+
+        step(0.84, "拼接片段…")
         srt = tmp / "sub.srt"
         write_srt(segs=segs, path=srt, xfade=xfade)
-
-        audio = None
-        voice = project.get("voice") or {}
-        if voice.get("path"):
-            ap = _resolve(voice["path"])
-            if ap.exists():
-                shutil.copyfile(ap, tmp / "voice.m4a")
-                audio = tmp / "voice.m4a"
 
         note = concat_segments(segs=segs, out=tmp / "final.mp4", xfade=xfade,
                                audio=audio, srt=srt, out_w=out_w, out_h=out_h,
@@ -412,7 +422,7 @@ def render_project(project: dict, *,
         step(1.0, "完成")
 
         rel = final.relative_to(settings.data_dir_path).as_posix()
-        msg = note
+        msg = "；".join(x for x in (note, voice_note) if x)
         if skipped > 0:
             msg = (msg + "；" if msg else "") + f"跳过 {skipped} 格未出图的镜头"
         return {"path": str(final), "url": f"/data/{rel}", "duration": duration,
@@ -420,6 +430,17 @@ def render_project(project: dict, *,
                 "skipped": skipped, "subtitles": True, "has_voice": bool(audio)}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _beat_audio(beat: dict) -> Optional[Path]:
+    """取这一格的旁白音频文件（本地路径优先，其次由 /data 的 url 反推）。"""
+    p = str(beat.get("audio_path") or "").strip()
+    if p:
+        return _resolve(p)
+    url = str(beat.get("audio_url") or "").strip()
+    if url.startswith("/data/"):
+        return settings.data_dir_path / url[len("/data/"):]
+    return None
 
 
 def _image_path(beat: dict) -> str:

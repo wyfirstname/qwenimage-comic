@@ -139,3 +139,18 @@
   .sb-grid3 { grid-template-columns: 1fr; }
   .sb-span2 { grid-column: span 1; }
 }
+
+/* ---------------- 旁白 ---------------- */
+
+/* 格子底部现在有「状态 + 播放器 + 重念 + 出这一格」四项，
+   靠 space-between 会散成一排孤岛，改成状态占满左侧、按钮靠右 */
+.sb-beat-foot { justify-content: flex-start; flex-wrap: wrap; row-gap: 6px; }
+.sb-beat-foot .sb-beat-state { margin-right: auto; }
+.sb-beat-foot .btn { flex: none; }
+
+.sb-audio { display: flex; align-items: center; gap: 6px; }
+.sb-audio audio { height: 28px; width: 148px; display: block; }
+.sb-audio-dur { font-size: 11px; }
+
+.sb-voice .sb-grid3 { margin-top: 6px; }
+.sb-voice.sb-voice .sb-hint { margin-bottom: 4px; }

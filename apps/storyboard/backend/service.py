@@ -152,8 +152,169 @@ def generate_beats(project: dict,
 def apply_durations(beats: list[dict], total_seconds: float, xfade: float) -> list[dict]:
     ds = sblib.plan_durations(beats, total_seconds, xfade=xfade)
     for b, d in zip(beats, ds):
+        # 已经有旁白的格子，时长由声音决定，不能被总时长重新分配掉
+        if b.get("audio_status") == "ready" and b.get("audio_duration"):
+            continue
         b["duration"] = d
     return beats
+
+
+# ============================================================
+#  旁白（IndexTTS，独立进程）
+# ============================================================
+
+# 一句话念完到下一句开始之间的呼吸间隙。
+# 0.45 是听着最舒服的位置：再短像抢话，再长会让 24 秒的短片明显变拖。
+VOICE_TAIL = 0.45
+
+
+def tts_available() -> tuple[bool, str]:
+    return engine.tts_available()
+
+
+def voice_status() -> dict:
+    """旁白能力的当前状况（给界面显示「已安装 / 未安装 / 正在加载」）。"""
+    st = dict(engine.tts_status() or {})
+    try:
+        st["slots"] = engine.slots_status()
+    except Exception:
+        st["slots"] = {}
+    return st
+
+
+def voice_presets() -> list[dict]:
+    """IndexTTS 自带的示例音色（放在 <tts_home>/examples 下）。
+
+    没有就不给候选，用户仍可手填绝对路径——宁可少一个下拉框，
+    也不要凭空造不存在的音色名。
+    """
+    home = settings.tts_home_path
+    out: list[dict] = []
+    for name in ("examples", "example", "samples"):
+        d = home / name
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.wav"))[:24]:
+            out.append({"id": f.name, "label": f.stem,
+                        "path": str(f.relative_to(home).as_posix())})
+        if out:
+            break
+    return out
+
+
+def _audio_path(pid: str, index: int) -> "object":
+    return store.audio_dir(pid) / f"beat{int(index):02d}.wav"
+
+
+def _audio_url(pid: str, index: int) -> str:
+    p = _audio_path(pid, index)
+    try:
+        rel = p.relative_to(settings.data_dir_path).as_posix()
+    except ValueError:
+        return ""
+    return f"/data/{rel}"
+
+
+def _find_beat(project: dict, index: int) -> Optional[dict]:
+    for b in project.get("beats") or []:
+        if int(b.get("index") or 0) == int(index):
+            return b
+    return None
+
+
+def synth_beat(project: dict, index: int) -> dict:
+    """给某一格念旁白，并把时长写回去（画面跟着声音走）。
+
+    失败一律落到 audio_status=failed + audio_error，不抛给整批——
+    五句里有一句炸了，另外四句不该白念。
+    """
+    pid = str(project.get("id") or "")
+    beat = _find_beat(project, index)
+    if beat is None:
+        raise StoryboardError(f"第 {index} 格不存在")
+    text = str(beat.get("narration") or "").strip()
+    if not text:
+        raise StoryboardError(f"第 {index} 格没有旁白文本")
+
+    voice = project.get("voice") or {}
+    path = _audio_path(pid, index)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    store.set_beat_image(pid, index, audio_status="recording", audio_error="")
+
+    try:
+        r = engine.tts_synth(
+            text, path,
+            speaker=str(voice.get("speaker") or ""),
+            emo_wav=str(voice.get("emo") or ""),
+            emo_alpha=float(voice.get("emo_alpha") or 0) or None,
+            emo_text=str(voice.get("emo_text") or ""),
+            lang=str(voice.get("lang") or ""),
+            speed=float(voice.get("speed") or 0),
+        )
+    except Exception as exc:
+        store.set_beat_image(pid, index, audio_status="failed",
+                             audio_error=str(exc)[:600])
+        raise StoryboardError(str(exc)) from exc
+
+    spoke = float(r.get("duration") or 0.0)
+    plan = round(max(1.2, spoke + VOICE_TAIL), 2) if spoke > 0.05 else float(
+        beat.get("duration") or 3.0)
+    store.set_beat_image(
+        pid, index,
+        audio_path=str(path), audio_url=_audio_url(pid, index),
+        audio_duration=spoke, audio_status="ready", audio_error="",
+        duration=plan,
+    )
+    return {"index": int(index), "duration": spoke, "plan": plan,
+            "backend": r.get("backend") or ""}
+
+
+def synth_all(project: dict, indices: Optional[list[int]] = None,
+              on_step: Optional[Callable[[int, int, str], None]] = None) -> dict:
+    """念完所有有文本的格子。返回汇总，不抛错（错误按格记录）。"""
+    want = {int(i) for i in indices} if indices else None
+    beats = [b for b in (project.get("beats") or [])
+             if str(b.get("narration") or "").strip()
+             and (want is None or int(b.get("index") or 0) in want)]
+    made, failed, backend = 0, 0, ""
+    errors: list[dict] = []
+    for i, b in enumerate(beats, 1):
+        idx = int(b.get("index") or 0)
+        if on_step:
+            try:
+                on_step(i, len(beats), f"第 {idx} 格")
+            except Exception:
+                pass
+        try:
+            # 重新读一次项目，确保拿到上一轮写回的时长
+            fresh = store.get_project(str(project.get("id"))) or project
+            r = synth_beat(fresh, idx)
+            made += 1
+            backend = backend or (r.get("backend") or "")
+        except Exception as exc:
+            failed += 1
+            errors.append({"index": idx, "error": str(exc)[:300]})
+    return {"made": made, "failed": failed, "backend": backend,
+            "total": len(beats), "errors": errors[:8]}
+
+
+def clear_voice(project: dict) -> dict:
+    """清空全部旁白（文件也删，别在 data 里留下无主的 wav）。"""
+    pid = str(project.get("id") or "")
+    removed = 0
+    for b in project.get("beats") or []:
+        p = _audio_path(pid, int(b.get("index") or 0))
+        try:
+            if p.exists():
+                p.unlink()
+                removed += 1
+        except Exception:
+            pass
+        store.set_beat_image(pid, int(b.get("index") or 0),
+                             audio_path="", audio_url="", audio_duration=0.0,
+                             audio_status="none", audio_error="")
+    return {"removed": removed}
+
 
 
 # ============================================================
@@ -282,6 +443,8 @@ def payload_shot(project: dict, beat: dict, *, cast_image: Optional[dict] = None
 def options_payload() -> dict:
     s = shotlib.shot_options()
     ok, why = llm_available()
+    tok, twhy = tts_available()
+    tstat = voice_status()
     return {
         "styles": stylelib.style_options(),
         "presets": [{"id": k, "label": v["label"], "desc": v["desc"],
@@ -294,6 +457,11 @@ def options_payload() -> dict:
         "durations": [12, 18, 24, 30, 40, 60],
         "llm": {"available": ok, "reason": why,
                 "model": (engine.text_status() or {}).get("model", "")},
+        "tts": {"available": tok, "reason": twhy,
+                "stub": bool(tstat.get("stub_expected")),
+                "version": settings.tts_model_version,
+                "speaker": settings.tts_speaker,
+                "voices": voice_presets()},
         "defaults": {"style": stylelib.DEFAULT_STYLE, "preset": sblib.DEFAULT_PRESET,
                      "aspect": DEFAULT_ASPECT, "seconds": 24},
     }

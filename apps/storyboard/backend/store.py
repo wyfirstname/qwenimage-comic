@@ -121,6 +121,28 @@ def new_beat(index: int) -> dict:
         "job_id": "",
         "status": "empty",      # empty / imaging / ready / failed
         "error": "",
+        # 旁白（每格一句，时长会反过来决定这一格的画面时长）
+        "audio_path": "",
+        "audio_url": "",
+        "audio_duration": 0.0,
+        "audio_status": "none",  # none / recording / ready / failed
+        "audio_error": "",
+    }
+
+
+def new_voice() -> dict:
+    """整片共用的音色设置（每格只是文本不同）。"""
+    return {
+        "speaker": "",      # 音色参考音频；留空用 IndexTTS 内置示例音色
+        "emo": "",          # 情绪参考音频
+        "emo_alpha": 1.0,   # 情绪强度 0~1
+        "emo_text": "",     # 用一句话描述情绪（IndexTTS-2.5 才支持）
+        "speed": 1.0,       # 语速（仅 2.5 生效）
+        "lang": "ZH",       # 语言（仅 2.5 生效）
+        "path": "",         # 兼容：整片一条外部配音（没有逐格旁白时才用）
+        "backend": "",      # 最近一次用到的后端：indextts / stub
+        "status": "none",   # none / running / done / failed
+        "error": "",
     }
 
 
@@ -134,6 +156,10 @@ def new_render() -> dict:
     return {"status": RENDER_IDLE, "progress": 0.0, "message": "",
             "path": "", "url": "", "duration": 0.0, "size_mb": 0.0,
             "started_at": "", "finished_at": "", "error": ""}
+
+
+def audio_dir(pid: str) -> Path:
+    return data_dir() / pid / "audio"
 
 
 def make_project(*, topic: str, style: str, preset: str, tone: str = "",
@@ -160,6 +186,7 @@ def make_project(*, topic: str, style: str, preset: str, tone: str = "",
         "use_llm": bool(use_llm),
         "cast": new_cast(),
         "beats": [],
+        "voice": new_voice(),
         "render": new_render(),
         "created_at": now,
         "updated_at": now,

@@ -59,8 +59,10 @@
     if (!p) return false;
     if ((p.cast || {}).status === "imaging") return true;
     if ((p.render || {}).status === "rendering") return true;
+    if ((p.voice || {}).status === "running") return true;
     if (p.beats_state === "generating") return true;
-    return (p.beats || []).some((b) => b.status === "imaging");
+    return (p.beats || []).some((b) => b.status === "imaging"
+      || b.audio_status === "recording");
   }
 
   /* ---------------- 选项与表单 ---------------- */
@@ -96,6 +98,24 @@
       ? `本地模型就绪：${llm.model || ""}`
       : `本地模型不可用（${llm.reason || ""}），将用规则生成分镜`;
     $("btnRewrite").disabled = !llm.available;
+
+    // 旁白音色候选（IndexTTS 自带的示例音色，没有就留空让用户手填路径）
+    const tts = o.tts || {};
+    const voices = [{ id: "", label: "内置示例音色" }, ...(tts.voices || []).map(
+      (v) => ({ id: v.path, label: v.label }))];
+    fillSelect($("voiceSpeaker"), voices, tts.speaker || "");
+    $("voiceBackend").textContent = tts.available
+      ? (tts.stub ? "占位音（未装模型）"
+                  : (tts.version ? `IndexTTS-${tts.version}` : ""))
+      : "未安装";
+    $("btnVoiceAll").disabled = !tts.available;
+    $("btnVoiceMissing").disabled = !tts.available;
+    if (!tts.available) {
+      $("voiceHint").textContent = `旁白不可用：${tts.reason || ""}`;
+    } else if (tts.stub) {
+      $("voiceHint").textContent =
+        "未安装 IndexTTS，念出来的是占位音（用来验证链路）。双击 install_tts.bat 装真模型。";
+    }
   }
 
   /* ---------------- 项目列表 ---------------- */
@@ -176,6 +196,7 @@
     settingsInto("pj", p);
 
     renderCast();
+    renderVoice(p);
     renderBeats();
     renderRender();
     showPane("proj");
@@ -245,6 +266,12 @@
         </div>
         <div class="sb-beat-foot">
           <span class="sb-beat-state ${state[1]}">${esc(state[0])}</span>
+          ${b.audio_status === "ready"
+            ? `<span class="sb-audio"><audio controls preload="none" src="${esc(b.audio_url)}"></audio>
+                 <span class="muted sb-audio-dur">${(b.audio_duration || 0).toFixed(1)}s</span></span>
+               <button class="btn btn-ghost sb-voice-one" data-index="${b.index}">重念</button>`
+            : `<button class="btn btn-ghost sb-voice-one" data-index="${b.index}"
+                 ${b.audio_status === "recording" ? "disabled" : ""}>${b.audio_status === "recording" ? "念中…" : "念这句"}</button>`}
           <button class="btn btn-ghost sb-shoot" data-index="${b.index}">出这一格</button>
         </div>
       </div>
@@ -291,6 +318,8 @@
       });
       const shoot = el.querySelector(".sb-shoot");
       if (shoot) shoot.onclick = () => shootOne(Number(el.dataset.index));
+      const say = el.querySelector(".sb-voice-one");
+      if (say) say.onclick = () => voiceOne(Number(el.dataset.index), say);
     });
     all(".sb-beat-img img").forEach((im) => {
       im.onclick = () => lightbox(im.dataset.full);
@@ -395,10 +424,91 @@
     } catch (e) { toast(e.message); }
   }
 
+  /* ----- 旁白 ----- */
+
+  function voiceInputs() {
+    const sp = $("voiceSpeaker");
+    return {
+      speaker: sp ? sp.value : "",
+      speed: Number($("voiceSpeed").value) || 1,
+      emo_alpha: Number($("voiceEmoAlpha").value),
+    };
+  }
+
+  async function voiceOne(index, btn) {
+    if (!S.cur) return;
+    const opts = voiceInputs();
+    if (btn) { btn.disabled = true; btn.textContent = "念中…"; }
+    try {
+      await api(`/projects/${S.cur.id}/voice`, {
+        method: "POST", body: JSON.stringify({ ...opts, indices: [index] }),
+      });
+      pollLoop();
+    } catch (e) {
+      toast(e.message);
+      if (btn) { btn.disabled = false; btn.textContent = "念这句"; }
+    }
+  }
+
+  async function voiceAll(onlyMissing) {
+    if (!S.cur) return;
+    if (S.beatsDirty) await saveBeats();
+    try {
+      await api(`/projects/${S.cur.id}/voice`, {
+        method: "POST",
+        body: JSON.stringify({ ...voiceInputs(), only_missing: !!onlyMissing }),
+      });
+      $("voiceProgWrap").classList.remove("hidden");
+      $("voiceProg").style.width = "2%";
+      $("voiceMsg").textContent = "准备中…";
+      pollLoop();
+    } catch (e) { toast(e.message); }
+  }
+
+  function renderVoice(p) {
+    const v = p.voice || {};
+    const running = v.status === "running";
+    $("btnVoiceAll").disabled = running;
+    $("btnVoiceMissing").disabled = running;
+    $("btnVoiceClear").disabled = running;
+    $("voiceProgWrap").classList.toggle("hidden", !running);
+    if (running) {
+      $("voiceProg").style.width = `${Math.round((v.progress || 0) * 100)}%`;
+      $("voiceMsg").textContent = v.message || "生成中…";
+    }
+    const done = (p.beats || []).filter((b) => b.audio_status === "ready").length;
+    if (v.status === "done") {
+      $("voiceHint").textContent = v.message || `${done} 句旁白已就绪`;
+    } else if (v.status === "failed") {
+      $("voiceHint").textContent = `旁白失败：${v.error || ""}`;
+    } else if (!running) {
+      $("voiceHint").textContent = done
+        ? `${done} 句旁白已就绪。改过文案记得重念这一句。`
+        : "有了旁白，每一格的画面时长会跟着配音走，成片改用硬切保证音画同步。";
+    }
+    $("voiceBackend").textContent = v.backend === "stub"
+      ? "占位音（未装模型）"
+      : (v.backend ? `IndexTTS` : $("voiceBackend").textContent);
+  }
+
+  async function clearVoice() {
+    if (!S.cur) return;
+    if (!confirm("清空所有旁白音频？文案会保留。")) return;
+    try {
+      await api(`/projects/${S.cur.id}/voice`, { method: "DELETE" });
+      const p = await api(`/projects/${S.cur.id}`);
+      S.cur = p;
+      renderBeats();
+      renderVoice(p);
+      toast("旁白已清空");
+    } catch (e) { toast(e.message); }
+  }
+
   /* ----- 轮询（只更新动态部分，不打断编辑） ----- */
 
   function refreshDynamic(p) {
     const prevRenderStatus = (S.cur.render || {}).status;
+    const prevVoice = (S.cur.voice || {}).status;
     S.cur = p;
 
     // cast
@@ -433,6 +543,16 @@
       }
     });
     updateShootAllState();
+
+    // 旁白
+    renderVoice(p);
+    const vstate = (p.voice || {}).status;
+    const audioMissing = (p.beats || []).some((b) => b.audio_status === "ready"
+      && !document.querySelector(`.sb-beat[data-index="${b.index}"] audio`));
+    if (!S.beatsDirty && (audioMissing || (prevVoice === "running" && vstate !== "running"))) {
+      renderBeats();      // 念完要把播放器挂上去 / 去掉「念中…」
+    }
+    if (prevVoice === "running" && vstate === "done") toast("旁白已生成 🎙");
 
     // render
     renderRender();
@@ -581,6 +701,9 @@
     $("btnSaveBeats").onclick = saveBeats;
     $("btnShootAll").onclick = shootAll;
     $("btnRender").onclick = startRender;
+    $("btnVoiceAll").onclick = () => voiceAll(false);
+    $("btnVoiceMissing").onclick = () => voiceAll(true);
+    $("btnVoiceClear").onclick = clearVoice;
     $("npStyle").onchange = () => {
       const st = (S.opt.styles || []).find((x) => x.id === $("npStyle").value);
       if (st) $("npStyleHint").textContent = `${st.ratio} · ${st.render}`;

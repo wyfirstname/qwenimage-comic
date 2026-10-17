@@ -31,6 +31,10 @@ STAGE = ROOT / "dist" / "qwenimages-portable"
 PY_RUNTIME_SRC = Path(os.environ.get("PY_RUNTIME_SRC", sys.base_prefix))
 VENV_SITE = ROOT / ".venv" / "Lib" / "site-packages"
 
+# ffmpeg 来源：开发机上现成的分发版目录（ffmpeg.exe + 一串 dll）。
+# 可用环境变量 FFMPEG_SRC 覆盖；找不到就跳过（便携包退回「用户自备 ffmpeg」）。
+FFMPEG_SRC = Path(os.environ.get("FFMPEG_SRC", r"D:\AI\ffmpeg\bin"))
+
 ROBOCOPY_OK = (0, 1, 2, 3)
 
 # robocopy 的「停滞判定」：连续这么久没有新的读写字节，就认为它死锁了。
@@ -147,7 +151,7 @@ def main() -> None:
             print("目标目录已有内容：原地覆盖构建（如需先清空请加 --clean）")
     STAGE.mkdir(parents=True, exist_ok=True)
 
-    print("[1/7] 应用代码（四层：shared / engine / apps / portal）...")
+    print("[1/8] 应用代码（四层：shared / engine / apps / portal）...")
     for pkg in ("shared", "engine", "apps", "portal"):
         robocopy(ROOT / pkg, STAGE / pkg, exclude_dirs=["__pycache__"],
                  exclude_files=["*.pyc"])
@@ -167,7 +171,7 @@ def main() -> None:
     (STAGE / "comfyui" / "output").mkdir(parents=True, exist_ok=True)
     (STAGE / "comfyui" / "input").mkdir(parents=True, exist_ok=True)
 
-    print("[2/7] 修正 ComfyUI 模型路径为相对路径 ...")
+    print("[2/8] 修正 ComfyUI 模型路径为相对路径 ...")
     _write(STAGE / "comfyui" / "extra_model_paths.yaml", 
         "# 复用便携包根目录的 models/（相对本文件解析）\n"
         "qwenimages:\n"
@@ -179,28 +183,66 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    print("[3/7] Python 运行时 ...")
+    print("[3/8] Python 运行时 ...")
     robocopy(PY_RUNTIME_SRC, STAGE / "runtime" / "python",
              exclude_dirs=["__pycache__", "Scripts"], threads=8)
     # python.exe 必须在，Scripts 只含 pip 等入口（venv 里的会覆盖，不要）
 
-    print("[4/7] 全部依赖 site-packages（约 5.4G，已存在的文件会自动跳过）...")
+    print("[4/8] 全部依赖 site-packages（约 5.4G，已存在的文件会自动跳过）...")
     robocopy(VENV_SITE, STAGE / "runtime" / "python" / "Lib" / "site-packages",
              exclude_dirs=["__pycache__"], exclude_files=["*.pyc"], threads=8)
 
-    print("[5/7] 目录骨架 ...")
+    print("[5/8] 目录骨架 ...")
     (STAGE / "models" / "qwen-image-2.1-unc" / "text_encoders").mkdir(parents=True, exist_ok=True)
     (STAGE / "models" / "qwen-image-2.1-unc" / "vae").mkdir(parents=True, exist_ok=True)
     (STAGE / "data").mkdir(exist_ok=True)
     (STAGE / "scripts").mkdir(exist_ok=True)
 
-    print("[6/7] 生成启动脚本与文档 ...")
+    print("[6/8] 外部工具（ffmpeg + 旁白服务）...")
+    bundle_ffmpeg()
+    robocopy(ROOT / "tools", STAGE / "tools", exclude_dirs=["__pycache__", "index-tts"])
+    # tools/index-tts 是 IndexTTS 的仓库克隆（几 GB 权重），由 install_tts.bat 装进
+    # 便携包，绝不从开发机带过来——它必须用 3.10/3.11 的独立 venv 重建
+
+    print("[7/8] 生成启动脚本与文档 ...")
     write_scripts()
 
-    print("[7/7] 统计体积 ...")
+    print("[8/8] 统计体积 ...")
     total = sum(f.stat().st_size for f in STAGE.rglob("*") if f.is_file())
     print(f"完成：{STAGE}")
     print(f"总体积：{total / 1024 ** 3:.2f} GB")
+
+
+def bundle_ffmpeg() -> None:
+    """把 ffmpeg 分发版拷进 runtime/ffmpeg/。
+
+    只拷 exe + dll，不拷 doc/include/lib（那三样占的空间比本体还大）。
+    拷完必须真的跑一次 -version：ffmpeg.exe 才 0.5MB，真正干活的是那串
+    dll，少一个就起不来——存在 ≠ 可用。
+    """
+    dst = STAGE / "runtime" / "ffmpeg"
+    dst.mkdir(parents=True, exist_ok=True)
+    if not FFMPEG_SRC.exists():
+        print(f"  [WARN] 未找到 ffmpeg 来源目录 {FFMPEG_SRC}，便携包将不含 ffmpeg"
+              "（渲染成片时需要用户自备，见 .env 里 FFMPEG_PATH）")
+        return
+    copied = 0
+    for pattern in ("*.exe", "*.dll"):
+        for src in FFMPEG_SRC.glob(pattern):
+            if src.name.lower() == "ffplay.exe":
+                continue        # 播放器，12MB，便携包用不上
+            shutil.copy2(src, dst / src.name)
+            copied += 1
+    try:
+        r = subprocess.run([str(dst / "ffmpeg.exe"), "-version"],
+                           capture_output=True, timeout=30)
+        ok = r.returncode == 0 and b"ffmpeg" in (r.stdout or b"").lower()
+    except Exception:
+        ok = False
+    if not ok:
+        raise SystemExit(f"ffmpeg 拷贝后无法运行（缺 dll？）：{dst}")
+    size = sum(f.stat().st_size for f in dst.iterdir()) / 1024 / 1024
+    print(f"  ffmpeg 就绪（{copied} 个文件，{size:.0f} MB）")
 
 
 def write_scripts() -> None:
@@ -269,7 +311,7 @@ def write_scripts() -> None:
         "rem Run ONE app standalone (no portal, engine in that process)\r\n"
         "set APPID=%~1\r\n"
         "if \"%APPID%\"==\"\" (\r\n"
-        "  echo Usage: run_app.bat ^<imagegen^|comic^|portrait^|dango^>\r\n"
+        "  echo Usage: run_app.bat ^<imagegen^|comic^|portrait^|dango^|storyboard^>\r\n"
         "  pause\r\n"
         "  exit /b 1\r\n"
         ")\r\n"
@@ -285,9 +327,10 @@ def write_scripts() -> None:
         ")\r\n"
         "\r\n"
         "set PORT=8101\r\n"
-        "if /i \"%APPID%\"==\"comic\"    set PORT=8102\r\n"
-        "if /i \"%APPID%\"==\"portrait\" set PORT=8103\r\n"
-        "if /i \"%APPID%\"==\"dango\"    set PORT=8104\r\n"
+        "if /i \"%APPID%\"==\"comic\"      set PORT=8102\r\n"
+        "if /i \"%APPID%\"==\"portrait\"   set PORT=8103\r\n"
+        "if /i \"%APPID%\"==\"dango\"      set PORT=8104\r\n"
+        "if /i \"%APPID%\"==\"storyboard\" set PORT=8105\r\n"
         "\r\n"
         "echo [app:%APPID%] open http://127.0.0.1:%PORT%\r\n"
         "\"runtime\\python\\python.exe\" -m uvicorn apps.%APPID%.backend.routes:create_app --factory --host 127.0.0.1 --port %PORT%\r\n"
@@ -314,6 +357,85 @@ def write_scripts() -> None:
         "\"runtime\\python\\python.exe\" -m uvicorn engine.serve:app --host 127.0.0.1 --port 8189\r\n"
         "echo.\r\n"
         "echo Engine stopped.\r\n"
+        "pause\r\n",
+        encoding="ascii", errors="strict",
+    )
+
+    _write(STAGE / "run_tts.bat",
+        "@echo off\r\n"
+        "setlocal\r\n"
+        "title Narration worker (IndexTTS)\r\n"
+        "cd /d \"%~dp0\"\r\n"
+        "\r\n"
+        "rem Narration TTS worker. It must run inside the IndexTTS venv\r\n"
+        "rem (Python 3.10/3.11) - the main runtime is 3.13 and incompatible.\r\n"
+        "rem Without it, the portal auto-starts this in STUB mode anyway.\r\n"
+        "\r\n"
+        "set PY=\r\n"
+        "if exist \"tools\\index-tts\\.venv\\Scripts\\python.exe\" set PY=tools\\index-tts\\.venv\\Scripts\\python.exe\r\n"
+        "if \"%PY%\"==\"\" (\r\n"
+        "  echo [WARN] IndexTTS venv not found. Starting in STUB mode ^(placeholder audio^).\r\n"
+        "  echo         Run install_tts.bat first for real voices.\r\n"
+        "  if exist \"runtime\\python\\python.exe\" set PY=runtime\\python\\python.exe\r\n"
+        ")\r\n"
+        "if \"%PY%\"==\"\" (\r\n"
+        "  echo [ERROR] no python found\r\n"
+        "  pause\r\n"
+        "  exit /b 1\r\n"
+        ")\r\n"
+        "\r\n"
+        "echo [tts] http://127.0.0.1:8190  (close this window to stop)\r\n"
+        "\"%PY%\" tools\\tts_worker\\server.py --port 8190 --home tools\\index-tts --models checkpoints_2 --version 2\r\n"
+        "echo.\r\n"
+        "echo TTS worker stopped.\r\n"
+        "pause\r\n",
+        encoding="ascii", errors="strict",
+    )
+
+    _write(STAGE / "install_tts.bat",
+        "@echo off\r\n"
+        "setlocal\r\n"
+        "cd /d \"%~dp0\"\r\n"
+        "\r\n"
+        "rem One-time setup for narration (IndexTTS-2, ~5.5 GB weights):\r\n"
+        "rem   git clone + uv sync (Python 3.11 venv) + model download.\r\n"
+        "rem Safe to re-run: every step is skipped when already done.\r\n"
+        "\r\n"
+        "where git >nul 2>&1\r\n"
+        "if errorlevel 1 (\r\n"
+        "  echo [ERROR] git not found. Install it from https://git-scm.com first.\r\n"
+        "  pause\r\n"
+        "  exit /b 1\r\n"
+        ")\r\n"
+        "where uv >nul 2>&1\r\n"
+        "if errorlevel 1 (\r\n"
+        "  echo [1/3] Installing uv ...\r\n"
+        "  runtime\\python\\python.exe -m pip install -U uv\r\n"
+        ")\r\n"
+        "\r\n"
+        "if not exist \"tools\\index-tts\\.git\" (\r\n"
+        "  echo [2/3] Cloning index-tts ...\r\n"
+        "  if not exist \"tools\" mkdir tools\r\n"
+        "  git clone --depth 1 https://github.com/index-tts/index-tts.git tools\\index-tts\r\n"
+        ")\r\n"
+        "\r\n"
+        "pushd tools\\index-tts\r\n"
+        "if not exist \".venv\\Scripts\\python.exe\" (\r\n"
+        "  echo [2/3] Creating venv + installing deps ^(this can take 10+ minutes^) ...\r\n"
+        "  uv sync --all-extras --default-index https://mirrors.aliyun.com/pypi/simple\r\n"
+        "  if errorlevel 1 ( popd & echo [ERROR] uv sync failed & pause & exit /b 1 )\r\n"
+        ")\r\n"
+        "if not exist \"checkpoints_2\\config.yaml\" (\r\n"
+        "  echo [3/3] Downloading IndexTTS-2 weights ~5.5 GB ^(resumable^) ...\r\n"
+        "  set HF_ENDPOINT=https://hf-mirror.com\r\n"
+        "  uv tool install huggingface-hub 2>nul\r\n"
+        "  uv tool run --from huggingface-hub hf download IndexTeam/IndexTTS-2 --local-dir=checkpoints_2\r\n"
+        "  if errorlevel 1 ( popd & echo [ERROR] download failed, re-run to resume & pause & exit /b 1 )\r\n"
+        ")\r\n"
+        "popd\r\n"
+        "echo.\r\n"
+        "echo Done. Narration now uses the real IndexTTS model.\r\n"
+        "echo Start it with run_tts.bat, or let the portal auto-start it.\r\n"
         "pause\r\n",
         encoding="ascii", errors="strict",
     )
@@ -414,6 +536,28 @@ def write_scripts() -> None:
         "LLM_MAX_LENGTH=768\r\n"
         "LLM_TIMEOUT_SECONDS=1800\r\n"
         "\r\n"
+        "# External tools\r\n"
+        "# ffmpeg: leave empty to use runtime/ffmpeg (bundled) or system PATH\r\n"
+        "FFMPEG_PATH=\r\n"
+        "\r\n"
+        "# VRAM slots: image gen and narration share one GPU - whoever is needed\r\n"
+        "# gets loaded, the other is evicted. After SLOT_IDLE_UNLOAD_SECONDS idle,\r\n"
+        "# everything is unloaded to free VRAM.\r\n"
+        "MODEL_SLOTS_ENABLED=true\r\n"
+        "SLOT_IDLE_UNLOAD_SECONDS=600\r\n"
+        "\r\n"
+        "# Narration (IndexTTS-2, separate process + separate venv - see install_tts.bat)\r\n"
+        "TTS_ENABLED=true\r\n"
+        "TTS_URL=http://127.0.0.1:8190\r\n"
+        "TTS_HOME=tools/index-tts\r\n"
+        "TTS_PYTHON=\r\n"
+        "TTS_AUTOSTART=true\r\n"
+        "TTS_MODELS_DIR=checkpoints_2\r\n"
+        "TTS_MODEL_VERSION=2\r\n"
+        "TTS_USE_FP16=true\r\n"
+        "TTS_SPEAKER=\r\n"
+        "TTS_TIMEOUT_SECONDS=300\r\n"
+        "\r\n"
         "DEVICE=cuda:0\r\n"
         "DTYPE=float16\r\n"
         "KEEP_LOADED=true\r\n"
@@ -445,23 +589,33 @@ def write_scripts() -> None:
 
 三、目录说明
   runtime/python/   内置 Python 3.13 + torch(CUDA) + 全部依赖，请勿单独搬运
+  runtime/ffmpeg/   自带 ffmpeg（成片渲染用），无需安装
   models/           模型权重（由 download_models.bat 填充）
   data/             生成的图片与数据库（你的数据，可整目录备份）
   .env              配置文件（首次启动自动从 .env.example 生成）
 
   portal/           平台外壳：卡片墙、按 manifest 自动发现并挂载应用
   apps/             业务应用（各自自包含：manifest + backend + frontend）
-                      comic     漫画工作室（剧本 → 分镜 → 出图 → 拼页）
-                      imagegen  单张出图
-                      portrait  人像 / 换装
-                      dango     团子衣橱（Q 版捏人 + 衣柜 + 试衣间）
-  engine/           模型能力层：ComfyUI 通道、任务调度、卡死恢复
-  shared/           公共层：配置 / 数据库 / 静态资源 / 画风库
+                      comic      漫画工作室（剧本 → 分镜 → 出图 → 拼页）
+                      imagegen   单张出图
+                      portrait   人像 / 换装
+                      dango      团子衣橱（Q 版捏人 + 衣柜 + 试衣间）
+                      storyboard 团子小剧场（一句话 → 分镜 → 旁白 → 竖屏成片）
+  engine/           模型能力层：ComfyUI 通道、任务调度、卡死恢复、显存槽位
+  tools/            旁白服务（tts_worker）与 IndexTTS 安装目录
 
-  三种启动方式（都在根目录）：
-    start.bat 或 run_platform.bat   门户一体启动（推荐，四个应用共用引擎）
+  启动方式（都在根目录）：
+    start.bat 或 run_platform.bat   门户一体启动（推荐，五个应用共用引擎）
     run_app.bat                     只起某一个应用（独立端口，省显存）
     run_engine.bat                  引擎单独跑一个进程，门户用 ENGINE_TRANSPORT=http 连
+    install_tts.bat                 一次性安装旁白模型 IndexTTS-2（约 5.5 GB）
+    run_tts.bat                     手动启动旁白服务（不装模型时以占位音运行）
+
+四、显存与旁白
+  出图与旁白共卡：用哪个就装哪个，另一个当场卸载；两者都空闲超过
+  SLOT_IDLE_UNLOAD_SECONDS（默认 600 秒）自动全部卸载，把显存还给系统。
+  旁白需要单独装 IndexTTS（它要求 Python 3.10/3.11，与主环境互斥）：
+  双击 install_tts.bat 一次即可；未安装时旁白以占位音运行，其余功能不受影响。
 
 四、硬件要求
   NVIDIA 显卡。本包默认按 16GB 显存调优（1024 / 24 步）：

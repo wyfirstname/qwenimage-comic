@@ -138,6 +138,32 @@
         <div class="sb-castimg"><img id="castImg" alt="" class="hidden" /><div id="castEmpty" class="sb-emptyimg">还没出</div></div>
       </div>
 
+      <!-- 旁白 -->
+      <div class="panel sb-voice">
+        <div class="sb-beatshead">
+          <h3>旁白 <span class="muted" id="voiceBackend"></span></h3>
+          <div class="sb-headbtns">
+            <button id="btnVoiceClear" class="btn btn-ghost btn-danger-ghost">清空</button>
+            <button id="btnVoiceMissing" class="btn btn-ghost">只念缺的</button>
+            <button id="btnVoiceAll" class="btn btn-primary">全部念一遍</button>
+          </div>
+        </div>
+        <p class="muted sb-hint" id="voiceHint">
+          有了旁白，每一格的画面时长会跟着配音走，成片改用硬切保证音画同步。
+        </p>
+        <div class="sb-grid3">
+          <section class="field"><label>音色</label><select id="voiceSpeaker"></select></section>
+          <section class="field"><label>语速 <span class="muted">（2.5 才生效）</span></label>
+            <input id="voiceSpeed" type="number" min="0.5" max="2" step="0.05" value="1" /></section>
+          <section class="field"><label>情绪强度</label>
+            <input id="voiceEmoAlpha" type="number" min="0" max="1" step="0.05" value="1" /></section>
+        </div>
+        <div class="sb-progress hidden" id="voiceProgWrap">
+          <div class="progress"><div class="progress-fill" id="voiceProg"></div></div>
+          <span class="muted" id="voiceMsg"></span>
+        </div>
+      </div>
+
       <!-- 分镜 -->
       <div class="panel sb-beatspanel">
         <div class="sb-beatshead">

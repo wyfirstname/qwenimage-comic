@@ -48,6 +48,14 @@ async def startup() -> None:
     if _consumer is None or _consumer.done():
         _consumer = asyncio.create_task(scheduler.consume_loop(generation.run_job))
 
+    # 显存槽位看门狗：出图与旁白共卡，谁都不用就都卸掉
+    if settings.model_slots_enabled:
+        from engine.slots import slots as slot_mgr
+
+        slot_mgr.start_idle_watch()
+        print(f"[engine] 显存槽位已启用，空闲 {settings.slot_idle_unload_seconds}s "
+              f"后自动卸载模型")
+
     print(f"[engine] 运行模式 ENGINE_MODE={manager.mode}")
     print(f"[engine] 数据目录 {settings.data_dir_path}")
     print(f"[engine] 输出目录 {settings.output_dir_path}")
@@ -86,6 +94,19 @@ async def shutdown() -> None:
         _consumer = None
     try:
         manager.unload()
+    except Exception:
+        pass
+    # 旁白是独立进程：不显式收掉，它会一直占着几 GB 显存
+    try:
+        from engine.tts import shutdown as tts_shutdown
+
+        tts_shutdown()
+    except Exception:
+        pass
+    try:
+        from engine.slots import slots as slot_mgr
+
+        slot_mgr.stop_idle_watch()
     except Exception:
         pass
     print("[engine] 已释放资源")

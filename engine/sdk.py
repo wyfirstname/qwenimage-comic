@@ -155,6 +155,60 @@ class Engine:
     def text_last_seconds(self) -> Optional[float]:
         return _text().last_seconds
 
+    # ---------------- 旁白（IndexTTS，独立进程）----------------
+    def tts_available(self) -> tuple[bool, str]:
+        """能不能念旁白（不启动进程）。返回 (可用, 不可用原因)。"""
+        from engine.tts import available
+
+        return available()
+
+    def tts_status(self) -> dict:
+        from engine.tts import status
+
+        return status()
+
+    def tts_synth(self, text: str, out_path, *, speaker: str = "",
+                  emo_wav: str = "", emo_alpha: Optional[float] = None,
+                  emo_text: str = "", lang: str = "", speed: float = 0.0) -> dict:
+        """把一句话念成 wav。会自动抢显存槽位。"""
+        from engine.tts import synth
+
+        return synth(text, out_path, speaker=speaker, emo_wav=emo_wav,
+                     emo_alpha=emo_alpha, emo_text=emo_text, lang=lang,
+                     speed=speed)
+
+    def tts_load(self) -> dict:
+        from engine.tts import load
+
+        return load()
+
+    def tts_unload(self) -> None:
+        from engine.tts import unload
+
+        unload()
+
+    def tts_shutdown(self) -> None:
+        from engine.tts import shutdown
+
+        shutdown()
+
+    # ---------------- 显存槽位 ----------------
+    def slots_status(self) -> dict:
+        from engine.slots import slots
+
+        return slots.status()
+
+    def unload_idle(self, seconds: Optional[float] = None) -> list[str]:
+        """立刻回收空闲模型的显存（界面上的「释放显存」按钮）。"""
+        from engine.slots import run_idle_watch_once
+
+        return run_idle_watch_once(seconds if seconds is not None else 0.0)
+
+    def unload_all(self) -> list[str]:
+        from engine.slots import slots
+
+        return slots.unload_all()
+
 
 engine = Engine()
 

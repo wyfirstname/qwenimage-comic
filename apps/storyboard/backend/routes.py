@@ -101,6 +101,18 @@ class GenIn(BaseModel):
     seed: int = -1
 
 
+class VoiceIn(BaseModel):
+    """音色设置 + 生成范围。空字符串表示「用默认」。"""
+    speaker: Optional[str] = Field(None, max_length=400)
+    emo: Optional[str] = Field(None, max_length=400)
+    emo_alpha: Optional[float] = Field(None, ge=0.0, le=1.0)
+    emo_text: Optional[str] = Field(None, max_length=80)
+    speed: Optional[float] = Field(None, ge=0.5, le=2.0)
+    lang: Optional[str] = Field(None, max_length=8)
+    indices: Optional[List[int]] = None
+    only_missing: bool = False
+
+
 # ============================================================
 #  元信息
 # ============================================================
@@ -112,9 +124,10 @@ def options():
     return out
 
 
-@router.get("/status", summary="ffmpeg 与文本模型状态")
+@router.get("/status", summary="ffmpeg / 文本模型 / 旁白 / 显存槽位状态")
 def status():
-    return {"ffmpeg": render.ffmpeg_status(), "llm": svc.llm_available()[0]}
+    return {"ffmpeg": render.ffmpeg_status(), "llm": svc.llm_available()[0],
+            "tts": svc.voice_status(), "slots": engine.slots_status()}
 
 
 # ============================================================
@@ -191,6 +204,15 @@ async def delete_project(pid: str):
     p = store.delete_project(pid)
     if not p:
         raise _not_found()
+    # 旁白音频跟着项目走，别在 data 里留下无主文件
+    try:
+        import shutil
+
+        d = store.data_dir() / pid
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+    except Exception:
+        pass
     return {"deleted": pid}
 
 
@@ -371,6 +393,88 @@ def job_detail(job_id: str):
     job = dict(job)
     job["images"] = repo.images_by_job(job_id)
     return job
+
+
+# ============================================================
+#  旁白（IndexTTS，独立进程 + 显存槽位）
+# ============================================================
+
+@router.get("/voice/status", summary="旁白能力状态（装了没 / 在不在跑 / 模型加载了没）")
+def voice_status():
+    return svc.voice_status()
+
+
+@router.patch("/projects/{pid}/voice", summary="保存音色设置")
+async def patch_voice(pid: str, req: VoiceIn):
+    _load(pid)
+    fields = {k: v for k, v in req.model_dump().items()
+              if v is not None and k not in ("indices", "only_missing")}
+
+    def _fn(p: dict) -> None:
+        p.setdefault("voice", store.new_voice()).update(fields)
+
+    return store.mutate(pid, _fn)
+
+
+@router.post("/projects/{pid}/voice", summary="生成旁白（后台，轮询项目看 voice.status）")
+async def make_voice(pid: str, req: VoiceIn):
+    p = _load(pid)
+    voice = p.get("voice") or {}
+    if voice.get("status") == "running":
+        return {"status": "running"}
+    ok, why = svc.tts_available()
+    if not ok:
+        raise _bad(StoryboardError(why))
+
+    fields = {k: v for k, v in req.model_dump().items()
+              if v is not None and k not in ("indices", "only_missing")}
+    if fields:
+        store.mutate(pid, lambda pr: pr.setdefault("voice", store.new_voice()).update(fields))
+
+    indices = list(req.indices or [])
+    if req.only_missing:
+        indices = [int(b.get("index") or 0) for b in (p.get("beats") or [])
+                   if str(b.get("narration") or "").strip()
+                   and b.get("audio_status") != "ready"]
+
+    store.mutate(pid, lambda pr: pr["voice"].update(
+        status="running", error="", progress=0.0, message="准备中…"))
+    threading.Thread(target=_voice_worker, args=(pid, indices), daemon=True).start()
+    return {"status": "running", "count": len(indices) or None}
+
+
+def _voice_worker(pid: str, indices: List[int]) -> None:
+    def on_step(i: int, n: int, label: str) -> None:
+        store.mutate(pid, lambda pr: pr["voice"].update(
+            progress=round(i / max(1, n), 3), message=f"正在念 {label}…"))
+
+    try:
+        project = store.get_project(pid) or {}
+        result = svc.synth_all(project, indices=indices or None, on_step=on_step)
+        total, failed = result["total"], result["failed"]
+        if total and failed >= total:
+            msg, status = (result["errors"][0]["error"] if result["errors"]
+                           else "全部失败"), "failed"
+        elif failed:
+            msg, status = f"{result['made']} 句完成，{failed} 句失败", "done"
+        else:
+            msg, status = f"{result['made']} 句旁白已生成", "done"
+        store.mutate(pid, lambda pr: pr["voice"].update(
+            status=status, progress=1.0, message=msg,
+            backend=result.get("backend") or pr["voice"].get("backend") or "",
+            error="" if status == "done" else msg))
+    except Exception as exc:
+        store.mutate(pid, lambda pr: pr["voice"].update(
+            status="failed", error=str(exc)[:600], message="生成失败"))
+
+
+@router.delete("/projects/{pid}/voice", summary="清空旁白（连同音频文件）")
+async def clear_voice(pid: str):
+    p = _load(pid)
+    out = svc.clear_voice(p)
+    store.mutate(pid, lambda pr: pr["voice"].update(
+        status="none", message="", error="", progress=0.0))
+    return out
 
 
 # ============================================================

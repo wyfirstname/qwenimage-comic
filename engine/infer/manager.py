@@ -27,6 +27,17 @@ class ModelManager:
         self.last_error: Optional[str] = None
         self.last_load_seconds: Optional[float] = None
         self.last_used_at: float = 0.0
+        self._register_slot()
+
+    def _register_slot(self) -> None:
+        """在显存槽位表里登记「出图」这一路。
+
+        注册自己的 unload/is_loaded 而不是让仲裁层反过来调 manager，
+        这样 slots.py 不需要 import 任何引擎，依赖保持单向。
+        """
+        from engine.slots import slots
+
+        slots.register("image", unload=self.unload, is_loaded=self.is_loaded)
 
     # ---------------- 引擎构建 ----------------
     def _create_engine(self) -> BaseEngine:
@@ -54,7 +65,15 @@ class ModelManager:
 
     # ---------------- 加载 / 卸载 ----------------
     def ensure_loaded(self) -> None:
-        """确保引擎已加载（线程安全）。"""
+        """确保引擎已加载（线程安全）。
+
+        先进槽位：如果刚才在跑旁白，这一步会先把 TTS 的显存收回来，
+        否则下面 load() 会直接 OOM。
+        """
+        if settings.model_slots_enabled:
+            from engine.slots import slots
+
+            slots.acquire("image")
         with self._lock:
             if self._engine is None:
                 self._engine = self._create_engine()
