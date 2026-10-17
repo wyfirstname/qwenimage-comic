@@ -167,6 +167,12 @@ class Engine:
 
         return status()
 
+    def tts_voices(self) -> list:
+        """当前后端的音色候选（edge 是音色名，IndexTTS 由调用方补参考音频）。"""
+        from engine.tts import voices
+
+        return voices()
+
     def tts_synth(self, text: str, out_path, *, speaker: str = "",
                   emo_wav: str = "", emo_alpha: Optional[float] = None,
                   emo_text: str = "", lang: str = "", speed: float = 0.0) -> dict:

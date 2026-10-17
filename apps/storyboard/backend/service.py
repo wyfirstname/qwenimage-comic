@@ -183,19 +183,19 @@ def voice_status() -> dict:
 
 
 def voice_presets() -> list[dict]:
-    """IndexTTS 自带的示例音色（放在 <tts_home>/examples 下）。
+    """候选音色。
 
-    没有就不给候选，用户仍可手填绝对路径——宁可少一个下拉框，
-    也不要凭空造不存在的音色名。
+    edge-tts 给的是内置音色名（零模型）；IndexTTS 给的是
+    <tts_home>/examples 下的参考音频。两条路互不干扰，谁在用就给谁。
     """
+    out: list[dict] = list(engine.tts_voices() or [])
     home = settings.tts_home_path
-    out: list[dict] = []
     for name in ("examples", "example", "samples"):
         d = home / name
         if not d.is_dir():
             continue
         for f in sorted(d.glob("*.wav"))[:24]:
-            out.append({"id": f.name, "label": f.stem,
+            out.append({"id": f.name, "label": f.stem, "kind": "index",
                         "path": str(f.relative_to(home).as_posix())})
         if out:
             break
@@ -459,8 +459,9 @@ def options_payload() -> dict:
                 "model": (engine.text_status() or {}).get("model", "")},
         "tts": {"available": tok, "reason": twhy,
                 "stub": bool(tstat.get("stub_expected")),
+                "backend": tstat.get("backend") or "",
                 "version": settings.tts_model_version,
-                "speaker": settings.tts_speaker,
+                "speaker": settings.tts_speaker or settings.tts_voice,
                 "voices": voice_presets()},
         "defaults": {"style": stylelib.DEFAULT_STYLE, "preset": sblib.DEFAULT_PRESET,
                      "aspect": DEFAULT_ASPECT, "seconds": 24},

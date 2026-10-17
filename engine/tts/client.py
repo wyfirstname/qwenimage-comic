@@ -39,6 +39,36 @@ class TtsError(RuntimeError):
     """旁白失败。消息面向用户，自带下一步动作。"""
 
 
+# edge-tts 的 zh-CN 音色。与 tools/tts_worker/server.py 的 EDGE_VOICES 保持一致：
+# worker 刻意不 import 项目代码（它要能在任何解释器里跑），所以这两份是同步维护的。
+EDGE_VOICES = {
+    "zh-CN-XiaoxiaoNeural": "晓晓 · 女声 · 温柔（默认）",
+    "zh-CN-XiaoyiNeural": "晓伊 · 女声 · 活泼",
+    "zh-CN-YunxiNeural": "云希 · 男声 · 青年",
+    "zh-CN-YunjianNeural": "云健 · 男声 · 沉稳",
+    "zh-CN-YunyangNeural": "云扬 · 男声 · 播报",
+    "zh-CN-liaoning-XiaobeiNeural": "晓北 · 女声 · 东北",
+    "zh-CN-shaanxi-XiaoniNeural": "晓妮 · 女声 · 陕西",
+}
+
+
+def voices() -> list[dict]:
+    """给界面用的音色候选。按当前后端区分：edge 是音色名，index 是参考音频。
+
+    worker 还没起来时按配置预判——界面第一次打开就该有音色可选，
+    不能等用户点了「生成旁白」才冒出来。
+    """
+    h = _health(timeout=1.2) or {}
+    name = str(h.get("backend") or "")
+    if not name:
+        want = (settings.tts_backend or "auto").lower()
+        if want == "edge" or (want == "auto" and _has_edge()):
+            name = "edge"
+    if name == "edge":
+        return [{"id": k, "label": v, "kind": "edge"} for k, v in EDGE_VOICES.items()]
+    return []
+
+
 # ------------------------------------------------------------
 #  路径解析
 # ------------------------------------------------------------
@@ -70,30 +100,58 @@ def _python_exe() -> Optional[Path]:
 
 
 def stub_expected() -> bool:
-    """没装 IndexTTS（也没配置独立解释器）时，拉起来的一定是占位后端。"""
-    raw = (settings.tts_python or "").strip()
-    if raw:
-        return False
-    home = settings.tts_home_path
-    return not (home / ".venv" / "Scripts/python.exe").exists() \
-        and not (home / ".venv" / "bin/python").exists()
+    """当前会不会出占位音。worker 没起来时不预设坏消息。"""
+    h = _health(timeout=1.0)
+    return bool(h) and str(h.get("backend") or "") == "stub"
+
+
+# 只有这些后端会在显存里放权重；edge / stub 不占卡，不该为它们把出图模型赶走
+VRAM_BACKENDS = ("indextts",)
+
+
+def needs_vram() -> bool:
+    """当前后端是否吃显存。拿不到健康信息时按「吃」保守处理。"""
+    h = _health(timeout=1.5)
+    if not h:
+        return True
+    return str(h.get("backend") or "") in VRAM_BACKENDS
 
 
 def install_hint() -> str:
     """一句能直接照抄的安装提示。"""
     return (
-        "旁白需要单独装 IndexTTS（它要求 Python 3.10/3.11，和主环境冲突，不能合并）。"
-        "在项目根目录双击 install_tts.bat，或手动执行：\n"
-        "  git clone https://github.com/index-tts/index-tts.git tools/index-tts\n"
-        "  cd tools/index-tts && uv sync --all-extras\n"
-        "  hf download IndexTeam/IndexTTS-2 --local-dir=checkpoints_2\n"
-        "然后在 .env 里设置 TTS_HOME=tools/index-tts（默认值就是它，通常不用改）。"
+        "旁白默认用 edge-tts（零模型、不占显存），只需一次：\n"
+        "  pip install edge-tts\n"
+        "该通道走微软在线接口，需要联网。若要完全离线：\n"
+        "  * 装 IndexTTS-2（约 5.5 GB，首帧音质最好）：双击 install_tts.bat\n"
+        "  * 或断网时自动回退系统语音（Windows 自带）"
     )
+
+
+_EDGE_OK: Optional[bool] = None
+
+
+def _has_edge() -> bool:
+    """worker 解释器里有没有 edge-tts。进程内只探一次，省掉重复的启动开销。"""
+    global _EDGE_OK
+    if _EDGE_OK is not None:
+        return _EDGE_OK
+    py = _python_exe()
+    if py is None:
+        _EDGE_OK = False
+        return False
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    try:
+        r = subprocess.run([str(py), "-c", "import edge_tts"],
+                           capture_output=True, timeout=20, creationflags=flags)
+        _EDGE_OK = r.returncode == 0
+    except Exception:
+        _EDGE_OK = False
+    return _EDGE_OK
 
 
 def _base_url() -> str:
     return (settings.tts_url or "http://127.0.0.1:8190").rstrip("/")
-
 
 def _req(path: str, *, payload: Optional[dict] = None,
          timeout: float = 10.0) -> dict:
@@ -144,6 +202,8 @@ def _spawn() -> None:
         "--home", str(home),
         "--models", settings.tts_models_dir,
         "--version", settings.tts_model_version,
+        "--backend", settings.tts_backend,
+        "--voice", settings.tts_voice,
     ]
     if not settings.tts_use_fp16:
         cmd.append("--no-fp16")
@@ -231,22 +291,20 @@ def _register_slot() -> None:
 # ------------------------------------------------------------
 
 def available() -> tuple[bool, str]:
-    """不启动进程，只判断「理论上能不能用」。给界面提示用。
-
-    第二个返回值是提示而非错误：装了 stub 也能用，但要告诉用户那是占位音。
-    """
+    """不启动进程，只判断「理论上能不能用」。给界面提示用。"""
     if not settings.tts_enabled:
         return False, "旁白功能已在配置中关闭（TTS_ENABLED=false）"
     if not worker_script().exists():
         return False, "缺少 tools/tts_worker/server.py，工程文件不完整"
     if _health(timeout=1.0):
         return True, ""
-    if _python_exe() is not None:
-        if stub_expected():
-            return True, ("未安装 IndexTTS，将使用占位音验证链路。"
-                          f"{install_hint()}")
-        return True, ""
-    return False, install_hint()
+    if _python_exe() is None:
+        return False, install_hint()
+    want = (settings.tts_backend or "auto").lower()
+    if want in ("auto", "edge") and not _has_edge():
+        return True, ("解释器里没有 edge-tts，旁白会退成占位音。"
+                      "装一次即可：pip install edge-tts")
+    return True, ""
 
 
 def is_loaded() -> bool:
@@ -264,6 +322,8 @@ def status() -> dict:
         "ready": bool(h and h.get("loaded")),
         "backend": (h or {}).get("backend", ""),
         "stub_expected": stub_expected(),
+        "voice": settings.tts_voice,
+        "needs_vram": needs_vram() if h else False,
         "python": str(py) if py else "",
         "home": str(settings.tts_home_path),
         "models": settings.tts_models_dir,
@@ -282,12 +342,13 @@ def status() -> dict:
 
 
 def load() -> dict:
-    """把权重装进显存（会先让出图模型让位）。"""
+    """把权重装进显存。edge/stub 不占卡，跳过得让位这一步。"""
     _register_slot()
     from engine.slots import slots
 
-    slots.acquire("tts")
-    _ensure_worker()
+    _ensure_worker()              # 先起进程，才知道用的是哪个后端
+    if needs_vram():
+        slots.acquire("tts")
     r = _req("/load", payload={}, timeout=float(settings.tts_timeout_seconds))
     if not r.get("ok"):
         raise TtsError(f"加载旁白模型失败：{r.get('error') or r}")
@@ -365,9 +426,11 @@ def synth(text: str, out_path: Path | str, *, speaker: str = "",
     _register_slot()
     from engine.slots import slots
 
-    _wait_image_idle()            # 别把正在出的图打断
-    slots.acquire("tts")          # 让出图模型把显存让出来
-    _ensure_worker()
+    _ensure_worker()              # 先确保进程在，才能问出后端是谁
+    heavy = needs_vram()          # edge/stub 不占卡：既不等出图，也不赶它走
+    if heavy:
+        _wait_image_idle()        # 别把正在出的图打断
+        slots.acquire("tts")      # 让出图模型把显存让出来
 
     payload = {
         "text": text,
@@ -382,7 +445,7 @@ def synth(text: str, out_path: Path | str, *, speaker: str = "",
         payload["emo_text"] = emo_text
     if lang and str(settings.tts_model_version).startswith("2.5"):
         payload["lang"] = lang
-    if speed and str(settings.tts_model_version).startswith("2.5"):
+    if speed:
         payload["speed"] = float(speed)
 
     try:
@@ -393,7 +456,8 @@ def synth(text: str, out_path: Path | str, *, speaker: str = "",
     if not r.get("ok"):
         raise TtsError(f"旁白合成失败：{r.get('error') or r}")
 
-    slots.touch("tts")
+    if heavy:
+        slots.touch("tts")
     return r
 
 

@@ -99,22 +99,29 @@
       : `本地模型不可用（${llm.reason || ""}），将用规则生成分镜`;
     $("btnRewrite").disabled = !llm.available;
 
-    // 旁白音色候选（IndexTTS 自带的示例音色，没有就留空让用户手填路径）
+    // 旁白音色候选：edge 给音色名，IndexTTS 给示例参考音频
     const tts = o.tts || {};
-    const voices = [{ id: "", label: "内置示例音色" }, ...(tts.voices || []).map(
-      (v) => ({ id: v.path, label: v.label }))];
+    const list = tts.voices || [];
+    const defLabel = tts.backend === "edge" ? "默认音色（晓晓）" : "内置示例音色";
+    const voices = [{ id: "", label: defLabel },
+      ...list.map((v) => ({ id: v.id || v.path, label: v.label }))];
     fillSelect($("voiceSpeaker"), voices, tts.speaker || "");
-    $("voiceBackend").textContent = tts.available
-      ? (tts.stub ? "占位音（未装模型）"
-                  : (tts.version ? `IndexTTS-${tts.version}` : ""))
-      : "未安装";
+    const backendLabel = {
+      edge: "edge-tts · 零模型",
+      indextts: `IndexTTS-${tts.version || "2"}`,
+      stub: "占位音",
+    }[tts.backend] || (tts.version ? `IndexTTS-${tts.version}` : "");
+    $("voiceBackend").textContent = tts.available ? backendLabel : "未安装";
     $("btnVoiceAll").disabled = !tts.available;
     $("btnVoiceMissing").disabled = !tts.available;
     if (!tts.available) {
       $("voiceHint").textContent = `旁白不可用：${tts.reason || ""}`;
     } else if (tts.stub) {
       $("voiceHint").textContent =
-        "未安装 IndexTTS，念出来的是占位音（用来验证链路）。双击 install_tts.bat 装真模型。";
+        "当前是占位音（只用来验证链路）。装 edge-tts 就有真声音：pip install edge-tts";
+    } else if (tts.backend === "edge") {
+      $("voiceHint").textContent =
+        "在线音色，秒级出声、不占显存（需联网）。离线可装 IndexTTS。";
     }
   }
 

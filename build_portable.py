@@ -367,25 +367,25 @@ def write_scripts() -> None:
         "title Narration worker (IndexTTS)\r\n"
         "cd /d \"%~dp0\"\r\n"
         "\r\n"
-        "rem Narration TTS worker. It must run inside the IndexTTS venv\r\n"
-        "rem (Python 3.10/3.11) - the main runtime is 3.13 and incompatible.\r\n"
-        "rem Without it, the portal auto-starts this in STUB mode anyway.\r\n"
+        "rem Narration worker. Default backend is edge-tts: no weights, no VRAM,\r\n"
+        "rem only needs internet. If you ran install_tts.bat, its Python 3.11 venv\r\n"
+        "rem is picked up automatically and the local IndexTTS model is used.\r\n"
         "\r\n"
-        "set PY=\r\n"
-        "if exist \"tools\\index-tts\\.venv\\Scripts\\python.exe\" set PY=tools\\index-tts\\.venv\\Scripts\\python.exe\r\n"
-        "if \"%PY%\"==\"\" (\r\n"
-        "  echo [WARN] IndexTTS venv not found. Starting in STUB mode ^(placeholder audio^).\r\n"
-        "  echo         Run install_tts.bat first for real voices.\r\n"
-        "  if exist \"runtime\\python\\python.exe\" set PY=runtime\\python\\python.exe\r\n"
+        "set PY=runtime\\python\\python.exe\r\n"
+        "if exist \"tools\\index-tts\\.venv\\Scripts\\python.exe\" (\r\n"
+        "  set PY=tools\\index-tts\\.venv\\Scripts\\python.exe\r\n"
+        "  echo [tts] using IndexTTS venv ^(local model^)\r\n"
+        ") else (\r\n"
+        "  echo [tts] using edge-tts ^(no model, needs internet^)\r\n"
         ")\r\n"
-        "if \"%PY%\"==\"\" (\r\n"
+        "if not exist \"%PY%\" (\r\n"
         "  echo [ERROR] no python found\r\n"
         "  pause\r\n"
         "  exit /b 1\r\n"
         ")\r\n"
         "\r\n"
         "echo [tts] http://127.0.0.1:8190  (close this window to stop)\r\n"
-        "\"%PY%\" tools\\tts_worker\\server.py --port 8190 --home tools\\index-tts --models checkpoints_2 --version 2\r\n"
+        "\"%PY%\" tools\\tts_worker\\server.py --port 8190 --home tools\\index-tts --models checkpoints_2 --version 2 --backend auto\r\n"
         "echo.\r\n"
         "echo TTS worker stopped.\r\n"
         "pause\r\n",
@@ -397,7 +397,9 @@ def write_scripts() -> None:
         "setlocal\r\n"
         "cd /d \"%~dp0\"\r\n"
         "\r\n"
-        "rem One-time setup for narration (IndexTTS-2, ~5.5 GB weights):\r\n"
+        "rem OPTIONAL: high-fidelity offline narration with IndexTTS-2 (~5.5 GB).\r\n"
+        "rem The default backend (edge-tts) already produces real voices without\r\n"
+        "rem this - no model, no VRAM. Run this only if you want the local model.\r\n"
         "rem   git clone + uv sync (Python 3.11 venv) + model download.\r\n"
         "rem Safe to re-run: every step is skipped when already done.\r\n"
         "\r\n"
@@ -413,7 +415,9 @@ def write_scripts() -> None:
         "  runtime\\python\\python.exe -m pip install -U uv\r\n"
         ")\r\n"
         "\r\n"
-        "if not exist \"tools\\index-tts\\.git\" (\r\n"
+        "if not exist \"tools\\index-tts\\pyproject.toml\" (\r\n"
+        "  rem A half-finished clone leaves a .git folder behind; wipe it first.\r\n"
+        "  if exist \"tools\\index-tts\" rd /s /q \"tools\\index-tts\"\r\n"
         "  echo [2/3] Cloning index-tts ...\r\n"
         "  if not exist \"tools\" mkdir tools\r\n"
         "  git clone --depth 1 https://github.com/index-tts/index-tts.git tools\\index-tts\r\n"
@@ -546,9 +550,12 @@ def write_scripts() -> None:
         "MODEL_SLOTS_ENABLED=true\r\n"
         "SLOT_IDLE_UNLOAD_SECONDS=600\r\n"
         "\r\n"
-        "# Narration (IndexTTS-2, separate process + separate venv - see install_tts.bat)\r\n"
+        "# Narration. edge-tts works out of the box (no model, no VRAM, needs\r\n"
+        "# internet). IndexTTS-2 is optional and much heavier - see install_tts.bat\r\n"
         "TTS_ENABLED=true\r\n"
         "TTS_URL=http://127.0.0.1:8190\r\n"
+        "TTS_BACKEND=auto\r\n"
+        "TTS_VOICE=zh-CN-XiaoxiaoNeural\r\n"
         "TTS_HOME=tools/index-tts\r\n"
         "TTS_PYTHON=\r\n"
         "TTS_AUTOSTART=true\r\n"
@@ -602,22 +609,27 @@ def write_scripts() -> None:
                       dango      团子衣橱（Q 版捏人 + 衣柜 + 试衣间）
                       storyboard 团子小剧场（一句话 → 分镜 → 旁白 → 竖屏成片）
   engine/           模型能力层：ComfyUI 通道、任务调度、卡死恢复、显存槽位
-  tools/            旁白服务（tts_worker）与 IndexTTS 安装目录
+  tools/            旁白服务（tts_worker）；index-tts 由 install_tts.bat 按需拉取
 
   启动方式（都在根目录）：
     start.bat 或 run_platform.bat   门户一体启动（推荐，五个应用共用引擎）
     run_app.bat                     只起某一个应用（独立端口，省显存）
     run_engine.bat                  引擎单独跑一个进程，门户用 ENGINE_TRANSPORT=http 连
-    install_tts.bat                 一次性安装旁白模型 IndexTTS-2（约 5.5 GB）
-    run_tts.bat                     手动启动旁白服务（不装模型时以占位音运行）
+    run_tts.bat                     手动启动旁白服务（默认 edge-tts，开箱即用）
+    install_tts.bat                 可选：装本地高清旁白 IndexTTS-2（约 5.5 GB）
 
 四、显存与旁白
-  出图与旁白共卡：用哪个就装哪个，另一个当场卸载；两者都空闲超过
-  SLOT_IDLE_UNLOAD_SECONDS（默认 600 秒）自动全部卸载，把显存还给系统。
-  旁白需要单独装 IndexTTS（它要求 Python 3.10/3.11，与主环境互斥）：
-  双击 install_tts.bat 一次即可；未安装时旁白以占位音运行，其余功能不受影响。
+  旁白默认走 edge-tts（微软在线合成）：不下载任何模型、不占显存、秒级出声，
+  需要联网。音色在界面里选（晓晓 / 晓伊 / 云希 …），换行即换人。
+  这种模式下出图与旁白互不干扰，不存在抢显存的问题。
 
-四、硬件要求
+  想要完全离线或更高音质，再双击 install_tts.bat 装 IndexTTS-2（5.5 GB，
+  独立 Python 3.11 环境）。装好之后 auto 会自动改用它，此时它要占显存：
+  出图与旁白用哪个就装哪个，另一个当场卸载；两者都空闲超过
+  SLOT_IDLE_UNLOAD_SECONDS（默认 600 秒）自动全部卸载，把显存还给系统。
+  都没装时旁白退成占位音，只用于验证音画对齐。
+
+五、硬件要求
   NVIDIA 显卡。本包默认按 16GB 显存调优（1024 / 24 步）：
   界面里新建项目时选「生成档位」即可切换：
     · 目标档 · 16GB 画质（1024×1024 / 24 步）—— 画质与画风还原用这档测
@@ -626,13 +638,13 @@ def write_scripts() -> None:
   文本编码器的设备由 ComfyUI 自己调度，无需在 .env 里配。
   画风库 / 主题色数据来自 yang0/handraw-style（MIT）。
 
-五、常见问题
+六、常见问题
   * 提示端口占用：关闭已开实例，或改 .env 中 PORT
   * 想换画质档：改 .env 中 TRANSFORMER_FILE 为其他量化文件并重新下载对应权重
   * 移动整个包：直接拷贝整个文件夹即可，无注册表、无全局依赖
   * 卸载：删除文件夹即可，干净无残留
 
-六、合规提示
+七、合规提示
   本包使用的模型基于 Qwen Research License，输出内容无内置安全过滤，
   生成内容的合法合规性由使用者自行负责。
 """,

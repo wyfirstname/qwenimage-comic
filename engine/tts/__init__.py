@@ -5,16 +5,20 @@
 """
 
 from engine.tts.client import (  # noqa: F401
+    EDGE_VOICES,
     TtsError,
     available,
     install_hint,
     is_loaded,
     load,
+    needs_vram,
     shutdown,
     status,
     synth,
     unload,
+    voices,
 )
 
-__all__ = ["TtsError", "available", "install_hint", "is_loaded", "load",
-           "shutdown", "status", "synth", "unload"]
+__all__ = ["EDGE_VOICES", "TtsError", "available", "install_hint", "is_loaded",
+           "load", "needs_vram", "shutdown", "status", "synth", "unload",
+           "voices"]

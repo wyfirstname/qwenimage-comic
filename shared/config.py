@@ -98,6 +98,13 @@ class Settings(BaseSettings):
     # 装在一起会把 ComfyUI 的 GGUF 通道一起拖死。
     tts_enabled: bool = True
     tts_url: str = "http://127.0.0.1:8190"
+    # 后端：auto = 有 IndexTTS 就用它，否则 edge-tts，都没有则占位音
+    #       edge     = 微软在线接口，零模型、零显存（默认推荐）
+    #       indextts = 本地 5.5GB 模型，音质最好，吃显存
+    #       stub     = 占位音，只用于验证链路
+    tts_backend: str = "auto"
+    # edge-tts 音色（也是 TTS_SPEAKER 留空时的默认值）
+    tts_voice: str = "zh-CN-XiaoxiaoNeural"
     # index-tts 仓库目录（其下的 .venv 会被自动使用）
     tts_home: str = ""
     # 直接指定 TTS 解释器，优先于 tts_home

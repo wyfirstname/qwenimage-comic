@@ -9,3 +9,7 @@ python-multipart>=0.0.12
 pillow>=10.4.0
 python-dotenv>=1.0.1
 aiofiles>=24.1.0
+
+# 旁白：edge-tts 零模型、不占显存，装完即可出声（走微软在线接口，需联网）。
+# 想完全离线再装 IndexTTS-2（install_tts.bat，5.5GB，独立 venv）。
+edge-tts>=7.0.0
