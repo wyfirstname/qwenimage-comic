@@ -63,5 +63,4 @@ echo "  打开浏览器访问： http://127.0.0.1:$PORT"
 echo "  停止服务：按 Ctrl+C"
 echo
 
-cd backend
-exec "../$PY" -m uvicorn app.main:app --host 127.0.0.1 --port "$PORT"
+exec "$PY" -m uvicorn portal.backend.main:app --host 127.0.0.1 --port "$PORT"

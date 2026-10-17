@@ -20,12 +20,12 @@ os.environ["OUTPUT_DIR"] = str(tmp / "data/outputs")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import db as appdb  # noqa: E402
+from shared import db as appdb
 appdb.db
 
-from app import comic_repo as crepo  # noqa: E402
-from app.services import comic as cs  # noqa: E402
-from app.services import generation  # noqa: E402
+from apps.comic.backend import repo as crepo
+from apps.comic.backend import service as cs
+from engine import generation
 from PIL import Image  # noqa: E402
 
 fails = []

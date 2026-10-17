@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>漫画工作室 · Qwen-Image 2.1</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233b6ef5'/%3E%3Ctext x='16' y='22' font-size='17' text-anchor='middle' fill='white'%3E%E2%97%88%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/web/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◈</span>
+    <div>
+      <h1>漫画工作室</h1>
+      <p class="sub">剧本 → 分镜 → 出图 → 导出</p>
+    </div>
+  </div>
+  <nav class="mainnav" id="mainNav">
+    <a class="navitem" href="/" title="返回工作台">← 工作台</a>
+  </nav>
+  <div class="status-area">
+    <span id="engineBadge" class="badge badge-mock">加载中…</span>
+    <span id="vramInfo" class="muted">—</span>
+    <button id="btnLoad" class="btn btn-ghost" title="加载模型到显存">加载模型</button>
+    <button id="btnUnload" class="btn btn-ghost" title="释放显存">卸载</button>
+    <button id="btnGuide" class="btn btn-ghost">模型下载</button>
+  </div>
+</header>
+
+<div id="engineNote" class="notice hidden"></div>
+
+<div id="view-comic">
+  <div class="comic-shell">
+
+    <!-- 项目条 -->
+    <div class="comic-topbar">
+      <div class="ct-left">
+        <button class="btn btn-primary" id="btnToggleNewProject">＋ 新建项目</button>
+        <button class="btn btn-ghost" id="btnRefreshProject">刷新</button>
+        <button class="btn btn-ghost" id="btnToggleProjects">项目管理 <b id="projectCount">0</b></button>
+      </div>
+      <div class="ct-right">
+        <span class="ct-title" id="curProjectTitle">未选择项目</span>
+        <span class="muted" id="curMeta">—</span>
+        <span id="llmBadge" class="badge badge-idle">本地文本模型检测中…</span>
+      </div>
+    </div>
+
+    <div id="newProjectForm" class="mini-form hidden">
+      <input type="text" id="newProjectTitle" placeholder="作品名，例如：潘金莲与西门庆初遇" />
+      <div class="grid-2">
+        <div class="style-pick">
+          <select id="newProjectStyle"></select>
+          <button type="button" class="link-btn" id="btnBrowseStyleNew" title="按缩略图浏览画风库">浏览</button>
+        </div>
+        <select id="newProjectLayout"></select>
+      </div>
+      <div class="grid-2">
+        <select id="newProjectProfile" title="生成档位"></select>
+        <select id="newProjectTheme" title="主题色（可选）"></select>
+      </div>
+      <button class="btn btn-primary" id="btnCreateProject">创建项目</button>
+    </div>
+
+    <!-- 项目卡片（卡片式项目管理） -->
+    <section class="project-board" id="projectBoard">
+      <div class="pb-head">
+        <strong>漫画项目</strong>
+        <span class="muted" id="projectBoardMeta"></span>
+        <span class="spacer"></span>
+        <button class="link-btn" id="btnCollapseBoard">收起</button>
+      </div>
+      <div class="project-cards" id="projectCards"></div>
+    </section>
+
+    <!-- 步骤条 -->
+    <nav class="steps" id="comicSteps">
+      <button class="step active" data-step="script"><i>1</i><span>剧本</span><b id="badgeScript">—</b></button>
+      <button class="step" data-step="character"><i>2</i><span>角色提取</span><b id="badgeCharacter">0</b></button>
+      <button class="step" data-step="scene"><i>3</i><span>场景</span><b id="badgeScene">0</b></button>
+      <button class="step" data-step="panel"><i>4</i><span>分镜</span><b id="badgePanel">0</b></button>
+      <button class="step" data-step="draw"><i>5</i><span>出图</span><b id="badgeDraw">0</b></button>
+      <button class="step" data-step="export"><i>6</i><span>排版导出</span><b id="badgeExport">0</b></button>
+    </nav>
+    <!-- 项目设置：贯穿所有步骤的公共参数。放在步骤条正下方并默认展开，
+         避免沉到页面底部被忽略 —— 正常顺序是先设好参数再逐步骤生成。 -->
+    <details class="settings-fold" id="settingsFold" open>
+      <summary>
+        <span class="sf-title">项目设置</span>
+        <span class="sf-sub">画风 / 尺寸 / 步数 / 反提示词 —— 影响后续所有出图，建议先设好再开始生成</span>
+      </summary>
+      <div id="projectSettings">
+        <div class="settings-col">
+          <div class="grid-2">
+            <div class="style-pick">
+              <select id="setStyle" title="画风"></select>
+              <button type="button" class="link-btn" id="btnBrowseStyle" title="按缩略图浏览画风库">浏览</button>
+            </div>
+            <select id="setLayout" title="排版"></select>
+          </div>
+          <div class="grid-2">
+            <select id="setProfile" title="生成档位：分辨率 / 步数 / CFG 一组切换"></select>
+            <select id="setBatch" title="一次出几张候选">
+              <option value="1">1 张（默认）</option>
+              <option value="2">2 张候选</option>
+              <option value="3">3 张候选</option>
+              <option value="4">4 张候选</option>
+            </select>
+          </div>
+          <div class="grid-2">
+            <select id="setTheme" title="主题色（跟随排版配色）"></select>
+            <select id="setRhythm" title="分镜节奏模板（handraw SB-*）"></select>
+          </div>
+          <div class="grid-2">
+            <select id="setSize" title="单格尺寸">
+              <option value="768x768">768×768 方</option>
+              <option value="640x800">640×800 竖</option>
+              <option value="768x1024">768×1024 竖</option>
+              <option value="1024x1024">1024×1024 方</option>
+              <option value="1024x1536">1024×1536 竖</option>
+              <option value="1536x1024">1536×1024 横</option>
+            </select>
+            <select id="setSteps" title="步数">
+              <option value="4">4 步（最快）</option>
+              <option value="6">6 步</option>
+              <option value="8">8 步（开发档）</option>
+              <option value="12">12 步</option>
+              <option value="20">20 步</option>
+              <option value="24">24 步（目标档）</option>
+              <option value="30">30 步</option>
+            </select>
+          </div>
+          <p class="hint" id="profileHint"></p>
+          <div class="slider-row">
+            <span>引导系数</span>
+            <input type="range" id="setGuidance" min="0" max="10" step="0.5" value="4" />
+            <output id="setGuidanceVal">4.0</output>
+          </div>
+          <div class="slider-row">
+            <span>形象锁定强度</span>
+            <input type="range" id="setRefStrength" min="0.2" max="0.95" step="0.05" value="0.55" />
+            <output id="setRefStrengthVal">0.55</output>
+          </div>
+          <p class="hint">角色形象一致性由 Qwen-Image 2.1 的多参考图编辑通道保证（官方参数 CFG=1），
+            不需要调"锁定强度"。此滑杆仅对主界面「传统图生图」生效。</p>
+          <label class="checkbox"><input type="checkbox" id="setKeepStyle" /> 全篇统一画风</label>
+          <label class="checkbox"><input type="checkbox" id="setUseRef" /> 角色形象图保持形象一致（本地生成）</label>
+        </div>
+        <div class="settings-col">
+          <label>人物反向提示词（默认已压制畸形 / 多指 / 怪表情，可改）</label>
+          <textarea id="setCharNegative" rows="5" placeholder="留空则使用系统默认"></textarea>
+          <label>画面反向提示词（全篇通用）</label>
+          <textarea id="setNegative" rows="5" placeholder="留空则使用系统默认"></textarea>
+          <div class="actions">
+            <button class="btn btn-ghost" id="btnResetNegative">恢复默认反提示词</button>
+            <button class="btn btn-ghost" id="btnSaveProject">保存设置</button>
+          </div>
+          <p class="hint" id="estimateComic"></p>
+        </div>
+      </div>
+    </details>
+
+    <!-- 全局进度 / AI 任务条 -->
+    <div class="progress-wrap" id="comicProgressWrap">
+      <div class="progress-bar"><div class="progress-fill" id="comicProgressFill"></div></div>
+      <span class="progress-text" id="comicProgressText">就绪</span>
+      <button class="link-btn hidden" id="btnRecoverAi" title="中断当前任务并复位推理引擎（会重新拉起 ComfyUI）">中断并恢复</button>
+      <button class="link-btn hidden" id="btnCancelAi">取消</button>
+    </div>
+
+    <!-- ========== 1 剧本 ========== -->
+    <section class="step-pane active" id="step-script">
+      <div class="split-2">
+        <div class="panel">
+          <section class="field">
+            <div class="field-head">
+              <label for="scriptText">剧本正文</label>
+              <button class="link-btn" id="btnScriptHelp">写法示例</button>
+            </div>
+            <textarea id="scriptText" rows="18"
+              placeholder="一行一格。可用 [特写] 指定景别、第 2 页 分页、「对白」写台词、[音效：轰隆] 加拟声词。"></textarea>
+            <p class="hint" id="scriptHint">尚未解析</p>
+            <div class="actions">
+              <button class="btn btn-secondary" id="btnParseScript">规则拆格 → 分镜</button>
+              <button class="btn btn-ghost" id="btnPreviewScript">解析预览</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="panel">
+          <section class="field">
+            <label>本地 AI 写剧本</label>
+            <p class="hint" id="llmHint">本机推理，不联网、不下载新模型。</p>
+            <textarea id="scriptIdea" rows="5"
+              placeholder="故事梗概，例如：潘金莲在二楼支窗，竹竿失手落下砸到路过的西门庆，两人由此相识……"></textarea>
+            <div class="grid-2">
+              <select id="scriptPages">
+                <option value="1">1 页（4 格）</option>
+                <option value="2" selected>2 页（8 格）</option>
+                <option value="3">3 页（12 格）</option>
+                <option value="4">4 页（16 格）</option>
+                <option value="6">6 页（24 格）</option>
+                <option value="8">8 页（32 格）</option>
+                <option value="12">12 页（48 格）</option>
+                <option value="16">16 页（64 格）</option>
+                <option value="20">20 页（80 格）</option>
+              </select>
+              <select id="scriptShotHint">
+                <option value="">按默认节奏分配景别</option>
+              </select>
+            </div>
+            <p class="hint" id="scriptEstimate">超过 4 页会分幕连续生成（每幕 4 页），期间可看下方进度。</p>
+            <div class="actions">
+              <button class="btn btn-primary" id="btnAiScript">AI 写剧本</button>
+              <button class="btn btn-secondary" id="btnAiContinue">继续写下一幕</button>
+              <button class="btn btn-ghost" id="btnAiPolish">AI 润色现有剧本</button>
+            </div>
+          </section>
+          <section class="field">
+            <label>格式约定</label>
+            <div class="legend" id="scriptLegend"></div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 2 角色 ========== -->
+    <section class="step-pane" id="step-character">
+      <div class="step-head">
+        <div>
+          <h2>角色提取</h2>
+          <p class="muted" id="charMeta">从剧本里自动提取人物，生成可直接绘图的角色设定</p>
+        </div>
+        <div class="comic-head-actions">
+          <select id="charCount">
+            <option value="1">1 个</option>
+            <option value="2">2 个</option>
+            <option value="3">3 个</option>
+            <option value="4">4 个</option>
+            <option value="5" selected>5 个</option>
+            <option value="6">6 个</option>
+            <option value="8">8 个</option>
+            <option value="10">10 个</option>
+            <option value="12">12 个</option>
+          </select>
+          <button class="btn btn-primary" id="btnAiCharacters">AI 从剧本提取角色</button>
+          <button class="btn btn-secondary" id="btnAddCharacter">＋ 手动添加</button>
+          <button class="btn btn-ghost" id="btnDrawCharacters">批量生成形象图</button>
+        </div>
+      </div>
+      <div class="cards-grid" id="charList"></div>
+    </section>
+
+    <!-- ========== 3 场景 ========== -->
+    <section class="step-pane" id="step-scene">
+      <div class="step-head">
+        <div>
+          <h2>场景</h2>
+          <p class="muted" id="sceneMeta">提取场景设定，并可用本地模型生成场景概念图当作背景锚点</p>
+        </div>
+        <div class="comic-head-actions">
+          <select id="sceneCount">
+            <option value="1">1 个</option>
+            <option value="2">2 个</option>
+            <option value="3">3 个</option>
+            <option value="4">4 个</option>
+            <option value="5" selected>5 个</option>
+            <option value="6">6 个</option>
+            <option value="8">8 个</option>
+            <option value="10">10 个</option>
+            <option value="12">12 个</option>
+          </select>
+          <button class="btn btn-primary" id="btnAiScenes">AI 提取场景</button>
+          <button class="btn btn-secondary" id="btnAddScene">＋ 手动添加</button>
+          <button class="btn btn-ghost" id="btnDrawScenes">批量出场景图</button>
+        </div>
+      </div>
+      <div class="cards-grid" id="sceneList"></div>
+    </section>
+
+    <!-- ========== 4 分镜 ========== -->
+    <section class="step-pane" id="step-panel">
+      <div class="step-head">
+        <div>
+          <h2>分镜</h2>
+          <p class="muted" id="panelMeta">把剧本拆成漫画格子；AI 拆镜会用上角色与场景设定</p>
+        </div>
+        <div class="comic-head-actions">
+          <button class="btn btn-primary" id="btnAiStoryboard">AI 智能分镜</button>
+          <button class="btn btn-secondary" id="btnRuleScript">规则拆格</button>
+          <button class="btn btn-ghost" id="btnAddPanel">＋ 加一格</button>
+        </div>
+      </div>
+      <div class="panel-list" id="panelList"></div>
+    </section>
+
+    <!-- ========== 5 出图 ========== -->
+    <section class="step-pane" id="step-draw">
+      <div class="step-head">
+        <div>
+          <h2>出图</h2>
+          <p class="muted" id="drawMeta">复用本机出图队列，逐格串行生成</p>
+        </div>
+        <div class="comic-head-actions">
+          <button class="btn btn-primary" id="btnGenerateAll">批量出图</button>
+          <button class="btn btn-secondary" id="btnGenerateMissing">只补未生成的</button>
+        </div>
+      </div>
+      <div class="draw-grid" id="drawGrid"></div>
+    </section>
+
+    <!-- ========== 6 排版导出 ========== -->
+    <section class="step-pane" id="step-export">
+      <div class="step-head">
+        <div>
+          <h2>排版导出</h2>
+          <p class="muted" id="exportMeta">把分镜图拼成漫画页，自动绘制气泡、拟声词与页码</p>
+        </div>
+      </div>
+      <div class="split-2">
+        <div class="panel">
+          <section class="field">
+            <label>排版设置</label>
+            <div class="grid-2">
+              <select id="renderLayout"></select>
+              <select id="renderBubble">
+                <option value="auto">气泡自动交替</option>
+                <option value="top">气泡统一顶部</option>
+                <option value="bottom">气泡统一底部</option>
+              </select>
+            </div>
+            <div class="slider-row">
+              <span>页宽</span>
+              <input type="range" id="renderWidth" min="600" max="2000" step="20" value="1240" />
+              <output id="renderWidthVal">1240</output>
+            </div>
+            <div class="slider-row">
+              <span>导出版本</span>
+              <select id="exportColor">
+                <option value="color">彩色版 · 保留色彩</option>
+                <option value="bw">黑白版 · 转灰度</option>
+              </select>
+            </div>
+            <div class="row-actions">
+              <button class="btn btn-primary" id="btnRender">生成漫画页</button>
+              <button class="btn" id="btnExportPdf">导出 PDF（整部）</button>
+            </div>
+            <p class="muted" id="pdfHint">导出会把当前全部成品页合并成一份 PDF；一页都没有时会先自动排版一次</p>
+          </section>
+        </div>
+        <div class="panel">
+          <section class="field">
+            <label>成品页</label>
+            <div class="render-list" id="renderList"></div>
+          </section>
+          <section class="field">
+            <label>已导出的 PDF</label>
+            <div class="export-list" id="exportList"></div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+  </div>
+  <p class="comic-attr" id="comicAttr"></p>
+</div>
+
+<!-- 提示词预览弹窗 -->
+<div class="modal-mask hidden" id="promptModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>本格实际提示词</h3>
+      <button class="link-btn" id="promptModalClose">关闭</button>
+    </div>
+    <div class="modal-body" id="promptModalBody">加载中…</div>
+  </div>
+</div>
+
+<!-- 画风库浏览器（分组 + 搜索 + 缩略图网格） -->
+<div class="modal-mask hidden" id="styleModal">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3>画风库 <span class="muted" id="styleModalMeta"></span></h3>
+      <button class="link-btn" id="styleModalClose">关闭</button>
+    </div>
+    <div class="modal-body">
+      <div class="style-toolbar">
+        <input type="search" id="styleSearch" placeholder="搜索：编号 / 名称 / 参考作者 / 分组" />
+        <div class="style-groups" id="styleGroups"></div>
+      </div>
+      <div class="style-grid" id="styleGrid"></div>
+      <p class="style-more" id="styleMore"></p>
+      <p class="hint" id="styleAttr"></p>
+    </div>
+  </div>
+</div>
+
+<!-- 模型下载指引 -->
+<div class="modal-mask hidden" id="guideModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>模型下载指引</h3>
+      <button class="link-btn" id="guideClose">关闭</button>
+    </div>
+    <div id="guideBody" class="modal-body">加载中…</div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/web/app.js"></script>
+<script src="./comic.js"></script>
+</body>
+</html>

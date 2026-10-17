@@ -1,0 +1,101 @@
+/* 工作台门户 —— 只做导航，不掺和业务 */
+
+.portal-wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 34px 24px 60px;
+}
+
+.portal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-2, #5b6472);
+  letter-spacing: .04em;
+  margin: 6px 0 18px;
+}
+
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 18px;
+}
+
+.app-card {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 20px;
+  border: 1px solid var(--border, #e3e7ee);
+  border-radius: 14px;
+  background: var(--panel, #fff);
+  text-decoration: none;
+  color: inherit;
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+
+.app-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent, #3b6ef5);
+  box-shadow: 0 10px 28px rgba(59, 110, 245, .14);
+}
+
+.app-card .app-icon {
+  font-size: 30px;
+  line-height: 1;
+  width: 54px;
+  height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--accent-soft, #eef3ff);
+  flex: 0 0 auto;
+}
+
+.app-card .app-body { min-width: 0; }
+
+.app-card .app-name {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 2px 0 6px;
+}
+
+.app-card .app-desc {
+  font-size: 13px;
+  color: var(--text-2, #5b6472);
+  line-height: 1.5;
+  margin: 0 0 10px;
+}
+
+.app-card .app-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.app-card .app-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--tag-bg, #f1f3f7);
+  color: var(--text-2, #5b6472);
+}
+
+.app-card .app-port {
+  font-size: 11px;
+  color: var(--text-3, #98a1b0);
+  margin-top: 8px;
+}
+
+.portal-foot {
+  margin-top: 26px;
+  font-size: 12px;
+  color: var(--text-3, #98a1b0);
+  line-height: 1.7;
+}
+
+.portal-foot code {
+  background: var(--tag-bg, #f1f3f7);
+  padding: 1px 5px;
+  border-radius: 4px;
+}

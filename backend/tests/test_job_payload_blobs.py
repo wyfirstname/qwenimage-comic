@@ -25,15 +25,15 @@ os.environ['DATA_DIR'] = str(TMP / 'data')
 os.environ['OUTPUT_DIR'] = str(TMP / 'data' / 'outputs')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import blobs  # noqa: E402
-from app import db as appdb  # noqa: E402
+from shared import blobs
+from shared import db as appdb
 appdb.db  # noqa: E402  触发模块级单例（首次 read/write 自动建库并跑迁移）
 
-from app import comic_repo as crepo  # noqa: E402
-from app import repo  # noqa: E402
-from app.inference import scheduler  # noqa: E402
-from app.services import comic as cs  # noqa: E402
-from app.services import generation  # noqa: E402
+from apps.comic.backend import repo as crepo
+from shared import repo
+from engine.infer import scheduler
+from apps.comic.backend import service as cs
+from engine import generation
 
 fails = []
 

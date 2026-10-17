@@ -1,0 +1,11 @@
+{
+  "id": "portrait",
+  "name": "人像编辑",
+  "icon": "🧑‍🎨",
+  "description": "官方五段提示词结构，多参考图人像编辑与智能改写",
+  "version": "1.0.0",
+  "api_prefix": "/api/v1/portrait",
+  "entry": "/apps/portrait/",
+  "standalone_port": 8103,
+  "capabilities": ["img2img", "textgen"]
+}

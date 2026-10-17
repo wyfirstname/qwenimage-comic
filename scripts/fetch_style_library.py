@@ -25,8 +25,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT / "backend" / "app" / "style_library" / "data"
-THUMBS_DIR = ROOT / "backend" / "app" / "style_library" / "thumbs"
+DATA_DIR = ROOT / "shared" / "style_library" / "data"
+THUMBS_DIR = ROOT / "shared" / "style_library" / "thumbs"
 
 REPO = "yang0/handraw-style"
 BRANCH = "master"   # 该仓库默认分支是 master（不是 main）

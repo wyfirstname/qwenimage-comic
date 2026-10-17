@@ -17,15 +17,15 @@ os.environ['DATA_DIR'] = str(TMP / 'data')
 os.environ['OUTPUT_DIR'] = str(TMP / 'data' / 'outputs')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import db as appdb  # noqa: E402
+from shared import db as appdb
 appdb.db  # noqa: E402  触发模块级单例（首次 read/write 自动建库并跑迁移）
 
-from app import repo  # noqa: E402
-from app import comic_repo as crepo  # noqa: E402
-from app.inference import scheduler  # noqa: E402
-from app.models_util import output_subdir_path  # noqa: E402
-from app.services import comic as cs  # noqa: E402
-from app.services import generation  # noqa: E402
+from shared import repo
+from apps.comic.backend import repo as crepo
+from engine.infer import scheduler
+from shared.models_util import output_subdir_path  # noqa: E402
+from apps.comic.backend import service as cs
+from engine import generation
 
 OUT = Path(os.environ['OUTPUT_DIR'])
 fails = []
@@ -91,7 +91,7 @@ async def main():
     check('立绘落在项目目录内', len(files) >= 1,
           f'{len(files)} 个文件: ' + ', '.join(f.name[:44] for f in files[:3]))
     ch = crepo.get_character(cid)
-    from app.models_util import resolve_stored
+    from shared.models_util import resolve_stored
     ch_path = resolve_stored(ch.get('ref_path'))
     check('角色记录指向项目目录（相对路径可还原）',
           ch_path is not None and ch_path.parent == proj_dir,
@@ -124,7 +124,7 @@ async def main():
     print('=== 7. 历史出图归位（旧日期目录 → 项目目录）===', flush=True)
     from PIL import Image
 
-    from app.models_util import relative_url
+    from shared.models_util import relative_url
 
     date_dir = OUT / '2026-01-01'
     date_dir.mkdir(parents=True, exist_ok=True)

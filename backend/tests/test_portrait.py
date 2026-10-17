@@ -29,17 +29,18 @@ os.environ["OUTPUT_DIR"] = str(tmp / "data/outputs")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import db as appdb  # noqa: E402
+from shared import db as appdb
 
 appdb.db
 
 from PIL import Image  # noqa: E402
 
-from app import blobs  # noqa: E402
-from app.api import portrait as portrait_api  # noqa: E402
-from app.schemas import PortraitComposeIn, PortraitSubmitIn  # noqa: E402
-from app.services import generation, portrait  # noqa: E402
-from app.services.portrait import PortraitError  # noqa: E402
+from shared import blobs
+from apps.portrait.backend import app as portrait_api
+from shared.schemas import PortraitComposeIn, PortraitSubmitIn  # noqa: E402
+from engine import generation
+from apps.portrait.backend import service
+from apps.portrait.backend.service import PortraitError  # noqa: E402
 
 fails = []
 
@@ -233,7 +234,7 @@ check("文生图玩法 mode=txt2img", txt_pl["payload"]["mode"] == "txt2img")
 check("文生图玩法不带参考图", "ref_images" not in txt_pl["payload"])
 
 # 与既有口径的一致性：漫画分镜融合仍要求 mode=img2img + fusion
-from app.services.generation import _prepare_references  # noqa: E402
+from engine.generation import _prepare_references  # noqa: E402
 
 check("generation 能解析人像 payload 的参考图列表",
       len(_prepare_references(pl)) == 2)

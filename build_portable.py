@@ -2,7 +2,7 @@
 """绿色便携包构建脚本。
 
 产出 dist/qwenimages-portable/：
-  - 应用代码（backend/frontend/comfyui）
+  - 应用代码（shared / engine / apps / portal / comfyui）
   - 内嵌 Python 3.13 运行时 + 全部依赖（site-packages 合并进运行时）
   - 启动脚本（解压即用，零安装）
   - 模型下载脚本（模型权重 14G 不打进包，由用户首次运行时下载）
@@ -147,10 +147,13 @@ def main() -> None:
             print("目标目录已有内容：原地覆盖构建（如需先清空请加 --clean）")
     STAGE.mkdir(parents=True, exist_ok=True)
 
-    print("[1/7] 应用代码 ...")
-    robocopy(ROOT / "backend", STAGE / "backend", exclude_dirs=["__pycache__"],
+    print("[1/7] 应用代码（四层：shared / engine / apps / portal）...")
+    for pkg in ("shared", "engine", "apps", "portal"):
+        robocopy(ROOT / pkg, STAGE / pkg, exclude_dirs=["__pycache__"],
+                 exclude_files=["*.pyc"])
+    robocopy(ROOT / "backend", STAGE / "backend", exclude_dirs=["__pycache__", "tests", ".workbuddy"],
              exclude_files=["*.pyc"])
-    robocopy(ROOT / "frontend", STAGE / "frontend", exclude_dirs=["__pycache__"])
+    robocopy(ROOT / "scripts", STAGE / "scripts", exclude_dirs=["__pycache__"])
     robocopy(ROOT / "comfyui", STAGE / "comfyui",
              # 注意：input/user/output/temp 只排除 comfyui 顶层的运行时目录
              # （用绝对路径），不能用裸名——否则会误删 comfy_api/input 等包目录
@@ -238,8 +241,7 @@ def write_scripts() -> None:
         "echo   First launch will auto-start ComfyUI (~45s) and load models on demand.\r\n"
         "echo.\r\n"
         "\r\n"
-        "cd backend\r\n"
-        "\"..\\runtime\\python\\python.exe\" -m uvicorn app.main:app --host 127.0.0.1 --port 8000\r\n"
+        "\"runtime\\python\\python.exe\" -m uvicorn portal.backend.main:app --host 127.0.0.1 --port 8000\r\n"
         "echo.\r\n"
         "echo Server exited unexpectedly. Read the error above.\r\n"
         "pause\r\n",

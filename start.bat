@@ -77,8 +77,7 @@ echo   Open in browser:  http://127.0.0.1:%PORT%
 echo   Stop the server:  press Ctrl+C in this window
 echo.
 
-cd backend
-"..\%PY%" -m uvicorn app.main:app --host 127.0.0.1 --port %PORT%
+"%PY%" -m uvicorn portal.backend.main:app --host 127.0.0.1 --port %PORT%
 
 echo.
 echo Server stopped.

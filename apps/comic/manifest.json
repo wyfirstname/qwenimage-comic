@@ -1,0 +1,11 @@
+{
+  "id": "comic",
+  "name": "漫画工作室",
+  "icon": "🎬",
+  "description": "剧本 → 分镜 → 角色 / 场景 → 出图 → 排版导出",
+  "version": "1.0.0",
+  "api_prefix": "/api/v1/comic",
+  "entry": "/apps/comic/",
+  "standalone_port": 8102,
+  "capabilities": ["txt2img", "img2img", "textgen"]
+}

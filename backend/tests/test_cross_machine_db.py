@@ -21,14 +21,14 @@ os.environ['DATA_DIR'] = str(TMP / 'data')
 os.environ['OUTPUT_DIR'] = str(TMP / 'data' / 'outputs')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import db as appdb  # noqa: E402
+from shared import db as appdb  # noqa: E402
 appdb.db  # noqa: E402
 
 from PIL import Image  # noqa: E402
 
-from app import comic_repo as crepo  # noqa: E402
-from app.models_util import relative_url  # noqa: E402
-from app.services import comic as cs  # noqa: E402
+from apps.comic.backend import repo as crepo  # noqa: E402
+from shared.models_util import relative_url  # noqa: E402
+from apps.comic.backend import service as cs  # noqa: E402
 
 OUT = Path(os.environ['OUTPUT_DIR'])
 GHOST = Path('Q:/qwenimage-portable/data/outputs')   # 模拟 A 机的盘符（本机不存在）
@@ -104,8 +104,8 @@ def main():
           exp_bw['filename'])
 
     print('=== 6. 相对路径存储口径 ===', flush=True)
-    from app.config import settings as _settings
-    from app.models_util import resolve_stored, stored_path
+    from shared.config import settings as _settings
+    from shared.models_util import resolve_stored, stored_path
     # 项目根之下的文件 → data/... 相对路径；根之外（如测试临时目录）→ 退回绝对
     probe_in = Path(_settings.project_root) / 'data' / '__probe__.png'
     check('项目根下存为相对路径', stored_path(probe_in) == 'data/__probe__.png',

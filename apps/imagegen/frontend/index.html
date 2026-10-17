@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>图片生成 · Qwen-Image 2.1</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233b6ef5'/%3E%3Ctext x='16' y='22' font-size='17' text-anchor='middle' fill='white'%3E%E2%97%88%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/web/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◈</span>
+    <div>
+      <h1>图片生成</h1>
+      <p class="sub">Qwen-Image 2.1 · 文生图 / 图生图</p>
+    </div>
+  </div>
+  <nav class="mainnav" id="mainNav">
+    <a class="navitem" href="/" title="返回工作台">← 工作台</a>
+  </nav>
+  <div class="status-area">
+    <span id="engineBadge" class="badge badge-mock">加载中…</span>
+    <span id="vramInfo" class="muted">—</span>
+    <button id="btnLoad" class="btn btn-ghost" title="加载模型到显存">加载模型</button>
+    <button id="btnUnload" class="btn btn-ghost" title="释放显存">卸载</button>
+    <button id="btnGuide" class="btn btn-ghost">模型下载</button>
+  </div>
+</header>
+
+<div id="engineNote" class="notice hidden"></div>
+
+<div id="view-image">
+<main class="layout">
+  <!-- ==================== 左侧控制栏 ==================== -->
+  <aside class="panel">
+    <section class="field">
+      <div class="field-head">
+        <label for="prompt">提示词</label>
+        <button class="link-btn" id="btnPresetFast">快速预览</button>
+        <button class="link-btn" id="btnPresetHQ">高质量</button>
+      </div>
+      <textarea id="prompt" rows="6"
+        placeholder="描述你想要的画面，例如：a cyberpunk street at night, neon reflections on wet asphalt, cinematic lighting"></textarea>
+      <div class="char-count"><span id="promptLen">0</span> 字</div>
+    </section>
+
+    <section class="field">
+      <label for="negative">负面提示词</label>
+      <textarea id="negative" rows="2" placeholder="不希望出现的内容，例如：blurry, low quality, watermark"></textarea>
+    </section>
+
+    <section class="field">
+      <label>模式</label>
+      <div class="segmented" id="modeSwitch">
+        <button class="seg active" data-mode="txt2img">文生图</button>
+        <button class="seg" data-mode="img2img">图生图</button>
+      </div>
+    </section>
+
+    <section class="field" id="refField" style="display:none">
+      <div class="field-head">
+        <label>参考图</label>
+        <button class="link-btn" id="btnPickRef">选择图片</button>
+      </div>
+      <div id="refDrop" class="dropzone">
+        <span id="refHint">点击选择，或把图片拖到这里</span>
+        <img id="refPreview" alt="参考图预览" />
+      </div>
+      <input type="file" id="refFile" accept="image/*" hidden />
+      <div class="slider-row">
+        <span>重绘强度</span>
+        <input type="range" id="strength" min="0" max="1" step="0.05" value="0.6" />
+        <output id="strengthVal">0.60</output>
+      </div>
+    </section>
+
+    <section class="field">
+      <label>尺寸</label>
+      <div class="grid-2">
+        <select id="sizePreset">
+          <option value="1024x1024">1024 × 1024（方形）</option>
+          <option value="1152x896">1152 × 896（横）</option>
+          <option value="896x1152">896 × 1152（竖）</option>
+          <option value="1536x1536">1536 × 1536（大图）</option>
+          <option value="768x768">768 × 768（省显存）</option>
+          <option value="custom">自定义…</option>
+        </select>
+      </div>
+      <div class="grid-2" id="customSize" style="display:none">
+        <input type="number" id="width" value="1024" step="64" min="64" max="2048" placeholder="宽" />
+        <input type="number" id="height" value="1024" step="64" min="64" max="2048" placeholder="高" />
+      </div>
+    </section>
+
+    <section class="field">
+      <div class="slider-row">
+        <span>采样步数</span>
+        <input type="range" id="steps" min="1" max="60" step="1" value="20" />
+        <output id="stepsVal">20</output>
+      </div>
+      <div class="slider-row">
+        <span>引导系数</span>
+        <input type="range" id="guidance" min="0" max="10" step="0.1" value="4" />
+        <output id="guidanceVal">4.0</output>
+      </div>
+      <div class="slider-row">
+        <span>生成张数</span>
+        <input type="range" id="batch" min="1" max="4" step="1" value="1" />
+        <output id="batchVal">1</output>
+      </div>
+    </section>
+
+    <section class="field">
+      <div class="field-head">
+        <label for="seed">随机种子</label>
+        <label class="checkbox"><input type="checkbox" id="seedLock" /> 锁定</label>
+        <button class="link-btn" id="btnRandomSeed">随机</button>
+      </div>
+      <input type="number" id="seed" value="-1" />
+      <p class="hint">-1 表示每次随机；锁定后可微调提示词做对比</p>
+    </section>
+
+    <div class="actions">
+      <button id="btnGenerate" class="btn btn-primary">开始生成</button>
+      <button id="btnBatch" class="btn btn-secondary" title="提交到后台队列">后台批量</button>
+    </div>
+    <p class="estimate" id="estimate"></p>
+    <p class="error-text hidden" id="errorText"></p>
+  </aside>
+
+  <!-- ==================== 右侧主区 ==================== -->
+  <section class="content">
+    <div class="tabs">
+      <button class="tab active" data-tab="canvas">画布</button>
+      <button class="tab" data-tab="gallery">图库 <span id="galleryCount" class="pill">0</span></button>
+      <button class="tab" data-tab="jobs">任务 <span id="jobCount" class="pill">0</span></button>
+    </div>
+
+    <!-- 画布 -->
+    <div class="tab-pane active" id="pane-canvas">
+      <div class="progress-wrap" id="progressWrap">
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <span class="progress-text" id="progressText">就绪</span>
+      </div>
+      <div class="canvas" id="canvas">
+        <div class="empty" id="canvasEmpty">
+          <div class="empty-icon">◈</div>
+          <p>还没有生成结果</p>
+          <p class="muted">在左侧输入提示词后点击「开始生成」</p>
+        </div>
+      </div>
+      <div class="thumbs" id="thumbs"></div>
+    </div>
+
+    <!-- 图库 -->
+    <div class="tab-pane" id="pane-gallery">
+      <div class="toolbar">
+        <input type="search" id="gallerySearch" placeholder="按提示词搜索…" />
+        <label class="checkbox"><input type="checkbox" id="favOnly" /> 仅收藏</label>
+        <span class="spacer"></span>
+        <span class="muted" id="galleryTotal"></span>
+        <button class="btn btn-ghost" id="btnRefreshGallery">刷新</button>
+      </div>
+      <div class="grid-gallery" id="galleryGrid"></div>
+      <div class="pager">
+        <button class="btn btn-ghost" id="pagePrev">上一页</button>
+        <span id="pageInfo">1 / 1</span>
+        <button class="btn btn-ghost" id="pageNext">下一页</button>
+      </div>
+    </div>
+
+    <!-- 任务 -->
+    <div class="tab-pane" id="pane-jobs">
+      <div class="toolbar">
+        <span class="muted">后台任务队列</span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost" id="btnRefreshJobs">刷新</button>
+      </div>
+      <div class="job-list" id="jobList"></div>
+    </div>
+  </section>
+</main>
+</div><!-- /view-image -->
+
+<!-- 图片详情抽屉 -->
+<div class="drawer-mask hidden" id="drawerMask"></div>
+<aside class="drawer hidden" id="drawer">
+  <div class="drawer-head">
+    <h3>图片详情</h3>
+    <button class="link-btn" id="drawerClose">关闭</button>
+  </div>
+  <img id="drawerImg" alt="预览" />
+  <dl class="meta" id="drawerMeta"></dl>
+  <div class="drawer-actions">
+    <a id="drawerDownload" class="btn btn-secondary" download>下载</a>
+    <button class="btn btn-ghost" id="drawerFavorite">收藏</button>
+    <button class="btn btn-ghost" id="drawerReuse">复现参数</button>
+    <button class="btn btn-ghost" id="drawerAsRef">作为参考图</button>
+    <button class="btn btn-danger" id="drawerDelete">删除</button>
+  </div>
+</aside>
+
+<!-- 模型下载指引 -->
+<div class="modal-mask hidden" id="guideModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>模型下载指引</h3>
+      <button class="link-btn" id="guideClose">关闭</button>
+    </div>
+    <div id="guideBody" class="modal-body">加载中…</div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/web/app.js"></script>
+</body>
+</html>

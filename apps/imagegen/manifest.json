@@ -1,0 +1,11 @@
+{
+  "id": "imagegen",
+  "name": "图片生成",
+  "icon": "🎨",
+  "description": "文生图 / 图生图，任务队列与图库",
+  "version": "1.0.0",
+  "api_prefix": "/api/v1",
+  "entry": "/apps/imagegen/",
+  "standalone_port": 8101,
+  "capabilities": ["txt2img", "img2img"]
+}

@@ -18,13 +18,13 @@ os.environ['DATA_DIR'] = str(TMP / 'data')
 os.environ['OUTPUT_DIR'] = str(TMP / 'data' / 'outputs')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import db as appdb  # noqa: E402
+from shared import db as appdb
 appdb.db  # noqa: E402  触发模块级单例（首次 read/write 自动建库并跑迁移）
 
-from app import comic_repo as crepo  # noqa: E402
-from app.inference import scheduler  # noqa: E402
-from app.services import comic as cs  # noqa: E402
-from app.services import generation  # noqa: E402
+from apps.comic.backend import repo as crepo
+from engine.infer import scheduler
+from apps.comic.backend import service as cs
+from engine import generation
 
 OUT = Path(os.environ['OUTPUT_DIR'])
 fails = []
@@ -99,7 +99,7 @@ async def main():
     check('PDF 落在项目目录里', pdf.parent == cs.project_output_dir(project),
           str(pdf.parent))
     check('文件名后缀 .pdf', pdf.name.endswith('.pdf'), pdf.name)
-    from app.config import settings as app_settings
+    from shared.config import settings as app_settings
 
     if pdf.resolve().is_relative_to(app_settings.project_root.resolve()):
         check('URL 指向静态目录', exp['url'].startswith('/data/outputs/comics/'), exp['url'])

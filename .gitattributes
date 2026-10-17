@@ -1,0 +1,19 @@
+# 换行符策略：Windows 脚本必须是 CRLF，否则 cmd.exe 会解析错乱
+# （典型症状： 'tokens' 不是内部或外部命令 / 'rm]' 不是内部或外部命令）
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# shell 脚本保持 LF
+*.sh  text eol=lf
+
+# 二进制资源不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.gguf binary
+*.safetensors binary
+*.onnx binary
