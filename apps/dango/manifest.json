@@ -1,0 +1,11 @@
+{
+  "id": "dango",
+  "name": "团子衣橱",
+  "icon": "🍡",
+  "description": "捏一个团子，再做一柜子衣服",
+  "version": "1.0.0",
+  "api_prefix": "/api/v1/dango",
+  "entry": "/apps/dango/",
+  "standalone_port": 8104,
+  "capabilities": ["txt2img", "img2img", "textgen"]
+}

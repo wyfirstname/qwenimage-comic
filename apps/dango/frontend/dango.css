@@ -1,0 +1,334 @@
+/* ============================================================
+   团子衣橱 —— 只写「平台样式没有」的部分，其余全部复用 /web/style.css
+   前缀统一用 dg-，避免和 app.js 的全局选择器打架
+   ============================================================ */
+
+:root {
+  --dg-accent: #e46a8b;
+  --dg-accent-soft: #fdeef3;
+  --dg-accent-line: #f3c2d2;
+  --dg-ink: #3d2b33;
+}
+
+/* ---------------- 顶部三个页签 ---------------- */
+.dg-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px 0;
+  max-width: 1680px;
+  margin: 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+.dg-tab {
+  padding: 9px 16px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 13.5px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.dg-tab b { color: var(--dg-accent); font-weight: 700; margin-right: 2px; }
+.dg-tab:hover { color: var(--text); }
+.dg-tab.active { color: var(--text); font-weight: 600; border-bottom-color: var(--dg-accent); }
+.dg-stats { padding-right: 4px; font-family: var(--mono); }
+
+.dg-pane { display: none; }
+.dg-pane.active { display: block; }
+
+/* ---------------- 舞台 ---------------- */
+.dg-stage-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.dg-stage-head h2 { font-size: 15px; font-weight: 650; }
+.dg-progress { margin: 12px 16px 0; }
+.dg-mini { padding: 5px 10px; font-size: 12px; }
+
+.dg-stage {
+  flex: 1;
+  margin: 14px 16px;
+  min-height: 420px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(45deg, #f3eef1 25%, transparent 25%) 0 0/18px 18px,
+    linear-gradient(-45deg, #f3eef1 25%, transparent 25%) 0 9px/18px 18px,
+    linear-gradient(45deg, transparent 75%, #f3eef1 75%) 9px -9px/18px 18px,
+    linear-gradient(-45deg, transparent 75%, #f3eef1 75%) -9px 0/18px 18px,
+    #fdfbfc;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow: auto;
+}
+.dg-room-canvas { min-height: 480px; }
+.dg-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-height: 100%;
+}
+.dg-hero img {
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 4px 24px rgba(80, 40, 60, .12);
+}
+.dg-hero-tag {
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--dg-accent-soft);
+  border: 1px solid var(--dg-accent-line);
+  border-radius: 999px;
+  padding: 3px 12px;
+}
+
+/* ---------------- 结果网格 ---------------- */
+.dg-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  padding: 0 16px 16px;
+}
+.dg-results-row { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.dg-grid-imgs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+  width: 100%;
+}
+.dg-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  transition: border-color .15s, box-shadow .15s;
+}
+.dg-card:hover { border-color: var(--dg-accent-line); box-shadow: var(--shadow); }
+.dg-card img {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  background: #fff;
+  cursor: zoom-in;
+  display: block;
+}
+.dg-card.is-square img { aspect-ratio: 1 / 1; }
+.dg-card-foot { padding: 8px; display: flex; align-items: center; gap: 6px; }
+.dg-card-foot .muted { flex: 1; font-family: var(--mono); }
+.dg-card-foot .btn { padding: 4px 10px; font-size: 12px; }
+
+/* ---------------- 选项胶囊 ---------------- */
+.dg-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.dg-chip {
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  font-size: 12.5px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: all .15s;
+  line-height: 1.5;
+}
+.dg-chip:hover { border-color: var(--dg-accent-line); color: var(--text); }
+.dg-chip.active {
+  background: var(--dg-accent-soft);
+  border-color: var(--dg-accent);
+  color: var(--dg-ink);
+  font-weight: 600;
+}
+
+/* ---------------- 提示词区 ---------------- */
+.dg-prompt { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.dg-sections { display: flex; flex-direction: column; gap: 8px; }
+.dg-section {
+  border-left: 3px solid var(--dg-accent-line);
+  padding: 6px 10px;
+  background: #fcfafb;
+  border-radius: 0 6px 6px 0;
+}
+.dg-section-label {
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--dg-accent);
+  margin-bottom: 3px;
+}
+.dg-section-text { font-size: 12.5px; line-height: 1.65; color: var(--text-2); }
+.dg-prompt textarea { font-size: 12px; line-height: 1.6; font-family: var(--mono); }
+
+/* ---------------- 试衣间三栏 ---------------- */
+.dg-room {
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr) 328px;
+  gap: 16px;
+  padding: 16px;
+  align-items: start;
+  max-width: 1680px;
+  margin: 0 auto;
+}
+@media (max-width: 1280px) {
+  .dg-room { grid-template-columns: 180px minmax(0, 1fr); }
+  .dg-wardrobe-panel { grid-column: 1 / -1; }
+}
+@media (max-width: 900px) { .dg-room { grid-template-columns: 1fr; } }
+
+.dg-charlist-panel { gap: 10px; }
+.dg-charlist { display: flex; flex-direction: column; gap: 8px; }
+.dg-char {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  background: var(--surface);
+  transition: all .15s;
+}
+.dg-char:hover { border-color: var(--dg-accent-line); }
+.dg-char.active { border-color: var(--dg-accent); background: var(--dg-accent-soft); }
+.dg-char img {
+  width: 42px; height: 56px;
+  object-fit: cover;
+  border-radius: 5px;
+  background: #fff;
+  flex: none;
+}
+.dg-char-body { min-width: 0; flex: 1; }
+.dg-char-name {
+  font-size: 12.5px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dg-char-meta {
+  font-size: 11px; color: var(--text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dg-char-del {
+  border: none; background: none; cursor: pointer;
+  color: var(--text-3); font-size: 14px; padding: 2px 4px;
+  border-radius: 4px; flex: none;
+}
+.dg-char-del:hover { color: var(--danger); background: #fdeaea; }
+
+.dg-room-stage { min-height: calc(100vh - 96px); }
+
+.dg-wardrobe-panel { gap: 12px; }
+.dg-wardrobe-head { display: flex; align-items: center; gap: 8px; }
+.dg-wardrobe-head label { font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+.dg-wardrobe-head .muted { margin-left: auto; font-family: var(--mono); }
+.dg-slot-filter { display: flex; flex-wrap: wrap; gap: 5px; }
+.dg-slot-filter .dg-chip { padding: 3px 9px; font-size: 11.5px; }
+
+.dg-wardrobe {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 2px;
+}
+.dg-fit {
+  position: relative;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #fff;
+  transition: all .15s;
+}
+.dg-fit img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; }
+.dg-fit:hover { border-color: var(--dg-accent-line); }
+.dg-fit.picked { border-color: var(--dg-accent); box-shadow: 0 0 0 3px var(--dg-accent-soft); }
+.dg-fit-name {
+  font-size: 10.5px;
+  padding: 3px 4px;
+  color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: var(--surface-2);
+}
+.dg-fit-slot {
+  position: absolute; top: 3px; right: 3px;
+  font-size: 9.5px;
+  background: rgba(61, 43, 51, .72);
+  color: #fff;
+  padding: 1px 5px;
+  border-radius: 999px;
+}
+.dg-fit-del {
+  position: absolute; top: 3px; left: 3px;
+  width: 17px; height: 17px; line-height: 15px;
+  border: none; border-radius: 50%;
+  background: rgba(255,255,255,.9);
+  color: var(--text-3);
+  font-size: 12px; cursor: pointer;
+  opacity: 0; transition: opacity .15s;
+}
+.dg-fit:hover .dg-fit-del { opacity: 1; }
+.dg-fit-del:hover { color: var(--danger); }
+
+.dg-hr { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
+
+.dg-history { padding: 0 16px 16px; }
+.dg-strip-head {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 12px; color: var(--text-2); margin-bottom: 8px;
+}
+.dg-history-strip {
+  display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px;
+}
+.dg-hist {
+  flex: none; width: 62px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 7px; overflow: hidden;
+  background: #fff;
+}
+.dg-hist img { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; display: block; }
+.dg-hist:hover { border-color: var(--dg-accent); }
+.dg-hist-label {
+  font-size: 9.5px; text-align: center; padding: 2px 0;
+  color: var(--text-3); background: var(--surface-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.dg-wardrobe-strip { padding: 0 16px 16px; border-top: 1px solid var(--border); }
+.dg-wardrobe-mini {
+  display: flex; gap: 8px; overflow-x: auto; padding: 10px 0 4px;
+}
+.dg-wardrobe-mini img {
+  width: 60px; height: 60px; object-fit: cover;
+  border-radius: 6px; border: 1px solid var(--border); background: #fff;
+  flex: none;
+}
+
+/* ---------------- 存档弹窗 ---------------- */
+.dg-save-preview { display: grid; place-items: center; margin-bottom: 14px; }
+.dg-save-preview img {
+  max-height: 220px; max-width: 100%;
+  border-radius: 8px; border: 1px solid var(--border); background: #fff;
+}
+.modal .actions { margin-top: 14px; }
+.modal .actions .btn { width: 100%; }
+
+/* ---------------- 图片放大 ---------------- */
+.dg-lightbox {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(24, 16, 20, .78);
+  display: grid; place-items: center;
+  padding: 32px; cursor: zoom-out;
+}
+.dg-lightbox img {
+  max-width: 92vw; max-height: 88vh;
+  border-radius: 8px; background: #fff;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .4);
+}

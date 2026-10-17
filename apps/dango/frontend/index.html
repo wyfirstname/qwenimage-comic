@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>团子衣橱 · 捏一个团子，再做一柜子衣服</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23e46a8b'/%3E%3Ctext x='16' y='23' font-size='18' text-anchor='middle' fill='white'%3E%F0%9F%8D%A1%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/web/style.css" />
+<link rel="stylesheet" href="./dango.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🍡</span>
+    <div>
+      <h1>团子衣橱</h1>
+      <p class="sub">捏一个团子，再做一柜子衣服</p>
+    </div>
+  </div>
+  <nav class="mainnav" id="mainNav">
+    <a class="navitem" href="/" title="返回工作台">← 工作台</a>
+  </nav>
+  <div class="status-area">
+    <span id="engineBadge" class="badge badge-mock">加载中…</span>
+    <span id="vramInfo" class="muted">—</span>
+    <button id="btnLoad" class="btn btn-ghost" title="加载模型到显存">加载模型</button>
+    <button id="btnUnload" class="btn btn-ghost" title="释放显存">卸载</button>
+    <button id="btnGuide" class="btn btn-ghost">模型下载</button>
+  </div>
+</header>
+
+<div id="engineNote" class="notice hidden"></div>
+
+<div class="dg-tabs" id="dgTabs">
+  <button class="dg-tab active" data-tab="create"><b>①</b> 捏团子</button>
+  <button class="dg-tab" data-tab="design"><b>②</b> 做衣服</button>
+  <button class="dg-tab" data-tab="room"><b>③</b> 试衣间</button>
+  <span class="spacer"></span>
+  <span class="dg-stats muted" id="dgStats">—</span>
+</div>
+
+<!-- ============================================================
+     ① 捏团子
+     ============================================================ -->
+<section class="dg-pane active" id="pane-create">
+  <main class="layout">
+    <aside class="panel">
+      <section class="field">
+        <label>画风</label>
+        <div class="dg-chips" id="crStyle"></div>
+      </section>
+
+      <section class="field">
+        <label>头身比</label>
+        <div class="segmented" id="crProp"></div>
+        <p class="hint" id="crPropHint"></p>
+      </section>
+
+      <section class="field">
+        <label>发型</label>
+        <select id="crHair"></select>
+      </section>
+
+      <section class="field">
+        <label>发色</label>
+        <select id="crHairColor"></select>
+      </section>
+
+      <section class="field">
+        <label>眼型</label>
+        <select id="crEye"></select>
+      </section>
+
+      <section class="field">
+        <label>瞳色</label>
+        <select id="crEyeColor"></select>
+      </section>
+
+      <section class="field">
+        <label>肤色</label>
+        <select id="crSkin"></select>
+      </section>
+
+      <section class="field">
+        <label>表情</label>
+        <select id="crExpr"></select>
+      </section>
+
+      <section class="field">
+        <div class="field-head">
+          <label>画布</label><span class="muted">越大越慢</span>
+        </div>
+        <div class="segmented" id="crSize"></div>
+      </section>
+
+      <section class="field">
+        <div class="field-head">
+          <label for="crSteps">步数</label>
+          <output id="crStepsVal">8</output>
+        </div>
+        <div class="slider-row">
+          <span class="muted">8</span>
+          <input type="range" id="crSteps" min="4" max="30" step="1" value="8" />
+          <span class="muted">30</span>
+        </div>
+      </section>
+
+      <section class="field">
+        <div class="field-head">
+          <label>生成张数</label><span class="muted">挑一张用</span>
+        </div>
+        <div class="segmented" id="crCount">
+          <button class="seg active" data-n="1">1 张</button>
+          <button class="seg" data-n="2">2 张</button>
+          <button class="seg" data-n="4">4 张</button>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button id="crGo" class="btn btn-primary">捏一个团子</button>
+      </div>
+      <p class="estimate" id="crEstimate">—</p>
+      <p class="error-text hidden" id="crError"></p>
+    </aside>
+
+    <section class="content">
+      <div class="dg-stage-head">
+        <h2>素体预览</h2>
+        <span class="muted">出的是「人台底图」——白色素体，专供后面换装用</span>
+        <span class="spacer"></span>
+        <button class="link-btn" id="crTogglePrompt">看提示词</button>
+      </div>
+
+      <div class="progress-wrap dg-progress hidden" id="crProgressWrap">
+        <div class="progress-bar"><div class="progress-fill" id="crProgressFill"></div></div>
+        <span class="progress-text" id="crProgressText">排队中</span>
+        <button class="btn btn-ghost dg-mini" id="crCancel">中断</button>
+      </div>
+
+      <div class="dg-stage" id="crStage">
+        <div class="empty" id="crEmpty">
+          <div class="empty-icon">🍡</div>
+          <p>还没有团子</p>
+          <p class="muted">左边选好画风、发型、瞳色，点「捏一个团子」</p>
+        </div>
+        <div class="dg-hero hidden" id="crHero">
+          <img id="crHeroImg" alt="素体" />
+        </div>
+      </div>
+
+      <div class="dg-results" id="crResults"></div>
+
+      <div class="dg-prompt hidden" id="crPromptBox">
+        <div class="dg-sections" id="crSections"></div>
+        <textarea id="crPromptText" rows="10" readonly></textarea>
+      </div>
+    </section>
+  </main>
+</section>
+
+<!-- ============================================================
+     ② 做衣服
+     ============================================================ -->
+<section class="dg-pane" id="pane-design">
+  <main class="layout">
+    <aside class="panel">
+      <section class="field">
+        <div class="field-head">
+          <label>穿在哪</label><span class="muted">决定提示词与叠穿顺序</span>
+        </div>
+        <div class="dg-chips" id="dsSlot"></div>
+      </section>
+
+      <section class="field">
+        <label for="dsDesc">这件衣服长什么样</label>
+        <textarea id="dsDesc" rows="6" placeholder="例：奶油白的泡泡袖衬衫，方领，胸前有一排小小的贝壳扣，袖口收紧成小荷叶边，面料是轻薄的棉麻"></textarea>
+        <p class="hint">说清「颜色 + 版型 + 领口袖口 + 细节 + 面料」，比堆形容词管用得多</p>
+      </section>
+
+      <section class="field">
+        <label>画风</label>
+        <div class="dg-chips" id="dsStyle"></div>
+        <p class="hint">要跟团子同一套画风，否则穿上会有贴图感</p>
+      </section>
+
+      <section class="field">
+        <div class="field-head">
+          <label>画布</label><span class="muted">单品图用方图</span>
+        </div>
+        <div class="segmented" id="dsSize"></div>
+      </section>
+
+      <section class="field">
+        <div class="field-head">
+          <label for="dsSteps">步数</label>
+          <output id="dsStepsVal">8</output>
+        </div>
+        <div class="slider-row">
+          <span class="muted">8</span>
+          <input type="range" id="dsSteps" min="4" max="30" step="1" value="8" />
+          <span class="muted">30</span>
+        </div>
+      </section>
+
+      <section class="field">
+        <div class="field-head">
+          <label>生成张数</label><span class="muted">挑一张用</span>
+        </div>
+        <div class="segmented" id="dsCount">
+          <button class="seg active" data-n="1">1 张</button>
+          <button class="seg" data-n="2">2 张</button>
+          <button class="seg" data-n="4">4 张</button>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button id="dsGo" class="btn btn-primary">设计这件衣服</button>
+      </div>
+      <p class="estimate" id="dsEstimate">—</p>
+      <p class="error-text hidden" id="dsError"></p>
+    </aside>
+
+    <section class="content">
+      <div class="dg-stage-head">
+        <h2>单品图</h2>
+        <span class="muted">出的是白底平铺单品图，换装时作为 image_2 喂给模型</span>
+        <span class="spacer"></span>
+        <button class="link-btn" id="dsTogglePrompt">看提示词</button>
+      </div>
+
+      <div class="progress-wrap dg-progress hidden" id="dsProgressWrap">
+        <div class="progress-bar"><div class="progress-fill" id="dsProgressFill"></div></div>
+        <span class="progress-text" id="dsProgressText">排队中</span>
+        <button class="btn btn-ghost dg-mini" id="dsCancel">中断</button>
+      </div>
+
+      <div class="dg-stage" id="dsStage">
+        <div class="empty" id="dsEmpty">
+          <div class="empty-icon">👗</div>
+          <p>衣柜还空着</p>
+          <p class="muted">描述一件衣服，模型会先把它画成白底平铺图</p>
+        </div>
+        <div class="dg-grid-imgs" id="dsResults"></div>
+      </div>
+
+      <div class="dg-prompt hidden" id="dsPromptBox">
+        <div class="dg-sections" id="dsSections"></div>
+        <textarea id="dsPromptText" rows="10" readonly></textarea>
+      </div>
+
+      <div class="dg-wardrobe-strip">
+        <div class="dg-strip-head">
+          <span>衣柜里已有</span><span class="muted" id="dsWardrobeCount"></span>
+        </div>
+        <div class="dg-wardrobe-mini" id="dsWardrobe"></div>
+      </div>
+    </section>
+  </main>
+</section>
+
+<!-- ============================================================
+     ③ 试衣间
+     ============================================================ -->
+<section class="dg-pane" id="pane-room">
+  <main class="dg-room">
+    <!-- 左：团子列表 -->
+    <aside class="panel dg-charlist-panel">
+      <div class="field-head">
+        <label>我的团子</label>
+        <button class="link-btn" id="rmNew">＋ 捏新的</button>
+      </div>
+      <div class="dg-charlist" id="rmCharList"></div>
+    </aside>
+
+    <!-- 中：舞台 -->
+    <section class="content dg-room-stage">
+      <div class="dg-stage-head">
+        <h2 id="rmCharName">试衣间</h2>
+        <span class="pill" id="rmCharProp">—</span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost dg-mini" id="rmUndo" title="回到上一版造型">↶ 上一版</button>
+        <button class="btn btn-ghost dg-mini" id="rmReset" title="脱光回到素体">素体</button>
+        <button class="btn btn-ghost dg-mini" id="rmExport">导出 PNG</button>
+      </div>
+
+      <div class="progress-wrap dg-progress hidden" id="rmProgressWrap">
+        <div class="progress-bar"><div class="progress-fill" id="rmProgressFill"></div></div>
+        <span class="progress-text" id="rmProgressText">排队中</span>
+        <button class="btn btn-ghost dg-mini" id="rmCancel">中断</button>
+      </div>
+
+      <div class="dg-stage dg-room-canvas" id="rmStage">
+        <div class="empty" id="rmEmpty">
+          <div class="empty-icon">🍡</div>
+          <p>先捏一个团子</p>
+          <p class="muted">切到「① 捏团子」，或者点左上角「＋ 捏新的」</p>
+        </div>
+        <div class="dg-hero hidden" id="rmHero">
+          <img id="rmHeroImg" alt="当前造型" />
+          <div class="dg-hero-tag hidden" id="rmHeroTag"></div>
+        </div>
+      </div>
+
+      <!-- 换装结果候选 -->
+      <div class="dg-results dg-results-row" id="rmResults"></div>
+
+      <!-- 造型历史 -->
+      <div class="dg-history">
+        <div class="dg-strip-head">
+          <span>造型历史</span><span class="muted">点缩略图可以直接回到那一版</span>
+        </div>
+        <div class="dg-history-strip" id="rmHistory"></div>
+      </div>
+    </section>
+
+    <!-- 右：衣柜 + 微调 -->
+    <aside class="panel dg-wardrobe-panel">
+      <div class="dg-wardrobe-head">
+        <label>衣柜</label>
+        <span class="muted" id="rmPickCount">未选</span>
+      </div>
+      <div class="dg-slot-filter" id="rmSlotFilter"></div>
+      <div class="dg-wardrobe" id="rmWardrobe"></div>
+      <div class="actions">
+        <button id="rmWear" class="btn btn-primary">穿上（换装）</button>
+      </div>
+      <p class="hint">可多选：一次选上装 + 下装，模型会一次性穿好。单件时按它自己的槽位替换。</p>
+
+      <hr class="dg-hr" />
+      <div class="field">
+        <div class="field-head">
+          <label>微调</label><span class="muted">在当前造型上局部改</span>
+        </div>
+        <select id="rmTweak"></select>
+        <input type="text" id="rmTweakValue" placeholder="填目标值" />
+        <button class="btn btn-secondary" id="rmTweakGo">改一下</button>
+      </div>
+      <p class="error-text hidden" id="rmError"></p>
+    </aside>
+  </main>
+</section>
+
+<!-- 存档弹窗 -->
+<div class="modal-mask hidden" id="saveModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="saveTitle">给它起个名字</h3>
+      <button class="link-btn" id="saveClose">关闭</button>
+    </div>
+    <div class="modal-body">
+      <div class="dg-save-preview"><img id="savePreview" alt="" /></div>
+      <div class="field">
+        <label for="saveName">名字</label>
+        <input type="text" id="saveName" placeholder="例：栗子" />
+      </div>
+      <div class="field" id="saveSlotField">
+        <label>穿在哪</label>
+        <select id="saveSlot"></select>
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" id="saveConfirm">确定</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 模型下载指引 -->
+<div class="modal-mask hidden" id="guideModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>模型下载指引</h3>
+      <button class="link-btn" id="guideClose">关闭</button>
+    </div>
+    <div id="guideBody" class="modal-body">加载中…</div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/web/app.js"></script>
+<script src="./dango.js"></script>
+</body>
+</html>
