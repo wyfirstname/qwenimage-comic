@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     # 小剧场出图步数：融合编辑在 8 步下角色必飘，20 是能稳住脸的底线。
     # 6GB 卡嫌慢可以调到 14～16，但再低一致性会明显变差。
     storyboard_steps: int = 20
+    # 采样偏移：0 = 不覆盖，用模型自带调度（Qwen-Image 2.1 自带 shift=0.69）。
+    # 只有明确要改噪声曲线时才设值；沿用旧模板的 3.1 会让参考图条件被稀释，
+    # 表现为融合编辑后角色不像原图。
+    sampling_shift: float = 0.0
     max_batch: int = 4
     max_pixels: int = 2073600
     infer_timeout_seconds: int = 600

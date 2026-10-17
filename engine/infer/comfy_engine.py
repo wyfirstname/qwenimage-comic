@@ -240,8 +240,19 @@ class ComfyEngine:
                        clip_name=Path(settings.text_encoder_file).name,
                        type="qwen_image", device="default")
         nodes["3"] = g("VAELoader", vae_name=Path(settings.vae_file).name)
-        nodes["4"] = g("ModelSamplingAuraFlow",
-                       model=["1", 0], shift=3.1)
+
+        # ---- 采样偏移（shift）----
+        # Qwen-Image 2.1 在 supported_models.py 里自带 shift=0.69 / multiplier=1.0，
+        # 这是官方按模型调好的 sigma 调度。旧版 Qwen-Image(1.0/2509) 模板里的
+        # 3.1 是给 1.15 基线的，套到 2.1 上等于把噪声曲线整体抬高 4 倍多：
+        # 采样绝大部分步数耗在高噪段，参考图条件被稀释——表现就是「长得不像」。
+        # 因此默认 0 = 不覆盖，直接用模型自带调度；只有在明确要调时才设值。
+        shift = float(getattr(settings, "sampling_shift", 0.0) or 0.0)
+        if shift > 0:
+            nodes["4"] = g("ModelSamplingAuraFlow", model=["1", 0], shift=shift)
+            model_link = ["4", 0]
+        else:
+            model_link = ["1", 0]
 
         if ref_names:
             # ---- Qwen-Image 2.1 原生编辑（多参考图融合）----
@@ -250,19 +261,32 @@ class ComfyEngine:
             # "把 image_2 里的人物放进 image_1 的场景"。
             # 官方采样约定：latent 必须用该节点输出的空 latent（尺寸跟随 image_1），
             # CFG=1、denoise=1；prompt 里用 image_1/image_2… 按序号引用参考图。
-            slots: dict[str, Any] = {}
+            #
+            # ⚠ 输入名必须是「点号拼接的扁平键」images.image_N
+            # ---------------------------------------------------
+            # `images` 在这个节点上是 Autogrow（动态输入），ComfyUI 解析 API
+            # 格式时按 comfy_api/latest/_io.py 的 finalize_prefix() 用 "." 拼出
+            # 每个动态槽位的真名（images.image_1 …）。若写成嵌套字典
+            # images={"image_1": [...]}，展开后的 schema 里根本没有 "images"
+            # 这个键 → execution.get_input_data 直接把整个输入丢掉 → 节点收到
+            # images=None → 参考图一张都没进模型，编辑静默退化成文生图：
+            # 不报错、不告警，每格各画一个人。这正是「角色一致性全乱」的根因。
+            enc: dict[str, Any] = {
+                "clip": ["2", 0],
+                "prompt": prompt,
+                "negative_prompt": negative or "",
+                "vae": ["3", 0],
+                # resolution=0：参考图保持自身尺寸（调用方已按需缩放）。
+                # 不能改成别的采样尺寸，否则编辑会整体偏移（官方文档明确警告）。
+                "resolution": 0,
+            }
             for i, name in enumerate(ref_names, start=1):
                 nid = str(20 + i)  # 21, 22, ...
                 nodes[nid] = g("LoadImage", image=name)
-                slots[f"image_{i}"] = [nid, 0]
-            # resolution=0：参考图保持自身尺寸（调用方已按需缩放）。
-            # 不能改成别的采样尺寸，否则编辑会整体偏移（官方文档明确警告）。
-            nodes["12"] = g("TextEncodeQwenImage21",
-                            clip=["2", 0], prompt=prompt,
-                            negative_prompt=negative or "",
-                            vae=["3", 0], resolution=0, images=slots)
+                enc[f"images.image_{i}"] = [nid, 0]
+            nodes["12"] = {"class_type": "TextEncodeQwenImage21", "inputs": enc}
             nodes["9"] = g("KSampler",
-                           model=["4", 0],
+                           model=model_link,
                            positive=["12", 0],
                            negative=["12", 1],
                            latent_image=["12", 2],
@@ -293,7 +317,7 @@ class ComfyEngine:
             denoise = 1.0
 
         nodes["9"] = g("KSampler",
-                       model=["4", 0],
+                       model=model_link,
                        positive=["5", 0],
                        negative=["6", 0],
                        latent_image=latent,
@@ -457,6 +481,10 @@ class ComfyEngine:
             steps=steps, guidance_scale=guidance_scale, seed=seed,
             ref_name=ref_name, strength=strength, ref_names=ref_names,
         )
+        if ref_names:
+            # 一行可核对的证据：日志里看到这行，才说明参考图真的进了工作流
+            names = ", ".join(f"images.image_{i}" for i in range(1, len(ref_names) + 1))
+            print(f"[engine] 融合编辑：{len(ref_names)} 张参考图 → {names}", flush=True)
         started = time.time()
         prompt_id = self._post_prompt(workflow)
         self._current_prompt_id = prompt_id
