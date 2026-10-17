@@ -149,7 +149,7 @@ def new_voice() -> dict:
 def new_cast() -> dict:
     """定妆照：整部片的角色身份证，后面每一格都以它为 image_1。"""
     return {"status": "none", "image_id": "", "image_url": "", "job_id": "",
-            "prompt": "", "error": ""}
+            "prompt": "", "error": "", "seed": 0}
 
 
 def new_render() -> dict:

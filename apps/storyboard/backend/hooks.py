@@ -47,8 +47,11 @@ def _on_image(payload: dict, result: dict, ok: bool) -> None:
         return
 
     if kind == "cast":
+        # 顺手记下 seed：分镜各格默认沿用同一个噪声起点，能明显压住
+        # 「每次脸都不一样」——融合编辑里除 prompt 之外的随机源就剩这一个。
         store.mutate(pid, store.set_cast(status="ready", image_id=image_id,
                                          image_url=url, image_path=path,
+                                         seed=int((result or {}).get("seed") or 0),
                                          job_id=job_id, error=""))
     elif kind == "shot":
         store.set_beat_image(pid, int(sb.get("index") or 0),

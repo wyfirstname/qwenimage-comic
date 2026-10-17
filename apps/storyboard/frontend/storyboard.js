@@ -227,11 +227,13 @@
     const st = { none: "还没出", imaging: "出图中…", ready: "已就绪 ✓", failed: `失败：${c.error || ""}` };
     $("castState").textContent = st[c.status] || "";
     $("btnCast").disabled = c.status === "imaging";
+    updateShootAllState();
   }
 
   /* ----- 分镜 ----- */
 
   function beatRow(b) {
+    const castReady = ((S.cur.cast || {}).status === "ready");
     const state = {
       empty: ["空", ""], imaging: ["出图中…", "imaging"], ready: ["已出图 ✓", "ready"],
       failed: [`失败：${b.error || ""}`, "failed"],
@@ -273,13 +275,17 @@
         </div>
         <div class="sb-beat-foot">
           <span class="sb-beat-state ${state[1]}">${esc(state[0])}</span>
+          ${b.status === "ready" && b.fusion === false
+            ? `<span class="sb-beat-state failed" title="这一格没走定妆照融合，角色会和别的格不一样">未锁角色</span>`
+            : ""}
           ${b.audio_status === "ready"
             ? `<span class="sb-audio"><audio controls preload="none" src="${esc(b.audio_url)}"></audio>
                  <span class="muted sb-audio-dur">${(b.audio_duration || 0).toFixed(1)}s</span></span>
                <button class="btn btn-ghost sb-voice-one" data-index="${b.index}">重念</button>`
             : `<button class="btn btn-ghost sb-voice-one" data-index="${b.index}"
                  ${b.audio_status === "recording" ? "disabled" : ""}>${b.audio_status === "recording" ? "念中…" : "念这句"}</button>`}
-          <button class="btn btn-ghost sb-shoot" data-index="${b.index}">出这一格</button>
+          <button class="btn btn-ghost sb-shoot" data-index="${b.index}"
+            ${castReady ? "" : `disabled title="先出定妆照"`}>${castReady ? "出这一格" : "先出定妆照"}</button>
         </div>
       </div>
       <div class="sb-beat-img" data-index="${b.index}">${img}</div>
@@ -298,10 +304,13 @@
   }
 
   function updateShootAllState() {
+    const castReady = ((S.cur.cast || {}).status === "ready");
     const anyReady = (S.cur.beats || []).some((b) => b.status === "ready");
     const anyTodo = (S.cur.beats || []).some((b) => b.status !== "ready");
-    $("btnShootAll").disabled = !anyTodo;
-    $("btnShootAll").textContent = anyReady && anyTodo ? "继续出图" : "全部出图";
+    $("btnShootAll").disabled = !anyTodo || !castReady;
+    $("btnShootAll").textContent = !castReady
+      ? "先出定妆照"
+      : (anyReady && anyTodo ? "继续出图" : "全部出图");
   }
 
   function readBeatsFromDom() {
@@ -353,20 +362,26 @@
     try {
       $("btnCast").disabled = true;
       $("castState").textContent = "提交中…";
+      // steps: 0 → 后端用「全局默认 + 4」，定妆照要经得起后面每格的编辑
       await api(`/projects/${S.cur.id}/cast`, {
-        method: "POST", body: JSON.stringify({ steps: 8 }),
+        method: "POST", body: JSON.stringify({ steps: 0 }),
       });
+      toast("定妆照已提交。出好后建议把各格重出一遍，旧图还是按旧角色画的");
       renderCast();
       pollLoop();
     } catch (e) { toast(e.message); renderCast(); }
   }
 
   async function shootOne(index) {
+    if (((S.cur.cast || {}).status) !== "ready") {
+      toast("先出定妆照：分镜每一格都以它锁角色，否则每格都会画成不同的人");
+      return;
+    }
     try {
       // 就地编辑没保存就出图，会画的是旧文案——先替用户存一次
       if (S.beatsDirty) await saveBeats();
       await api(`/projects/${S.cur.id}/shots/${index}`, {
-        method: "POST", body: JSON.stringify({ steps: 8 }),
+        method: "POST", body: JSON.stringify({ steps: 0 }),
       });
       toast(`第 ${index} 格已提交出图`);
       pollLoop();
@@ -374,13 +389,17 @@
   }
 
   async function shootAll() {
+    if (((S.cur.cast || {}).status) !== "ready") {
+      toast("先出定妆照：分镜每一格都以它锁角色，否则每格都会画成不同的人");
+      return;
+    }
     if (S.beatsDirty) await saveBeats();
     const todo = (S.cur.beats || []).filter((b) => b.status !== "ready");
     if (!todo.length) return;
     for (const b of todo) {
       try {
         await api(`/projects/${S.cur.id}/shots/${b.index}`, {
-          method: "POST", body: JSON.stringify({ steps: 8 }),
+          method: "POST", body: JSON.stringify({ steps: 0 }),
         });
       } catch (e) { toast(`第 ${b.index} 格：${e.message}`); break; }
     }
@@ -530,6 +549,15 @@
     const st = { none: "还没出", imaging: "出图中…", ready: "已就绪 ✓", failed: `失败：${c.error || ""}` };
     $("castState").textContent = st[c.status] || "";
     $("btnCast").disabled = c.status === "imaging";
+
+    // 定妆照一就绪，所有「出这一格」立刻解锁；没就绪就锁住并改文案，
+    // 免得用户点下去才发现后端 409
+    const castReady = c.status === "ready";
+    document.querySelectorAll(".sb-shoot").forEach((btn) => {
+      btn.disabled = !castReady;
+      btn.textContent = castReady ? "出这一格" : "先出定妆照";
+    });
+    updateShootAllState();
 
     // beats 状态与图
     (p.beats || []).forEach((b) => {

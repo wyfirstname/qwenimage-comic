@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     default_height: int = 1024
     default_steps: int = 20
     default_guidance: float = 4.0
+    # 小剧场出图步数：融合编辑在 8 步下角色必飘，20 是能稳住脸的底线。
+    # 6GB 卡嫌慢可以调到 14～16，但再低一致性会明显变差。
+    storyboard_steps: int = 20
     max_batch: int = 4
     max_pixels: int = 2073600
     infer_timeout_seconds: int = 600

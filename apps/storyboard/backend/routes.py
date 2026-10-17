@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from engine.sdk import engine, GenerationError
 from shared import repo
+from shared.config import settings
 from shared.models_util import new_id
 
 from apps.storyboard.backend import render, store
@@ -39,6 +40,21 @@ def _bad(exc: Exception) -> HTTPException:
 def _not_found(what: str = "项目") -> HTTPException:
     return HTTPException(status_code=404,
                          detail={"code": "NOT_FOUND", "message": f"{what}不存在"})
+
+
+def _need_cast() -> HTTPException:
+    """缺定妆照时的拦截。
+
+    这不是流程洁癖：分镜每一格都靠定妆照当 image_1 才能锁住角色。
+    跳过它去出图，每格都是独立的文生图，画出来必然是几个不同的人——
+    与其让用户拿到一叠废图再回来问「为什么不一样」，不如在这里挡住。
+    """
+    return HTTPException(
+        status_code=409,
+        detail={"code": "NEED_CAST",
+                "message": "先出定妆照。分镜每一格都以它为唯一角色准绳，"
+                           "跳过这一步角色必然一格格变样。"},
+    )
 
 
 def _load(pid: str) -> dict:
@@ -97,7 +113,9 @@ class RenderIn(BaseModel):
 
 
 class GenIn(BaseModel):
-    steps: int = Field(8, ge=1, le=60)
+    # 0 = 跟随全局默认步数。前端不再硬编码 8——8 步做融合编辑，
+    # 角色的脸和头发每格都会变，这正是「一致性乱」的主因之一。
+    steps: int = Field(0, ge=0, le=60)
     seed: int = -1
 
 
@@ -353,7 +371,10 @@ async def _submit(payload: dict) -> dict:
 @router.post("/projects/{pid}/cast", summary="出定妆照（角色身份证）")
 async def make_cast(pid: str, req: GenIn):
     p = _load(pid)
-    payload = svc.payload_cast(p, steps=req.steps, seed=req.seed)
+    # 定妆照是后面每一格的编辑母版，步数要给足：比普通格多 4 步。
+    # 母版本身细节不稳，后面再怎么融合都救不回来。
+    steps = req.steps or (int(settings.storyboard_steps) + 4)
+    payload = svc.payload_cast(p, steps=steps, seed=req.seed)
     payload["storyboard"] = {"pid": pid, "kind": "cast"}
     store.mutate(pid, store.set_cast(status="imaging", error="",
                                      prompt=payload["prompt"]))
@@ -372,12 +393,17 @@ async def make_shot(pid: str, index: int, req: GenIn):
     if not (beat.get("action") or "").strip() and not (beat.get("narration") or "").strip():
         raise _bad(StoryboardError("这一格还没有画面描述，先写一句动作"))
 
-    cast_image = None
-    if (p.get("cast") or {}).get("status") == "ready":
-        cast_image = p["cast"]
+    cast = p.get("cast") or {}
+    if cast.get("status") != "ready":
+        raise _need_cast()
+    cast_image = cast
+    # 用户没指定 seed 时沿用定妆照的：同一噪声起点 + 同一张 image_1，
+    # 各格之间就不会各自随机长出一张新脸。
+    seed = req.seed if req.seed >= 0 else int(cast.get("seed") or -1)
 
     payload, info = svc.payload_shot(p, beat, cast_image=cast_image,
-                                     steps=req.steps, seed=req.seed)
+                                     steps=req.steps or int(settings.storyboard_steps),
+                                     seed=seed)
     payload["storyboard"] = {"pid": pid, "kind": "shot", "index": index}
     store.set_beat_image(pid, index, status="imaging", error="", job_id="",
                          prompt=info["prompt"], fusion=info.get("fusion", False))

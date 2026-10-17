@@ -372,7 +372,7 @@ def image_to_data_url(record: dict) -> str:
     return f"data:{mime};base64,{base64.b64encode(p.read_bytes()).decode()}"
 
 
-def payload_cast(project: dict, *, steps: int = 8, seed: int = -1) -> dict:
+def payload_cast(project: dict, *, steps: int = 20, seed: int = -1) -> dict:
     """定妆照：整部片的角色身份证。"""
     style = stylelib.style_id_of(project.get("style"))
     built = shotlib.cast_prompt(style, subject=str(project.get("subject") or ""))
@@ -382,7 +382,7 @@ def payload_cast(project: dict, *, steps: int = 8, seed: int = -1) -> dict:
 
 
 def payload_shot(project: dict, beat: dict, *, cast_image: Optional[dict] = None,
-                 steps: int = 8, seed: int = -1) -> tuple[dict, dict]:
+                 steps: int = 20, seed: int = -1) -> tuple[dict, dict]:
     """单格首帧。返回 (payload, info)。
 
     有定妆照 → fusion 编辑（稳）；没有 → 文生图（能跑，但角色会飘）。
