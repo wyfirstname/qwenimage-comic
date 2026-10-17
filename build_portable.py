@@ -248,6 +248,72 @@ def write_scripts() -> None:
         encoding="ascii", errors="strict",
     )
 
+    _write(STAGE / "run_platform.bat", 
+        "@echo off\r\n"
+        "rem Platform mode: portal + all apps + engine in ONE process.\r\n"
+        "rem Same as start.bat (port check + .env bootstrap included).\r\n"
+        "cd /d \"%~dp0\"\r\n"
+        "call start.bat\r\n",
+        encoding="ascii", errors="strict",
+    )
+
+    _write(STAGE / "run_app.bat", 
+        "@echo off\r\n"
+        "setlocal\r\n"
+        "cd /d \"%~dp0\"\r\n"
+        "\r\n"
+        "rem Run ONE app standalone (no portal, engine in that process)\r\n"
+        "set APPID=%~1\r\n"
+        "if \"%APPID%\"==\"\" (\r\n"
+        "  echo Usage: run_app.bat ^<imagegen^|comic^|portrait^|dango^>\r\n"
+        "  pause\r\n"
+        "  exit /b 1\r\n"
+        ")\r\n"
+        "if not exist \"apps\\%APPID%\\manifest.json\" (\r\n"
+        "  echo [ERROR] unknown app: %APPID%\r\n"
+        "  pause\r\n"
+        "  exit /b 1\r\n"
+        ")\r\n"
+        "if not exist \"runtime\\python\\python.exe\" (\r\n"
+        "  echo [ERROR] runtime not found.\r\n"
+        "  pause\r\n"
+        "  exit /b 1\r\n"
+        ")\r\n"
+        "\r\n"
+        "set PORT=8101\r\n"
+        "if /i \"%APPID%\"==\"comic\"    set PORT=8102\r\n"
+        "if /i \"%APPID%\"==\"portrait\" set PORT=8103\r\n"
+        "if /i \"%APPID%\"==\"dango\"    set PORT=8104\r\n"
+        "\r\n"
+        "echo [app:%APPID%] open http://127.0.0.1:%PORT%\r\n"
+        "\"runtime\\python\\python.exe\" -m uvicorn apps.%APPID%.backend.routes:create_app --factory --host 127.0.0.1 --port %PORT%\r\n"
+        "echo.\r\n"
+        "echo Server stopped.\r\n"
+        "pause\r\n",
+        encoding="ascii", errors="strict",
+    )
+
+    _write(STAGE / "run_engine.bat", 
+        "@echo off\r\n"
+        "setlocal\r\n"
+        "cd /d \"%~dp0\"\r\n"
+        "\r\n"
+        "rem Engine as its own process. Clients need ENGINE_TRANSPORT=http\r\n"
+        "rem and ENGINE_URL=http://127.0.0.1:8189 in .env\r\n"
+        "if not exist \"runtime\\python\\python.exe\" (\r\n"
+        "  echo [ERROR] runtime not found.\r\n"
+        "  pause\r\n"
+        "  exit /b 1\r\n"
+        ")\r\n"
+        "\r\n"
+        "echo [engine] status: http://127.0.0.1:8189/engine/v1/status\r\n"
+        "\"runtime\\python\\python.exe\" -m uvicorn engine.serve:app --host 127.0.0.1 --port 8189\r\n"
+        "echo.\r\n"
+        "echo Engine stopped.\r\n"
+        "pause\r\n",
+        encoding="ascii", errors="strict",
+    )
+
     _write(STAGE / "download_models.bat", 
         "@echo off\r\n"
         "setlocal\r\n"
@@ -265,35 +331,38 @@ def write_scripts() -> None:
         encoding="ascii", errors="strict",
     )
 
-    _write(STAGE / "scripts" / "download_models.py", 
-        "# -*- coding: utf-8 -*-\n"
-        '"""Download the three required model files (~14.6 GB, resumable)."""\n'
-        "import os\n"
-        "from pathlib import Path\n"
-        "\n"
-        "from huggingface_hub import hf_hub_download\n"
-        "\n"
-        "REPO = 'abenzerps/Qwen-Image-2.1-Uncensored-GGUF'\n"
-        "FILES = [\n"
-        "    'qwen-image-2.1-UC-Q4_K_M.gguf',\n"
-        "    'text_encoders/qwen3vl_8b_int8_convrot.safetensors',\n"
-        "    'vae/qwen_image_2.1_vae_bf16.safetensors',\n"
-        "]\n"
-        "\n"
-        "def main():\n"
-        "    root = Path(__file__).resolve().parents[1]\n"
-        "    out = root / 'models' / 'qwen-image-2.1-unc'\n"
-        "    out.mkdir(parents=True, exist_ok=True)\n"
-        "    for f in FILES:\n"
-        "        print(f'>>> {f}', flush=True)\n"
-        "        p = hf_hub_download(repo_id=REPO, filename=f, local_dir=out)\n"
-        "        print(f'    done: {os.path.getsize(p)/1024**3:.2f} GB', flush=True)\n"
-        "    print('All files ready. Start the app with start.bat')\n"
-        "\n"
-        "if __name__ == '__main__':\n"
-        "    main()\n",
-        encoding="utf-8",
-    )
+    # 仓库里的 scripts/download_models.py 才是权威版本（注释更全、与 .env 联动更细）；
+    # 构建时已由 robocopy 带过来，这里只在缺失时补一个最小实现兜底，避免覆盖。
+    if not (STAGE / "scripts" / "download_models.py").exists():
+        _write(STAGE / "scripts" / "download_models.py",
+            "# -*- coding: utf-8 -*-\n"
+            '"""Download the three required model files (~14.6 GB, resumable)."""\n'
+            "import os\n"
+            "from pathlib import Path\n"
+            "\n"
+            "from huggingface_hub import hf_hub_download\n"
+            "\n"
+            "REPO = 'abenzerps/Qwen-Image-2.1-Uncensored-GGUF'\n"
+            "FILES = [\n"
+            "    'qwen-image-2.1-UC-Q4_K_M.gguf',\n"
+            "    'text_encoders/qwen3vl_8b_int8_convrot.safetensors',\n"
+            "    'vae/qwen_image_2.1_vae_bf16.safetensors',\n"
+            "]\n"
+            "\n"
+            "def main():\n"
+            "    root = Path(__file__).resolve().parents[1]\n"
+            "    out = root / 'models' / 'qwen-image-2.1-unc'\n"
+            "    out.mkdir(parents=True, exist_ok=True)\n"
+            "    for f in FILES:\n"
+            "        print(f'>>> {f}', flush=True)\n"
+            "        p = hf_hub_download(repo_id=REPO, filename=f, local_dir=out)\n"
+            "        print(f'    done: {os.path.getsize(p)/1024**3:.2f} GB', flush=True)\n"
+            "    print('All files ready. Start the app with start.bat')\n"
+            "\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n",
+            encoding="utf-8",
+        )
 
     _write(STAGE / ".env.example", 
         "# QwenImages Portable configuration\r\n"
@@ -302,6 +371,13 @@ def write_scripts() -> None:
         "\r\n"
         "HOST=127.0.0.1\r\n"
         "PORT=8000\r\n"
+        "\r\n"
+        "# Engine transport: inproc = in the same process (fastest, default)\r\n"
+        "#                   http   = connect to a standalone engine at ENGINE_URL\r\n"
+        "# Single-app mode (run_app.bat) listens on APP_PORT\r\n"
+        "ENGINE_TRANSPORT=inproc\r\n"
+        "ENGINE_URL=http://127.0.0.1:8189\r\n"
+        "APP_PORT=8000\r\n"
         "\r\n"
         "# ComfyUI engine\r\n"
         "COMFYUI_URL=http://127.0.0.1:8188\r\n"
@@ -327,6 +403,12 @@ def write_scripts() -> None:
         "MAX_PIXELS=2361960\r\n"
         "INFER_TIMEOUT_SECONDS=3600\r\n"
         "MAX_QUEUE_SIZE=20\r\n"
+        "\r\n"
+        "# Local text model (comic studio: script / character / scene extraction)\r\n"
+        "# Reuses the Qwen3-VL-8B text encoder shipped with Qwen-Image, no extra download\r\n"
+        "LLM_ENABLED=true\r\n"
+        "LLM_MAX_LENGTH=768\r\n"
+        "LLM_TIMEOUT_SECONDS=1800\r\n"
         "\r\n"
         "DEVICE=cuda:0\r\n"
         "DTYPE=float16\r\n"
@@ -362,6 +444,20 @@ def write_scripts() -> None:
   models/           模型权重（由 download_models.bat 填充）
   data/             生成的图片与数据库（你的数据，可整目录备份）
   .env              配置文件（首次启动自动从 .env.example 生成）
+
+  portal/           平台外壳：卡片墙、按 manifest 自动发现并挂载应用
+  apps/             业务应用（各自自包含：manifest + backend + frontend）
+                      comic     漫画工作室（剧本 → 分镜 → 出图 → 拼页）
+                      imagegen  单张出图
+                      portrait  人像 / 换装
+                      dango     团子衣橱（Q 版捏人 + 衣柜 + 试衣间）
+  engine/           模型能力层：ComfyUI 通道、任务调度、卡死恢复
+  shared/           公共层：配置 / 数据库 / 静态资源 / 画风库
+
+  三种启动方式（都在根目录）：
+    start.bat 或 run_platform.bat   门户一体启动（推荐，四个应用共用引擎）
+    run_app.bat                     只起某一个应用（独立端口，省显存）
+    run_engine.bat                  引擎单独跑一个进程，门户用 ENGINE_TRANSPORT=http 连
 
 四、硬件要求
   NVIDIA 显卡。本包默认按 16GB 显存调优（1024 / 24 步）：
