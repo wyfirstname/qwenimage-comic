@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>团子小剧场 · 一句话，一条片</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235b8def'/%3E%3Ctext x='16' y='23' font-size='17' text-anchor='middle' fill='white'%3E%F0%9F%8E%AC%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/web/style.css" />
+<link rel="stylesheet" href="./storyboard.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🎬</span>
+    <div>
+      <h1>团子小剧场</h1>
+      <p class="sub">一句话进去，一条竖屏小片出来</p>
+    </div>
+  </div>
+  <nav class="mainnav" id="mainNav">
+    <a class="navitem" href="/" title="返回工作台">← 工作台</a>
+  </nav>
+  <div class="status-area">
+    <span id="engineBadge" class="badge badge-mock">加载中…</span>
+    <span id="vramInfo" class="muted">—</span>
+    <button id="btnLoad" class="btn btn-ghost" title="加载模型到显存">加载模型</button>
+    <button id="btnUnload" class="btn btn-ghost" title="释放显存">卸载</button>
+  </div>
+</header>
+
+<div id="engineNote" class="notice hidden"></div>
+
+<main class="sb-shell">
+  <!-- ================= 项目列表 ================= -->
+  <aside class="panel sb-side">
+    <button id="btnNew" class="btn btn-primary sb-newbtn">＋ 新建小片</button>
+    <div id="projList" class="sb-projlist"><div class="muted sb-tip">加载中…</div></div>
+  </aside>
+
+  <!-- ================= 主工作区 ================= -->
+  <section class="sb-work" id="sbWork">
+    <!-- 空态 / 新建表单 -->
+    <div class="panel sb-newform" id="paneNew">
+      <h2>开一个新小片</h2>
+      <p class="muted">用一句话描述你想拍什么。写具体点：谁、在哪、发生了什么。</p>
+      <section class="field">
+        <label>选题 <span class="muted">（一句话）</span></label>
+        <textarea id="npTopic" rows="3" maxlength="500"
+          placeholder="例如：一只团子第一次见到雪。它伸出手，雪化了。它决定把雪藏进口袋里"></textarea>
+      </section>
+      <div class="sb-grid3">
+        <section class="field">
+          <label>画风</label>
+          <select id="npStyle"></select>
+          <p class="muted sb-hint" id="npStyleHint"></p>
+        </section>
+        <section class="field">
+          <label>叙事模板</label>
+          <select id="npPreset"></select>
+          <p class="muted sb-hint" id="npPresetHint"></p>
+        </section>
+        <section class="field">
+          <label>画幅 / 时长</label>
+          <div class="sb-row">
+            <select id="npAspect"></select>
+            <select id="npSeconds"></select>
+          </div>
+        </section>
+      </div>
+      <details class="sb-more">
+        <summary>更多设定（角色、调性、补充要求）</summary>
+        <div class="sb-grid3 sb-moret">
+          <section class="field">
+            <label>主角描述 <span class="muted">（留空用画风默认）</span></label>
+            <input id="npSubject" maxlength="200" placeholder="例如：戴贝雷帽的奶茶色团子" />
+          </section>
+          <section class="field">
+            <label>调性</label>
+            <input id="npTone" maxlength="80" placeholder="例如：治愈、慢节奏" />
+          </section>
+          <section class="field">
+            <label>补充要求</label>
+            <input id="npExtra" maxlength="300" placeholder="例如：结尾要出现彩虹" />
+          </section>
+        </div>
+        <label class="sb-check"><input type="checkbox" id="npUseLLM" checked />
+          用本地模型写分镜（更贴选题；规则生成更快但更平庸）</label>
+      </details>
+      <div class="sb-actions">
+        <button id="btnCreate" class="btn btn-primary">创建并生成分镜</button>
+        <span class="muted" id="npLlmState"></span>
+      </div>
+    </div>
+
+    <!-- 项目工作台 -->
+    <div id="paneProj" class="hidden">
+      <!-- 项目头 -->
+      <div class="panel sb-head">
+        <div class="sb-headrow">
+          <div class="sb-headtitle">
+            <h2 id="pjTitle">—</h2>
+            <span class="muted" id="pjMeta"></span>
+          </div>
+          <div class="sb-headbtns">
+            <button id="btnDel" class="btn btn-ghost btn-danger-ghost">删除</button>
+          </div>
+        </div>
+        <p class="sb-topic" id="pjTopic"></p>
+        <details class="sb-more" id="pjSettings">
+          <summary>修改设定（画风 / 模板 / 时长 / 主角）</summary>
+          <div class="sb-grid3 sb-moret">
+            <section class="field"><label>画风</label><select id="pjStyle"></select></section>
+            <section class="field"><label>叙事模板</label><select id="pjPreset"></select></section>
+            <section class="field"><label>时长（秒）</label><select id="pjSeconds"></select></section>
+            <section class="field sb-span2"><label>主角描述</label>
+              <input id="pjSubject" maxlength="200" /></section>
+            <section class="field"><label>角色锁 <span class="muted">（可留空）</span></label>
+              <input id="pjLock" maxlength="300" placeholder="补充给每一格的角色约束" /></section>
+          </div>
+          <div class="sb-actions">
+            <button id="btnSaveSettings" class="btn">保存设定</button>
+            <button id="btnRewrite" class="btn btn-primary">让本地模型重写分镜</button>
+            <span class="muted" id="pjRewriteState"></span>
+          </div>
+        </details>
+      </div>
+
+      <!-- 定妆照 -->
+      <div class="panel sb-cast">
+        <div class="sb-castinfo">
+          <h3>角色定妆照</h3>
+          <p class="muted sb-hint">先出一张定妆照，后面每一格都以它为准——这是整部片「像同一个角色」的关键。</p>
+          <div class="sb-actions">
+            <button id="btnCast" class="btn">出定妆照</button>
+            <span class="muted" id="castState"></span>
+          </div>
+        </div>
+        <div class="sb-castimg"><img id="castImg" alt="" class="hidden" /><div id="castEmpty" class="sb-emptyimg">还没出</div></div>
+      </div>
+
+      <!-- 分镜 -->
+      <div class="panel sb-beatspanel">
+        <div class="sb-beatshead">
+          <h3>分镜 <span class="muted" id="beatsCount"></span></h3>
+          <div class="sb-headbtns">
+            <button id="btnAddBeat" class="btn btn-ghost">＋ 加一格</button>
+            <button id="btnSaveBeats" class="btn">保存修改</button>
+            <button id="btnShootAll" class="btn btn-primary">全部出图</button>
+          </div>
+        </div>
+        <p class="muted" id="beatsNote"></p>
+        <div id="beatsList" class="sb-beats"></div>
+      </div>
+
+      <!-- 渲染 -->
+      <div class="panel sb-render">
+        <div class="sb-beatshead">
+          <h3>成片</h3>
+          <div class="sb-headbtns">
+            <label class="sb-check"><input type="checkbox" id="renderSubs" checked /> 烧字幕</label>
+            <button id="btnRender" class="btn btn-primary">渲染成片</button>
+          </div>
+        </div>
+        <div class="sb-progress hidden" id="renderProgWrap">
+          <div class="progress"><div class="progress-fill" id="renderProg"></div></div>
+          <span class="muted" id="renderMsg"></span>
+        </div>
+        <div id="renderResult" class="hidden">
+          <video id="renderVideo" controls playsinline class="sb-video"></video>
+          <p class="muted" id="renderInfo"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/web/app.js"></script>
+<script src="./storyboard.js"></script>
+</body>
+</html>

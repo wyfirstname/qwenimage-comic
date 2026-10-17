@@ -1,0 +1,11 @@
+{
+  "id": "storyboard",
+  "name": "团子小剧场",
+  "icon": "🎬",
+  "description": "一句话进去，一条竖屏小片出来",
+  "version": "1.0.0",
+  "api_prefix": "/api/v1/storyboard",
+  "entry": "/apps/storyboard/",
+  "standalone_port": 8105,
+  "capabilities": ["txt2img", "img2img", "textgen", "render"]
+}

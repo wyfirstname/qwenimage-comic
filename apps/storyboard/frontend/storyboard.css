@@ -1,0 +1,141 @@
+/* ============================================================
+   团子小剧场 —— 样式（sb- 前缀隔离，配色复用 /web/style.css 变量）
+   ============================================================ */
+
+.sb-shell {
+  display: flex;
+  gap: 14px;
+  padding: 14px;
+  max-width: 1500px;
+  margin: 0 auto;
+  align-items: flex-start;
+}
+
+/* ---------- 左栏：项目列表 ---------- */
+.sb-side {
+  width: 240px;
+  flex: none;
+  padding: 12px;
+  position: sticky;
+  top: 14px;
+  max-height: calc(100vh - 28px);
+  overflow: auto;
+}
+.sb-newbtn { width: 100%; }
+.sb-projlist { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.sb-proj {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 10px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.sb-proj:hover { border-color: var(--accent); }
+.sb-proj.active { border-color: var(--accent); background: var(--accent-soft, rgba(91,141,239,.08)); }
+.sb-proj-title { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-proj-meta { font-size: 11px; color: var(--text-3); margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; }
+.sb-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--border); }
+.sb-dot.ready { background: #34b26b; }
+.sb-dot.busy { background: #e8a13c; }
+.sb-dot.failed { background: #d9534f; }
+.sb-tip { padding: 8px 2px; }
+
+/* ---------- 右侧主区 ---------- */
+.sb-work { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.sb-work > .panel { padding: 16px 18px; }
+
+.sb-newform h2, .sb-headtitle h2 { margin: 0 0 4px; font-size: 18px; }
+.sb-grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.sb-row { display: flex; gap: 8px; }
+.sb-row select { flex: 1; min-width: 0; }
+.sb-hint { font-size: 11px; margin: 4px 0 0; }
+.sb-more { margin-top: 10px; }
+.sb-more > summary { cursor: pointer; color: var(--text-3); font-size: 13px; user-select: none; }
+.sb-moret { margin-top: 10px; }
+.sb-span2 { grid-column: span 2; }
+.sb-actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+.sb-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+
+/* ---------- 项目头 ---------- */
+.sb-headrow { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.sb-headtitle { min-width: 0; }
+.sb-headtitle h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-headbtns { display: flex; gap: 8px; align-items: center; flex: none; flex-wrap: wrap; }
+.sb-topic { color: var(--text-2); font-size: 13px; margin: 2px 0 0; }
+.btn-danger-ghost:hover { border-color: #d9534f; color: #d9534f; }
+
+/* ---------- 定妆照 ---------- */
+.sb-cast { display: flex; gap: 16px; align-items: stretch; }
+.sb-castinfo { flex: 1; min-width: 0; }
+.sb-castinfo h3, .sb-beatspanel h3, .sb-render h3 { margin: 0 0 4px; font-size: 15px; }
+.sb-castimg {
+  width: 148px; flex: none; aspect-ratio: 9 / 16;
+  border: 1px dashed var(--border); border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; background: var(--bg-2, rgba(127,127,127,.06));
+}
+.sb-castimg img { width: 100%; height: 100%; object-fit: cover; }
+.sb-emptyimg { color: var(--text-3); font-size: 12px; }
+
+/* ---------- 分镜 ---------- */
+.sb-beatshead { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sb-beats { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+.sb-beat {
+  display: flex; gap: 14px;
+  border: 1px solid var(--border); border-radius: 12px; padding: 12px;
+}
+.sb-beat.no { width: 30px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.sb-beat-no {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; flex: none;
+}
+.sb-beat-tag { writing-mode: vertical-lr; font-size: 11px; color: var(--text-3); letter-spacing: 2px; }
+.sb-beat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.sb-beat-row { display: flex; gap: 8px; }
+.sb-beat-row > * { min-width: 0; }
+.sb-beat textarea, .sb-beat input, .sb-beat select {
+  width: 100%; box-sizing: border-box; font-size: 12.5px;
+}
+.sb-beat textarea { resize: vertical; min-height: 34px; }
+.sb-lab { font-size: 11px; color: var(--text-3); margin-bottom: 2px; display: block; }
+.sb-beat-ctrls { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.sb-beat-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.sb-beat-state { font-size: 11px; color: var(--text-3); }
+.sb-beat-state.ready { color: #34b26b; }
+.sb-beat-state.failed { color: #d9534f; }
+.sb-beat-state.imaging { color: #e8a13c; }
+
+.sb-beat-img {
+  width: 132px; flex: none; align-self: stretch;
+  border-radius: 10px; border: 1px solid var(--border);
+  background: var(--bg-2, rgba(127,127,127,.06));
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; min-height: 160px; cursor: zoom-in;
+}
+.sb-beat-img img { width: 100%; height: 100%; object-fit: cover; }
+.sb-beat-img .sb-emptyimg { font-size: 11px; }
+
+/* ---------- 渲染 ---------- */
+.sb-video { width: 100%; max-width: 420px; aspect-ratio: 9 / 16; border-radius: 12px; background: #000; display: block; }
+.sb-progress { margin: 10px 0; display: flex; align-items: center; gap: 10px; }
+.sb-progress .progress { flex: 1; max-width: 420px; }
+
+.hidden { display: none !important; }
+
+/* ---------- 大图预览 ---------- */
+.sb-lightbox {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center;
+  cursor: zoom-out;
+}
+.sb-lightbox img { max-width: 86vw; max-height: 88vh; border-radius: 12px; box-shadow: 0 12px 48px rgba(0,0,0,.4); }
+
+@media (max-width: 980px) {
+  .sb-shell { flex-direction: column; }
+  .sb-side { width: 100%; position: static; max-height: none; }
+  .sb-grid3 { grid-template-columns: 1fr; }
+  .sb-span2 { grid-column: span 1; }
+}
