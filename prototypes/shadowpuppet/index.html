@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>皮影雅集 · 3D 展示原型 v0.1</title>
+<style>
+  html,body{margin:0;height:100%;background:#0d0906;overflow:hidden;
+    font-family:"Noto Serif SC","Songti SC",serif;}
+  #c{display:block;width:100%;height:100%;cursor:grab}
+  #c.grabbing{cursor:grabbing}
+  .panel{position:fixed;left:24px;top:22px;color:#e8d9b8;user-select:none;pointer-events:none}
+  .panel h1{margin:0 0 4px;font-size:22px;font-weight:600;letter-spacing:6px;color:#f3e3bd}
+  .panel p{margin:2px 0;font-size:12.5px;color:#a8977a;letter-spacing:1px}
+  .hud{position:fixed;right:24px;bottom:22px;display:flex;gap:10px}
+  .hud button{appearance:none;border:1px solid #6b5334;background:#1c1409;color:#e8d9b8;
+    padding:9px 18px;font-size:14px;letter-spacing:3px;border-radius:4px;cursor:pointer;
+    font-family:inherit;transition:background .15s}
+  .hud button:hover{background:#2b1e0e}
+  .hud button.on{background:#5a3a17;border-color:#8a6a3a}
+  #tip{position:fixed;left:24px;bottom:22px;color:#7d6c4f;font-size:12px;letter-spacing:1px;pointer-events:none}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="panel">
+  <h1>皮影雅集</h1>
+  <p>2.5D 分层 · 关节骨骼 · 透光渲染 —— 原型 v0.1</p>
+</div>
+<div id="tip">拖动三根签子表演：中间长签移动全身，两根短签操纵双手 · 空白处移动鼠标可轻转视角</div>
+<div class="hud">
+  <button id="btnDemo">自动开演</button>
+  <button id="btnReset">复位</button>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ================================================================
+ * 0. 常量与调色
+ * 皮影质感三要素：半透明皮色、镂空雕花（透光多）、深色勾边。
+ * 全部部件用 canvas 2D 程序化绘制，无外部素材。
+ * ================================================================ */
+const TEX = 200;                       // 每世界单位多少像素
+const OUTLINE = 'rgba(52,20,8,0.92)';  // 勾边
+const HIDES = {
+  red:   'rgba(178,52,38,0.58)',
+  green: 'rgba(46,118,84,0.55)',
+  amber: 'rgba(203,142,42,0.55)',
+  face:  'rgba(214,160,96,0.62)',
+};
+
+/* ---------- 小工具：镂空雕花 ---------- */
+function cutCircle(ctx, x, y, r, a = 0.75) {
+  ctx.save(); ctx.globalCompositeOperation = 'destination-out'; ctx.globalAlpha = a;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+}
+function cutFlower(ctx, cx, cy, R, petals = 6, a = 0.7) {
+  for (let i = 0; i < petals; i++) {
+    const t = (i / petals) * Math.PI * 2;
+    cutCircle(ctx, cx + Math.cos(t) * R * 0.62, cy + Math.sin(t) * R * 0.62, R * 0.34, a);
+  }
+  cutCircle(ctx, cx, cy, R * 0.3, a);
+}
+function cutMoon(ctx, x, y, r, a = 0.7) {       // 月牙雕缝
+  ctx.save(); ctx.globalCompositeOperation = 'destination-out'; ctx.globalAlpha = a;
+  ctx.beginPath(); ctx.arc(x, y, r, 0.15 * Math.PI, 0.95 * Math.PI); ctx.lineWidth = r * 0.32;
+  ctx.strokeStyle = '#000'; ctx.stroke(); ctx.restore();
+}
+function stroke(ctx, path, w = 5) {
+  ctx.save(); ctx.globalAlpha = 0.92; ctx.strokeStyle = OUTLINE; ctx.lineWidth = w;
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round'; path(); ctx.stroke(); ctx.restore();
+}
+function fill(ctx, path, color) {
+  ctx.fillStyle = color; ctx.beginPath(); path(); ctx.fill();
+}
+
+/* ================================================================
+ * 1. 部件绘制（局部坐标：pivot 在画布内的像素位置）
+ * ================================================================ */
+function makePart(wWorld, hWorld, pivot, draw) {
+  const w = Math.round(wWorld * TEX), h = Math.round(hWorld * TEX);
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d');
+  draw(ctx, w, h);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.anisotropy = 4; tex.colorSpace = THREE.SRGBColorSpace;
+  return { tex, w, h, pivot, wWorld, hWorld };
+}
+
+/* ---- 头茬：正侧面 + 冠饰 + 雕花 ---- */
+function drawHead(ctx) {
+  // 脸（朝左的正侧面）
+  const face = () => { ctx.moveTo(96, 30);
+    ctx.bezierCurveTo(52, 26, 30, 58, 34, 92);        // 额头→鼻梁
+    ctx.bezierCurveTo(36, 104, 28, 108, 30, 114);     // 鼻尖
+    ctx.bezierCurveTo(40, 122, 40, 128, 36, 134);     // 唇
+    ctx.bezierCurveTo(48, 156, 78, 166, 102, 160);    // 下巴→颌
+    ctx.bezierCurveTo(118, 120, 118, 66, 96, 30); };  // 后脑
+  fill(ctx, face, HIDES.face);
+  cutMoon(ctx, 62, 88, 9);                             // 眼
+  cutMoon(ctx, 58, 126, 6);                            // 唇缝
+  cutFlower(ctx, 96, 92, 26, 6);                       // 鬓边雕花
+  stroke(ctx, face, 5);
+  // 冠饰（顶部花冠）
+  const crown = () => { ctx.moveTo(78, 34);
+    ctx.bezierCurveTo(70, 8, 96, -6, 116, 2);
+    ctx.bezierCurveTo(138, -4, 152, 14, 142, 32);
+    ctx.bezierCurveTo(150, 44, 132, 58, 116, 50);
+    ctx.bezierCurveTo(100, 62, 84, 52, 78, 34); };
+  fill(ctx, crown, HIDES.red);
+  cutFlower(ctx, 112, 24, 18, 5);
+  stroke(ctx, crown, 5);
+  // 后脑翎子（两根飘羽）
+  ctx.save(); ctx.strokeStyle = 'rgba(178,52,38,0.8)'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  for (const dy of [-8, 6]) {
+    ctx.beginPath(); ctx.moveTo(138, 26 + dy);
+    ctx.bezierCurveTo(166, 8 + dy, 184, -14 + dy, 208, -18 + dy); ctx.stroke();
+    cutCircle(ctx, 176, -6 + dy, 3, 0.9);
+  }
+  ctx.restore();
+  // 颈托
+  const neck = () => { ctx.moveTo(84, 158); ctx.lineTo(124, 158); ctx.lineTo(116, 178);
+    ctx.lineTo(92, 178); ctx.closePath(); };
+  fill(ctx, neck, HIDES.amber); stroke(ctx, neck, 4);
+}
+
+/* ---- 身段：袍 + 团花 + 腰带 ---- */
+function drawTorso(ctx) {
+  const robe = () => { ctx.moveTo(110, 14);                       // 领口
+    ctx.bezierCurveTo(58, 18, 30, 60, 34, 118);                   // 左肩→腰
+    ctx.bezierCurveTo(24, 210, 12, 280, 6, 330);                  // 左摆
+    ctx.lineTo(214, 330);                                         // 下摆
+    ctx.bezierCurveTo(208, 280, 196, 210, 186, 118);              // 右摆→腰
+    ctx.bezierCurveTo(190, 60, 162, 18, 110, 14); };              // 右肩
+  fill(ctx, robe, HIDES.red);
+  cutFlower(ctx, 74, 150, 34, 7);                                 // 左团花
+  cutFlower(ctx, 150, 150, 34, 7);                                // 右团花
+  cutFlower(ctx, 110, 244, 30, 6);                                // 腹团花
+  // 下摆雕缝
+  for (let i = 0; i < 5; i++) cutMoon(ctx, 40 + i * 34, 296, 11, 0.65);
+  stroke(ctx, robe, 6);
+  // 腰带
+  const belt = () => { ctx.rect(34, 168, 152, 22); };
+  fill(ctx, belt, HIDES.amber);
+  for (let i = 0; i < 6; i++) cutCircle(ctx, 52 + i * 24, 179, 4, 0.8);
+  stroke(ctx, belt, 4);
+  // 衣领
+  const collar = () => { ctx.moveTo(96, 16); ctx.lineTo(124, 16); ctx.lineTo(118, 60);
+    ctx.lineTo(102, 60); ctx.closePath(); };
+  fill(ctx, collar, HIDES.green); stroke(ctx, collar, 4);
+}
+
+/* ---- 上臂 / 前臂（袖口外扩，皮影典型窄袖）---- */
+function drawUpperArm(ctx) {
+  const arm = () => { ctx.moveTo(26, 10);
+    ctx.bezierCurveTo(6, 30, 2, 70, 8, 108);
+    ctx.lineTo(44, 108);
+    ctx.bezierCurveTo(50, 70, 46, 30, 26, 10); };
+  fill(ctx, arm, HIDES.red);
+  cutFlower(ctx, 26, 58, 14, 5);
+  stroke(ctx, arm, 5);
+}
+function drawForeArm(ctx) {
+  // 袖
+  const sleeve = () => { ctx.moveTo(24, 8);
+    ctx.bezierCurveTo(8, 26, 4, 62, 10, 92);
+    ctx.lineTo(38, 92);
+    ctx.bezierCurveTo(44, 62, 40, 26, 24, 8); };
+  fill(ctx, sleeve, HIDES.red);
+  cutMoon(ctx, 24, 50, 9);
+  stroke(ctx, sleeve, 5);
+  // 手（掌 + 拇指，皮影手常并指如叶）
+  const hand = () => { ctx.moveTo(10, 90);
+    ctx.bezierCurveTo(4, 104, 6, 116, 16, 120);
+    ctx.bezierCurveTo(30, 124, 42, 116, 42, 104);
+    ctx.bezierCurveTo(42, 96, 36, 90, 30, 90);
+    ctx.lineTo(22, 102);
+    ctx.closePath(); };
+  fill(ctx, hand, HIDES.face); stroke(ctx, hand, 4);
+}
+
+/* ---- 腿（袍腿 + 皂靴）---- */
+function drawLeg(ctx) {
+  const leg = () => { ctx.moveTo(10, 10);
+    ctx.bezierCurveTo(4, 60, 8, 110, 14, 150);
+    ctx.lineTo(46, 150);
+    ctx.bezierCurveTo(52, 110, 56, 60, 50, 10);
+    ctx.closePath(); };
+  fill(ctx, leg, HIDES.green);
+  cutMoon(ctx, 30, 60, 10); cutMoon(ctx, 30, 100, 10);
+  stroke(ctx, leg, 5);
+  const boot = () => { ctx.moveTo(12, 148); ctx.lineTo(48, 148); ctx.lineTo(50, 172);
+    ctx.bezierCurveTo(66, 174, 68, 190, 50, 190); ctx.lineTo(12, 190); ctx.closePath(); };
+  fill(ctx, boot, HIDES.amber); stroke(ctx, boot, 4);
+}
+
+/* ================================================================
+ * 2. 装配：骨架（z 间隔做出纵深，前后肢错层）
+ * ================================================================ */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0906);
+
+const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(0, 0.9, 7.2);
+
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+function partMesh(part, opts = {}) {
+  const geo = new THREE.PlaneGeometry(part.wWorld, part.hWorld);
+  const mat = new THREE.MeshBasicMaterial({
+    map: part.tex, transparent: true, side: THREE.DoubleSide,
+    depthWrite: false, opacity: opts.dim ? 0.82 : 1,
+    color: opts.dim ? 0xb9b2a6 : 0xffffff,
+  });
+  const m = new THREE.Mesh(geo, mat);
+  // pivot 在画布 (px,py)，网格中心需平移，使原点落在关节处
+  m.position.set(part.w / 2 - part.pivot[0], -(part.h / 2 - part.pivot[1]), 0)
+    .multiplyScalar(1 / TEX);
+  return m;
+}
+/* 关节 = Object3D；部件 mesh 挂在关节下，旋转只转关节 */
+function jointAt(x, y, z, part, opts) {
+  const j = new THREE.Object3D(); j.position.set(x, y, z);
+  j.add(partMesh(part, opts)); return j;
+}
+
+/* 部件尺寸（世界单位） */
+const P = {
+  head:     makePart(1.10, 0.95, [100, 168], drawHead),
+  torso:    makePart(1.15, 1.72, [110, 16],  drawTorso),
+  upArm:    makePart(0.27, 0.58, [26, 10],   drawUpperArm),
+  foreArm:  makePart(0.25, 0.64, [24, 8],    drawForeArm),
+  leg:      makePart(0.36, 0.98, [30, 10],   drawLeg),
+};
+
+/* 根：髋部 */
+const root = new THREE.Object3D(); root.position.set(0, -0.15, 0); scene.add(root);
+
+const torso = jointAt(0, 1.42, 0, P.torso); root.add(torso);       // 关节在领口
+const head  = jointAt(0, 0.02, 0.04, P.head); torso.add(head);     // 挂在领口下
+
+const SH = { x: 0.34, y: -0.30 };                                  // 肩相对领口
+const HIP = { x: 0.16, y: -1.35 };                                 // 髋相对领口
+
+const armL1 = 0.55, armL2 = 0.50;                                  // 大小臂长
+const armR = {                                                     // 后侧（右）臂
+  up:  jointAt(-SH.x, SH.y, -0.13, P.upArm,   { dim: true }),
+  fore: jointAt(0, -armL1, -0.13, P.foreArm, { dim: true }),
+};
+const armF = {                                                     // 前侧（左）臂
+  up:  jointAt(SH.x, SH.y, 0.13, P.upArm),
+  fore: jointAt(0, -armL1, 0.13, P.foreArm),
+};
+armR.up.add(armR.fore); torso.add(armR.up);
+armF.up.add(armF.fore); torso.add(armF.up);
+
+const legL1 = 0.46, legL2 = 0.42;
+const legR = jointAt(-HIP.x, HIP.y, -0.06, P.leg, { dim: true });  // 后腿
+const legF = jointAt( HIP.x, HIP.y,  0.06, P.leg);                 // 前腿
+torso.add(legR); torso.add(legF);          // 腿挂在身段上（挂 root 会掉出幕布）
+
+/* ================================================================
+ * 3. 幕布与灯：径向亮心 + 布纹，皮影的"光"比"形"重要
+ * ================================================================ */
+function screenTexture() {
+  const s = 1024, cv = document.createElement('canvas'); cv.width = cv.height = s;
+  const ctx = cv.getContext('2d');
+  const g = ctx.createRadialGradient(s / 2, s / 2, 40, s / 2, s / 2, s * 0.62);
+  g.addColorStop(0, '#ffdba4'); g.addColorStop(0.45, '#e8a75f');
+  g.addColorStop(0.8, '#8a4d24'); g.addColorStop(1, '#3d2010');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, s, s);
+  // 布纹
+  ctx.globalAlpha = 0.05;
+  for (let i = 0; i < s; i += 3) { ctx.fillRect(i, 0, 1, s); ctx.fillRect(0, i, s, 1); }
+  ctx.globalAlpha = 1;
+  // 边框（影窗）
+  ctx.strokeStyle = '#1a0e05'; ctx.lineWidth = 46; ctx.strokeRect(0, 0, s, s);
+  ctx.strokeStyle = '#7a4a20'; ctx.lineWidth = 8;  ctx.strokeRect(52, 52, s - 104, s - 104);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const screenMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(11.5, 8.4),
+  new THREE.MeshBasicMaterial({ map: screenTexture() }));
+screenMesh.position.set(0, 0.7, -2.2); scene.add(screenMesh);
+
+/* 地面倒影用暗色地板，托住构图 */
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(30, 12),
+  new THREE.MeshBasicMaterial({ color: 0x140c06 }));
+floor.rotation.x = -Math.PI / 2; floor.position.set(0, -2.35, 0); scene.add(floor);
+
+/* ================================================================
+ * 4. 签子（主签挂颈，手签挂手）：可视化 + 拖拽手柄
+ * ================================================================ */
+const stickMat = new THREE.MeshBasicMaterial({ color: 0x8a5a2b });
+const stickMat2 = new THREE.MeshBasicMaterial({ color: 0xa8712f });
+function makeRod(len, mat) {
+  const g = new THREE.Group();
+  const rod = new THREE.Mesh(new THREE.BoxGeometry(0.035, len, 0.02), mat);
+  rod.position.y = -len / 2; g.add(rod);
+  const knob = new THREE.Mesh(new THREE.CircleGeometry(0.075, 24),
+    new THREE.MeshBasicMaterial({ color: 0xd9b06a }));
+  knob.position.y = -len;                // 手柄在杆末端（操纵者握的一头）
+  g.add(knob);
+  return g;
+}
+const rodMain = makeRod(1.9, stickMat);  scene.add(rodMain);
+const rodL = makeRod(1.25, stickMat2);   scene.add(rodL);
+const rodR = makeRod(1.25, stickMat2);   scene.add(rodR);
+
+/* 世界坐标工具 */
+const _v = new THREE.Vector3();
+function worldOf(obj) { return obj.getWorldPosition(_v.set(0, 0, 0)).clone(); }
+
+/* 手的世界位置：前臂局部系里腕点（肘下 0.86×前臂长，与画的手对齐）
+   注意必须在前臂自身局部空间取点，不能用父空间的肘坐标 */
+function handWorld(arm) {
+  return arm.fore.localToWorld(new THREE.Vector3(0, -armL2 * 0.86, 0)).clone();
+}
+/* 杆沿固定方向从关节伸出；部件沿 -y 绘制，转 dir 需补偿 +90° */
+const MAIN_DIR = -80 * Math.PI / 180;    // 主签：从颈向下偏右
+const ROD_ANGLE = -60 * Math.PI / 180;   // 手签：从手向右下
+function placeHandRod(rod, arm) {
+  const h = handWorld(arm);
+  rod.position.copy(h);
+  rod.rotation.z = ROD_ANGLE + Math.PI / 2;
+  rod.userData.tip = new THREE.Vector3(
+    h.x + Math.cos(ROD_ANGLE) * 1.25, h.y + Math.sin(ROD_ANGLE) * 1.25, 0.35);
+}
+function placeMainRod() {
+  const neck = worldOf(torso);
+  rodMain.position.set(neck.x, neck.y, 0.35);
+  rodMain.rotation.z = MAIN_DIR + Math.PI / 2;
+  rodMain.userData.tip = new THREE.Vector3(
+    neck.x + Math.cos(MAIN_DIR) * 1.9, neck.y + Math.sin(MAIN_DIR) * 1.9, 0.35);
+}
+
+/* ================================================================
+ * 5. 两骨 IK：皮影操纵的数学核心
+ *    上臂方向用解析解；前臂方向直接由肘部实际坐标指向目标，
+ *    避免相对角符号在两种弯向下滑错。
+ * ================================================================ */
+function solveIK(S, T, l1, l2, bend) {
+  const dv = new THREE.Vector3(T.x - S.x, T.y - S.y, 0);
+  let dist = dv.length();
+  dist = Math.max(0.12, Math.min(dist, l1 + l2 - 0.02));
+  const a0 = Math.atan2(dv.y, dv.x);
+  const cosA = Math.max(-1, Math.min(1,
+    (dist * dist + l1 * l1 - l2 * l2) / (2 * dist * l1)));
+  const th1 = a0 + bend * Math.acos(cosA);          // 上臂世界方向
+  const ex = S.x + Math.cos(th1) * l1, ey = S.y + Math.sin(th1) * l1;
+  const th2 = Math.atan2(T.y - ey, T.x - ex);       // 前臂：肘→目标
+  // 部件沿 -y 绘制：世界方向 θ 对应 rotation.z = θ + π/2
+  return { up: th1 + Math.PI / 2, fore: th2 - th1 };
+}
+
+/* ================================================================
+ * 6. 交互：拖签子 + 视角微转
+ * ================================================================ */
+const ray = new THREE.Raycaster();
+const dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+const pointer = new THREE.Vector2();
+let dragging = null;                 // 'main' | 'handL' | 'handR'
+let grabOffset = new THREE.Vector3();
+
+/* 手签目标（世界系）；拖动时由指针写入，空闲时回位 */
+const handTarget = { L: null, R: null };
+const mainTarget = { pos: null };
+
+function setPointer(e) {
+  pointer.x = (e.clientX / innerWidth) * 2 - 1;
+  pointer.y = -(e.clientY / innerHeight) * 2 + 1;
+}
+function tipOf(rod) { return rod.userData.tip.clone(); }
+
+addEventListener('pointerdown', (e) => {
+  setPointer(e);
+  ray.setFromCamera(pointer, camera);
+  const tips = [rodMain.userData.tip, rodL.userData.tip, rodR.userData.tip]
+    .map((p) => new THREE.Vector3(p.x, p.y, 0.35));
+  // 手柄命中：找最近的签尖，距离阈值 0.28
+  let best = null, bd = 0.30;
+  tips.forEach((p, i) => {
+    const d = p.distanceTo(ray.ray.origin.clone()
+      .add(ray.ray.direction.clone().multiplyScalar(
+        ((0.35 - ray.ray.origin.z) / ray.ray.direction.z))));
+    if (d < bd) { bd = d; best = ['main', 'handL', 'handR'][i]; }
+  });
+  if (best) {
+    dragging = best;
+    const cur = best === 'main' ? tipOf(rodMain)
+      : tipOf(best === 'handL' ? rodL : rodR);
+    const hit = new THREE.Vector3();
+    ray.ray.intersectPlane(dragPlane, hit);
+    if (hit) grabOffset.subVectors(cur, hit);
+    document.getElementById('c').classList.add('grabbing');
+  }
+});
+addEventListener('pointermove', (e) => {
+  setPointer(e);
+  if (!dragging) return;
+  ray.setFromCamera(pointer, camera);
+  const hit = new THREE.Vector3();
+  if (!ray.ray.intersectPlane(dragPlane, hit)) return;
+  hit.add(grabOffset);
+  if (dragging === 'main') mainTarget.pos = hit;
+  else if (dragging === 'handL') handTarget.L = hit;
+  else handTarget.R = hit;
+});
+addEventListener('pointerup', () => {
+  dragging = null;
+  document.getElementById('c').classList.remove('grabbing');
+});
+
+/* 视角微视差（限制 ±4°，防止平面件侧面穿帮） */
+let camTX = 0, camTY = 0;
+addEventListener('pointermove', (e) => {
+  if (dragging) return;
+  camTX = (e.clientX / innerWidth - 0.5) * 0.5;
+  camTY = (e.clientY / innerHeight - 0.5) * 0.25;
+});
+
+/* ================================================================
+ * 7. 主循环
+ * ================================================================ */
+let demo = false, t = 0;
+const clock = new THREE.Clock();
+
+/* 平滑追踪 */
+function damp(cur, goal, k, dt) { return cur + (goal - cur) * (1 - Math.exp(-k * dt)); }
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  t += dt;
+
+  /* ---- 根：主签拖动 = 平移 + 轻微倾斜 ---- */
+  let rootX = 0, rootY = -0.15, rootRz = Math.sin(t * 0.5) * 0.02;
+  if (demo) {
+    rootX = Math.sin(t * 0.42) * 0.35;
+    rootRz = Math.sin(t * 0.42 + 0.6) * 0.05;
+  }
+  if (mainTarget.pos) {
+    /* 拖主签尖 = 反推颈位置：颈 = 签尖 - 杆方向 × 杆长 */
+    const nx = mainTarget.pos.x - Math.cos(MAIN_DIR) * 1.9;
+    const ny = mainTarget.pos.y - Math.sin(MAIN_DIR) * 1.9;
+    rootX = nx; rootY = ny - 1.42;
+  }
+  root.position.x = damp(root.position.x, rootX, 10, dt);
+  root.position.y = damp(root.position.y, rootY, 10, dt);
+  root.rotation.z = damp(root.rotation.z, rootRz, 8, dt);
+
+  /* ---- 手目标 ---- */
+  const neckW = worldOf(torso);
+  const shoulderW = {
+    L: torso.localToWorld(new THREE.Vector3(SH.x, SH.y, 0)),
+    R: torso.localToWorld(new THREE.Vector3(-SH.x, SH.y, 0)),
+  };
+  let tgtL, tgtR;
+  if (demo) {
+    const p = t * 1.15;
+    tgtL = new THREE.Vector3(neckW.x + 0.62 + Math.cos(p) * 0.34,
+                             neckW.y - 0.42 + Math.sin(p * 1.3) * 0.22, 0.1);
+    tgtR = new THREE.Vector3(neckW.x - 0.62 + Math.cos(p + 2.4) * 0.34,
+                             neckW.y - 0.42 + Math.sin(p * 1.3 + 1.1) * 0.22, -0.1);
+  } else {
+    const rest = { L: new THREE.Vector3(neckW.x + 0.72, neckW.y - 0.68, 0.1),
+                   R: new THREE.Vector3(neckW.x - 0.72, neckW.y - 0.68, -0.1) };
+    tgtL = handTarget.L || rest.L;
+    tgtR = handTarget.R || rest.R;
+  }
+
+  /* ---- 双臂 IK（肘弯方向：肘垂在肩下，拖动手时才外翻） ---- */
+  const ikL = solveIK(shoulderW.L, tgtL, armL1, armL2, -1);
+  const ikR = solveIK(shoulderW.R, tgtR, armL1, armL2, +1);
+  armF.up.rotation.z = damp(armF.up.rotation.z, ikL.up, 14, dt);
+  armF.fore.rotation.z = damp(armF.fore.rotation.z, ikL.fore, 14, dt);
+  armR.up.rotation.z = damp(armR.up.rotation.z, ikR.up, 14, dt);
+  armR.fore.rotation.z = damp(armR.fore.rotation.z, ikR.fore, 14, dt);
+
+  /* ---- 腿：行走摆动 + 空闲微晃 ---- */
+  const speed = Math.abs(root.position.x - (root.userData.lastX ?? root.position.x)) / Math.max(dt, 1e-4);
+  root.userData.lastX = root.position.x;
+  const walk = Math.min(1, speed / 1.2);
+  const swing = Math.sin(t * 6.2) * 0.45 * walk + Math.sin(t * 0.9) * 0.03;
+  legF.rotation.z = damp(legF.rotation.z, -swing, 12, dt);
+  legR.rotation.z = damp(legR.rotation.z, swing * 0.85, 12, dt);
+
+  /* ---- 头：跟手微动 + 点头 ---- */
+  const look = (tgtL.x - neckW.x) * 0.06;
+  head.rotation.z = damp(head.rotation.z,
+    look + Math.sin(t * 1.7) * 0.05 + (demo ? Math.sin(t * 2.3) * 0.06 : 0), 8, dt);
+
+  /* ---- 签子跟随 ---- */
+  placeHandRod(rodL, armF);
+  placeHandRod(rodR, armR);
+  placeMainRod();
+
+  /* ---- 相机 ---- */
+  camera.position.x = damp(camera.position.x, camTX, 3, dt);
+  camera.position.y = damp(camera.position.y, 0.9 - camTY, 3, dt);
+  camera.lookAt(0, 0.4, 0);
+
+  renderer.render(scene, camera);
+}
+animate();
+
+/* ================================================================
+ * 8. 按钮
+ * ================================================================ */
+const btnDemo = document.getElementById('btnDemo');
+btnDemo.onclick = () => {
+  demo = !demo;
+  btnDemo.classList.toggle('on', demo);
+  btnDemo.textContent = demo ? '停' : '自动开演';
+  if (demo) { handTarget.L = handTarget.R = null; mainTarget.pos = null; }
+};
+document.getElementById('btnReset').onclick = () => {
+  demo = false; btnDemo.classList.remove('on'); btnDemo.textContent = '自动开演';
+  handTarget.L = handTarget.R = null; mainTarget.pos = null;
+  root.position.set(0, -0.15, 0); root.rotation.z = 0;
+};
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
