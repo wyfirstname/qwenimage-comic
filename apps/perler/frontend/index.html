@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>拼豆工作台 · 团子衣橱</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23e85a7b'/%3E%3Ctext x='16' y='23' font-size='18' text-anchor='middle' fill='white'%3E%E2%97%8F%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/web/style.css" />
+<style>
+  /* 拼豆页专属：珠子画布与配色清单 */
+  .bead-canvas-wrap { overflow: auto; background: #fff; border: 1px solid var(--border, #ddd); border-radius: 8px; padding: 12px; }
+  .legend-list { max-height: 320px; overflow: auto; }
+  .legend-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-bottom: 1px dashed var(--border, #eee); }
+  .legend-swatch { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(0,0,0,.25); flex: none; }
+  .legend-name { flex: 1; }
+  .legend-count { font-variant-numeric: tabular-nums; }
+  .stat-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🧩</span>
+    <div>
+      <h1>拼豆工作台</h1>
+      <p class="sub">图片 → 豆板图纸 · 纯本地处理，不吃显存</p>
+    </div>
+  </div>
+  <nav class="mainnav">
+    <a class="navitem" href="/" title="返回工作台">← 工作台</a>
+  </nav>
+</header>
+
+<main class="layout">
+  <!-- ==================== 左侧控制栏 ==================== -->
+  <aside class="panel">
+    <section class="field">
+      <div class="field-head"><label>源图片</label></div>
+      <div id="drop" class="dropzone">
+        <span id="dropHint">点击选择，或把图片拖到这里</span>
+        <img id="srcPreview" alt="源图预览" style="display:none" />
+      </div>
+      <input type="file" id="file" accept="image/*" hidden />
+    </section>
+
+    <section class="field">
+      <label>豆板宽度（豆数）</label>
+      <div class="segmented" id="sizePresets">
+        <button class="seg" data-w="29">29 单板</button>
+        <button class="seg active" data-w="58">58 四板</button>
+        <button class="seg" data-w="87">87 九板</button>
+      </div>
+      <input type="number" id="width" value="58" min="4" max="200" />
+      <p class="hint">高度按图片比例自动换算；异形拼可用 29/58 奇数板</p>
+    </section>
+
+    <section class="field">
+      <label>色板</label>
+      <select id="palette">
+        <option value="common48">常用 48 色</option>
+        <option value="basic24">基础 24 色</option>
+      </select>
+      <p class="hint">色值是常见实色豆的视觉近似；要用自己的色卡，改 data/perler/palettes.json 即可，不用改代码</p>
+    </section>
+
+    <section class="field">
+      <label class="checkbox"><input type="checkbox" id="dither" /> 抖动（渐变图开，像素图标关）</label>
+      <p class="hint">Floyd-Steinberg：把量化误差扩散给邻豆，大面积渐变更顺；图标/卡通建议关，色块更干净</p>
+    </section>
+
+    <div class="actions">
+      <button id="btnConvert" class="btn btn-primary" disabled>生成图纸</button>
+    </div>
+    <p class="error-text hidden" id="errorText"></p>
+  </aside>
+
+  <!-- ==================== 右侧主区 ==================== -->
+  <section class="content">
+    <div class="tabs">
+      <button class="tab active" data-tab="preview">图纸预览</button>
+      <button class="tab" data-tab="list">配色清单 <span id="colorCount" class="pill">0</span></button>
+    </div>
+
+    <div class="tab-pane active" id="pane-preview">
+      <div class="empty" id="empty">
+        <div class="empty-icon">🧩</div>
+        <p>上传一张图，生成可打印的拼豆图纸</p>
+        <p class="muted">卡通头像、像素图效果最好；照片请开抖动并加大豆板</p>
+      </div>
+      <div id="result" style="display:none">
+        <div class="stat-row">
+          <span class="muted">豆板：<b id="stSize">—</b></span>
+          <span class="muted">总豆数：<b id="stTotal">—</b></span>
+          <span class="muted">用色：<b id="stColors">—</b> 种</span>
+          <span class="spacer"></span>
+          <label class="checkbox"><input type="checkbox" id="showGrid" checked /> 显示网格</label>
+          <a id="dlSheet" class="btn btn-secondary" download>下载图纸 PNG</a>
+          <a id="dlJson" class="btn btn-ghost" download>下载 JSON</a>
+        </div>
+        <div class="bead-canvas-wrap">
+          <canvas id="beadCanvas"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-pane" id="pane-list">
+      <div class="toolbar"><span class="muted">按数量降序 · 采购时直接照单抓豆</span></div>
+      <div class="legend-list" id="legendList"></div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const state = { file: null, pattern: null, showGrid: true };
+
+  // ---------- 上传 ----------
+  const drop = $('drop'), fileInput = $('file');
+  drop.addEventListener('click', () => fileInput.click());
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault(); drop.classList.remove('drag');
+    if (e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) pickFile(fileInput.files[0]); });
+
+  function pickFile(f) {
+    if (!f.type.startsWith('image/')) return toast('请选择图片文件');
+    state.file = f;
+    const img = $('srcPreview');
+    img.src = URL.createObjectURL(f);
+    img.style.display = 'block';
+    $('dropHint').textContent = f.name;
+    $('btnConvert').disabled = false;
+  }
+
+  // ---------- 尺寸预设 ----------
+  $('sizePresets').addEventListener('click', (e) => {
+    const btn = e.target.closest('.seg');
+    if (!btn) return;
+    document.querySelectorAll('#sizePresets .seg').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    $('width').value = btn.dataset.w;
+  });
+
+  // ---------- 转换 ----------
+  $('btnConvert').addEventListener('click', async () => {
+    if (!state.file) return;
+    const btn = $('btnConvert');
+    btn.disabled = true; btn.textContent = '转换中…';
+    $('errorText').classList.add('hidden');
+    try {
+      const fd = new FormData();
+      fd.append('image', state.file);
+      fd.append('width', $('width').value || '58');
+      fd.append('palette', $('palette').value);
+      fd.append('dither', $('dither').checked);
+      const res = await fetch('/api/v1/perler/convert', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail?.message || ('HTTP ' + res.status));
+      state.pattern = data;
+      renderResult();
+    } catch (err) {
+      $('errorText').textContent = '转换失败：' + err.message;
+      $('errorText').classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = '生成图纸';
+    }
+  });
+
+  function renderResult() {
+    const p = state.pattern;
+    $('empty').style.display = 'none';
+    $('result').style.display = 'block';
+    $('stSize').textContent = p.width + ' × ' + p.height;
+    $('stTotal').textContent = p.total.toLocaleString();
+    $('stColors').textContent = p.colors.length;
+    $('colorCount').textContent = p.colors.length;
+    $('dlSheet').href = p.sheet_url;
+    $('dlJson').href = p.json_url;
+    drawBeads();
+    renderLegend();
+  }
+
+  // ---------- 珠子画布（NEAREST 放大 + 可选网格 + 珠孔高光） ----------
+  function drawBeads() {
+    const p = state.pattern;
+    const img = new Image();
+    img.onload = () => {
+      const cell = p.width > 120 ? 10 : p.width > 80 ? 14 : 18;
+      const cv = $('beadCanvas');
+      cv.width = p.width * cell;
+      cv.height = p.height * cell;
+      const ctx = cv.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, 0, 0, cv.width, cv.height);
+      if (state.showGrid) {
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+        ctx.lineWidth = 1;
+        for (let x = 0; x <= p.width; x++) { ctx.beginPath(); ctx.moveTo(x*cell+.5, 0); ctx.lineTo(x*cell+.5, cv.height); ctx.stroke(); }
+        for (let y = 0; y <= p.height; y++) { ctx.beginPath(); ctx.moveTo(0, y*cell+.5); ctx.lineTo(cv.width, y*cell+.5); ctx.stroke(); }
+      }
+      // 左上角珠孔高光，立体感一眼可辨
+      if (cell >= 10) {
+        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        for (let y = 0; y < p.height; y++)
+          for (let x = 0; x < p.width; x++)
+            ctx.fillRect(x*cell + Math.floor(cell*0.3), y*cell + Math.floor(cell*0.25), 2, 2);
+      }
+    };
+    img.src = p.preview_url;
+  }
+
+  $('showGrid').addEventListener('change', (e) => {
+    state.showGrid = e.target.checked;
+    if (state.pattern) drawBeads();
+  });
+
+  // ---------- 配色清单 ----------
+  function renderLegend() {
+    const list = $('legendList');
+    list.innerHTML = '';
+    for (const c of state.pattern.colors) {
+      const row = document.createElement('div');
+      row.className = 'legend-row';
+      row.innerHTML = '<span class="legend-swatch" style="background:' + c.hex + '"></span>'
+        + '<span class="legend-name">' + c.name + '</span>'
+        + '<span class="legend-count">× ' + c.count.toLocaleString() + '</span>';
+      list.appendChild(row);
+    }
+  }
+
+  // ---------- Tab ----------
+  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    $('pane-' + tab.dataset.tab).classList.add('active');
+  }));
+
+  function toast(msg) {
+    const el = $('toast');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+    setTimeout(() => el.classList.add('hidden'), 2500);
+  }
+})();
+</script>
+</body>
+</html>

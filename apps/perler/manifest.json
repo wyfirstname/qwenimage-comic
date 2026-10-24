@@ -1,0 +1,11 @@
+{
+  "id": "perler",
+  "name": "拼豆工作台",
+  "icon": "🧩",
+  "description": "图片 → 拼豆图纸：色板量化、抖动、配色清单、可打印图纸导出",
+  "version": "1.0.0",
+  "api_prefix": "/api/v1/perler",
+  "entry": "/apps/perler/",
+  "standalone_port": 8106,
+  "capabilities": ["img2pattern"]
+}
