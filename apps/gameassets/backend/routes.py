@@ -1,79 +1,103 @@
 # -*- coding: utf-8 -*-
-"""游戏素材工坊接口。
+"""游戏素材工坊接口 —— 流水线模式。
 
-一致性三层机制（缺一不可，这是本模块的存在理由）：
-  1. 提示词层：时间背景预设的色调/光照片段 + 统一负面词，进每一张图；
-  2. 图像层：先出「场景基准图」，之后所有素材走 fusion 编辑通道挂基准图
-     （同 storyboard 定妆照机制：mode=img2img + ref_images + CFG 1.0）；
-  3. 后验层：每张素材出图后做主色提取，与基准色板算距离，
-     tone.pass=False 的素材前端标黄，提示重出——「色调一致」是算出来的，不是喊出来的。
+一次配置（风格 + 时间背景 + 场景/角色/道具清单）→ 一键跑完整条流水线：
+    场景基准图 → 其余场景 → 角色 → 道具，逐卡进度可轮询，
+    每张素材自动做色调后验校验。单卡可重跑。
+
+一致性三层：风格基因（styles.py）+ 时间背景（presets.py）+ 基准图融合，
+流水线里没有任何一步绕开它们，详见 pipeline.py。
 """
 
 from __future__ import annotations
 
-import asyncio
-import base64
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from shared import repo
-from shared.config import settings
-from shared.models_util import new_id
-from engine.sdk import engine, GenerationError
-
-from . import store, tonecheck
-from .presets import TIME_PRESETS, get_preset
+from . import pipeline, store, tonecheck
+from .presets import TIME_PRESETS
+from .styles import STYLE_PRESETS
 
 router = APIRouter(prefix="/gameassets", tags=["gameassets"])
 
-_MASTER_W, _MASTER_H = 1152, 640   # 横版基准图，16:9 游戏场景
-_ASSET_W, _ASSET_H = 768, 768      # 单件素材方形底
-_KINDS = {"character": "角色", "scene": "场景", "prop": "道具"}
-
-_COMMON_NEG = ("text, watermark, signature, ui, frame, border, "
-               "low quality, blurry, deformed")
+_MAX_PER_KIND = 6          # 每类素材上限
+_MAX_TOTAL = 12            # 单集素材总数上限（一次流水线的合理批量）
 
 
 class SetIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=60)
+    style: str = Field(..., description="风格 id，见 /presets")
     time_preset: str = Field(..., description="时间背景 id，见 /presets")
-    desc: str = Field("", max_length=500, description="美术风格补充描述")
+    desc: str = Field("", max_length=300, description="美术风格补充（拼进风格基因）")
+    scenes: list[str] = Field(..., min_length=1, description="场景清单，第 1 条作基准图")
+    characters: list[str] = Field(default_factory=list, description="角色清单")
+    props: list[str] = Field(default_factory=list, description="道具清单")
     threshold: float = Field(tonecheck.DEFAULT_THRESHOLD, ge=10, le=120)
 
+    @staticmethod
+    def _clean_lines(lines: list[str], limit: int, label: str) -> list[str]:
+        out = []
+        for ln in lines[:limit]:
+            ln = str(ln).strip()[:200]
+            if ln:
+                out.append(ln)
+        if label == "场景" and not out:
+            raise ValueError("场景清单不能为空（第 1 条将作为基准图）")
+        return out
 
-class MasterIn(BaseModel):
-    desc: str = Field(..., min_length=1, max_length=300, description="场景内容描述")
 
-
-class AssetIn(BaseModel):
-    kind: str = Field(..., description="character | scene | prop")
-    desc: str = Field(..., min_length=1, max_length=300)
-
-
-@router.get("/presets", summary="时间背景预设")
+@router.get("/presets", summary="风格与时间背景预设")
 async def list_presets():
-    return {"items": list(TIME_PRESETS.values())}
+    return {"styles": list(STYLE_PRESETS.values()), "times": list(TIME_PRESETS.values())}
 
 
 @router.get("/sets", summary="素材集列表")
 async def list_sets():
-    return {"items": store.list_sets()}
+    items = []
+    for s in store.list_sets():
+        p = s.get("pipeline") or {}
+        items.append({
+            "id": s["id"], "name": s["name"],
+            "style_name": s.get("style_name"), "time_name": s.get("time_name"),
+            "status": p.get("status", "idle"),
+            "done": p.get("done", 0), "total": p.get("total", 0),
+            "asset_count": len(s.get("assets") or []),
+            "created_at": s.get("created_at"),
+        })
+    return {"items": items}
 
 
-@router.post("/sets", summary="创建素材集")
+@router.post("/sets", summary="创建素材集并启动流水线（一次配置整包产出）")
 async def create_set(req: SetIn):
     try:
-        preset = get_preset(req.time_preset)
+        style = STYLE_PRESETS[req.style]
+        preset = TIME_PRESETS[req.time_preset]
     except KeyError as exc:
         raise HTTPException(status_code=400, detail={"code": "BAD_PRESET", "message": str(exc)})
-    s = store.make_set(name=req.name.strip(), time_preset=preset["id"],
-                       time_name=preset["name"], desc=req.desc.strip(),
-                       threshold=req.threshold)
-    return store.add_set(s)
+    try:
+        scenes = SetIn._clean_lines(req.scenes, _MAX_PER_KIND, "场景")
+        characters = SetIn._clean_lines(req.characters, _MAX_PER_KIND, "角色")
+        props = SetIn._clean_lines(req.props, _MAX_PER_KIND, "道具")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "BAD_BRIEFS", "message": str(exc)})
+    total = len(scenes) + len(characters) + len(props)
+    if total > _MAX_TOTAL:
+        raise HTTPException(status_code=400, detail={
+            "code": "TOO_MANY",
+            "message": f"单次流水线最多 {_MAX_TOTAL} 张（当前 {total}），请拆成多个素材集"})
+
+    s = store.make_set(
+        name=req.name.strip(), style=style["id"], style_name=style["name"],
+        time_preset=preset["id"], time_name=preset["name"],
+        desc=req.desc.strip(), threshold=req.threshold,
+        briefs={"scenes": scenes, "characters": characters, "props": props},
+    )
+    store.add_set(s)
+    pipeline.start(s["id"])     # 后台跑，前端轮询 GET /sets/{sid}
+    return s
 
 
-@router.get("/sets/{sid}", summary="素材集详情")
+@router.get("/sets/{sid}", summary="素材集详情（含流水线进度）")
 async def get_set(sid: str):
     s = store.get_set(sid)
     if not s:
@@ -81,90 +105,69 @@ async def get_set(sid: str):
     return s
 
 
-@router.delete("/sets/{sid}", summary="删除素材集")
-async def delete_set(sid: str):
-    if not store.delete_set(sid):
-        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "素材集不存在"})
-    return {"ok": True}
-
-
-@router.post("/sets/{sid}/master", summary="生成场景基准图（全素材集的色调锚点）")
-async def gen_master(sid: str, req: MasterIn):
+@router.post("/sets/{sid}/pipeline", summary="重跑流水线（覆盖现有素材）")
+async def rerun_pipeline(sid: str):
     s = store.get_set(sid)
     if not s:
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "素材集不存在"})
-    preset = get_preset(s["time_preset"])
-    style = str(s.get("desc") or "").strip()
-
-    prompt = (f"game concept art, environment establishing shot, {req.desc.strip()}, "
-              f"{style + ', ' if style else ''}{preset['prompt']}, "
-              "rich details, no characters, no text")
-    negative = f"{_COMMON_NEG}, {preset['negative']}"
-
-    job_id = await _run_job(prompt=prompt, negative=negative,
-                            width=_MASTER_W, height=_MASTER_H, seed=-1, ref=None)
-    img = _first_image(job_id)
-    palette = [c["hex"] for c in tonecheck.extract_palette(img["path"])]
-
-    def _apply(t: dict) -> None:
-        t["master"] = {
-            "path": img["path"], "url": img["url"], "seed": img["seed"],
-            "desc": req.desc.strip(), "palette": palette,
-            "prompt": prompt,
-        }
-    store.mutate(sid, _apply)
-    return store.get_set(sid)
+    if pipeline.is_running(sid):
+        raise HTTPException(status_code=409, detail={"code": "BUSY", "message": "流水线正在运行"})
+    try:
+        pipeline.start(sid)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail={"code": "BUSY", "message": str(exc)})
+    return {"ok": True}
 
 
-@router.post("/sets/{sid}/assets", summary="生成素材（自动挂基准图融合 + 色调校验）")
-async def gen_asset(sid: str, req: AssetIn):
+@router.post("/sets/{sid}/assets/{aid}/rerun", summary="重跑单张素材（保持清单与锚点不变）")
+async def rerun_asset(sid: str, aid: str):
+    from .presets import get_preset
+    from .styles import get_style
+
     s = store.get_set(sid)
     if not s:
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "素材集不存在"})
     master = s.get("master")
     if not master:
         raise HTTPException(status_code=409, detail={
-            "code": "NEED_MASTER",
-            "message": "先出场景基准图：它是全素材集的色调与光照锚点",
-        })
-    kind_label = _KINDS.get(req.kind)
-    if not kind_label:
-        raise HTTPException(status_code=400, detail={
-            "code": "BAD_KIND", "message": f"kind 只支持：{', '.join(_KINDS)}"})
-    preset = get_preset(s["time_preset"])
+            "code": "NEED_MASTER", "message": "基准图缺失，请重跑整条流水线"})
+    idx = next((i for i, a in enumerate(s["assets"]) if a["id"] == aid), None)
+    if idx is None:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "素材不存在"})
 
-    prompt = (
-        f"Using the reference image only as color palette and lighting anchor "
-        f"(time of day: {preset['name']}), generate a single game asset: "
-        f"{kind_label} - {req.desc.strip()}. "
-        "Keep exactly the same color palette, color temperature, light direction "
-        "and atmosphere as the reference. Change subject content only. "
-        "Clean composition, centered subject, no text"
-    )
-
-    ref_url = _to_data_url(master["path"])
-    job_id = await _run_job(prompt=prompt, negative=_COMMON_NEG,
-                            width=_ASSET_W, height=_ASSET_H,
-                            seed=-1, ref=ref_url)
-    img = _first_image(job_id)
-    tone = tonecheck.check(img["path"], master["path"],
+    old = s["assets"][idx]
+    style, preset = get_style(s["style"]), get_preset(s["time_preset"])
+    if old["kind"] == "character":
+        prompt = pipeline._character_prompt(style, preset, s, old["desc"])
+    else:
+        prompt = pipeline._asset_prompt(style, preset, s, old["kind_label"],
+                                        old["desc"], clean_bg=(old["kind"] == "prop"))
+    rec = await pipeline._run_job(prompt=prompt, negative=pipeline._COMMON_NEG,
+                                  width=pipeline._ASSET_W, height=pipeline._ASSET_H,
+                                  seed=-1, ref_path=master["path"])
+    tone = tonecheck.check(rec["path"], master["path"],
                            threshold=float(s.get("threshold") or tonecheck.DEFAULT_THRESHOLD))
-
-    asset = {
-        "id": new_id("ast"),
-        "kind": req.kind,
-        "kind_label": kind_label,
-        "desc": req.desc.strip(),
-        "path": img["path"], "url": img["url"], "seed": img["seed"],
-        "prompt": prompt,
-        "tone": tone,
-        "created_at": store.now_iso(),
+    new_asset = {
+        "id": old["id"],          # 原位替换，前端不用换 key
+        "kind": old["kind"], "kind_label": old["kind_label"], "desc": old["desc"],
+        "path": rec["path"], "url": rec["url"], "seed": rec.get("seed"),
+        "prompt": prompt, "tone": tone, "created_at": store.now_iso(),
+        "rerun_of": aid,
     }
 
     def _apply(t: dict) -> None:
-        t["assets"].insert(0, asset)
+        t["assets"][idx] = new_asset
     store.mutate(sid, _apply)
-    return asset
+    return new_asset
+
+
+@router.delete("/sets/{sid}", summary="删除素材集")
+async def delete_set(sid: str):
+    if pipeline.is_running(sid):
+        raise HTTPException(status_code=409, detail={"code": "BUSY", "message": "流水线正在运行，不能删除"})
+    if not store.delete_set(sid):
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "素材集不存在"})
+    return {"ok": True}
 
 
 @router.delete("/sets/{sid}/assets/{aid}", summary="删除素材")
@@ -182,93 +185,6 @@ async def delete_asset(sid: str, aid: str):
 
 
 # ============================================================
-#  引擎调用（与 imagegen 同款：先入库再同步生成，超时 504）
-# ============================================================
-
-async def _run_job(*, prompt: str, negative: str, width: int, height: int,
-                   seed: int, ref: str | None) -> dict:
-    payload = {
-        "job_id": new_id("job"),
-        "prompt": prompt,
-        "negative_prompt": negative,
-        "width": width,
-        "height": height,
-        "steps": settings.default_steps,
-        "guidance_scale": settings.default_guidance,
-        "seed": seed,
-        "count": 1,
-        "channel": "auto",
-        "output_subdir": "gameassets",
-        "mode": "txt2img",
-        "gameassets": {"kind": "asset"},
-    }
-    if ref:
-        payload.update({
-            "mode": "img2img",
-            "fusion": True,
-            "ref_images": [ref],
-            "negative_prompt": "",      # fusion 通道不吃负面词（同 storyboard）
-            "guidance_scale": 1.0,
-            "strength": 1.0,
-        })
-    repo.create_job(job_id=payload["job_id"], prompt=prompt, negative=negative,
-                    params=payload, seed=seed, count=1,
-                    mode="img2img" if ref else "txt2img")
-    if settings.engine_mode == "local":
-        engine.vram_guard(1.0)
-    try:
-        job = await asyncio.wait_for(
-            engine.generate_sync(payload),
-            timeout=settings.infer_timeout_seconds,
-        )
-    except asyncio.TimeoutError:
-        repo.mark_job_done(payload["job_id"], "failed", error="推理超时")
-        raise HTTPException(status_code=504, detail={"code": "TIMEOUT", "message": "推理超时"})
-    except GenerationError as exc:
-        raise HTTPException(status_code=500, detail={"code": "INFERENCE_ERROR", "message": str(exc)})
-    if job.get("status") != "succeeded":
-        raise HTTPException(status_code=500, detail={
-            "code": "INFERENCE_ERROR", "message": job.get("error") or "生成失败"})
-    return payload["job_id"]
-
-
-def _first_image(job_id: str) -> dict:
-    """generate_sync 的返回体不带图片（入库为准），按 imagegen 同款从 repo 取。"""
-    imgs = repo.images_by_job(job_id)
-    if not imgs:
-        raise HTTPException(status_code=500, detail={
-            "code": "INFERENCE_ERROR", "message": "引擎没有返回图片"})
-    rec = dict(imgs[0])
-    path = rec.get("path") or ""
-    rec["url"] = _data_url_to_http(path) if path else (rec.get("url") or "")
-    return rec
-
-
-def _to_data_url(path: str) -> str:
-    from pathlib import Path as _P
-
-    p = _P(path)
-    if not p.is_absolute():
-        p = _P(".") / p
-    if not p.exists():
-        raise HTTPException(status_code=500, detail={
-            "code": "MASTER_MISSING", "message": f"基准图文件丢失：{p}"})
-    return f"data:image/png;base64,{base64.b64encode(p.read_bytes()).decode()}"
-
-
-def _data_url_to_http(path: str) -> str:
-    """引擎落盘路径 → 可访问的 /data 静态 URL。"""
-    from pathlib import Path as _P
-
-    p = _P(path).resolve()
-    try:
-        rel = p.relative_to(settings.data_dir_path.resolve())
-        return f"/data/{rel.as_posix()}"
-    except ValueError:
-        return f"/data/{p.name}"
-
-
-# ============================================================
 #  独立运行入口
 # ============================================================
 def create_app():
@@ -279,7 +195,7 @@ def create_app():
 
     from shared.webapp import mount_frontend, mount_media
 
-    application = FastAPI(title="游戏素材工坊", version="1.0.0")
+    application = FastAPI(title="游戏素材工坊", version="2.0.0")
     application.include_router(router, prefix="/api/v1")
 
     mount_media(application)

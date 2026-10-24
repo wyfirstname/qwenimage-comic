@@ -7,6 +7,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232851a3'/%3E%3Ctext x='16' y='23' font-size='16' text-anchor='middle' fill='white'%3E%E2%96%B6%3C/text%3E%3C/svg%3E" />
 <link rel="stylesheet" href="/web/style.css" />
 <style>
+  /* ---------- 预设卡片 ---------- */
   .preset-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
   .preset-card { border: 1.5px solid var(--border, #ddd); border-radius: 8px; padding: 6px 4px 4px;
                  text-align: center; cursor: pointer; background: var(--bg, #fff); }
@@ -14,22 +15,52 @@
   .preset-band { height: 12px; border-radius: 4px; margin-bottom: 4px; display: flex; overflow: hidden; }
   .preset-band i { flex: 1; }
   .preset-name { font-size: 12px; }
+  .briefs textarea { width: 100%; font-size: 12.5px; }
+  .briefs .brief-row { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 6px; }
+  .briefs .brief-row label { flex: none; width: 42px; padding-top: 6px; font-size: 12.5px; color: var(--muted, #888); }
+
+  /* ---------- 素材集列表 ---------- */
   .set-item { padding: 8px 10px; border: 1px solid var(--border, #e3e3e3); border-radius: 8px;
               margin-bottom: 6px; cursor: pointer; }
   .set-item.active { border-color: var(--primary, #3b6ef5); background: rgba(59,110,245,.05); }
-  .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
-  .asset-card { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; overflow: hidden; background: var(--bg, #fff); }
-  .asset-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+  .set-progress { height: 5px; border-radius: 3px; background: rgba(0,0,0,.08); margin-top: 6px; overflow: hidden; }
+  .set-progress b { display: block; height: 100%; background: var(--primary, #3b6ef5); border-radius: 3px; transition: width .5s; }
+
+  /* ---------- 流水线运行视图 ---------- */
+  .pipe-card { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; background: var(--bg, #fff); }
+  .pipe-bar { height: 8px; border-radius: 4px; background: rgba(0,0,0,.08); overflow: hidden; margin: 8px 0 10px; }
+  .pipe-bar b { display: block; height: 100%; background: linear-gradient(90deg,#3b6ef5,#43c59e); border-radius: 4px; transition: width .5s; }
+  .pipe-steps { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow: auto; }
+  .pipe-step { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 4px; border-radius: 6px; }
+  .pipe-step .st { flex: none; width: 18px; text-align: center; }
+  .pipe-step.done .st { color: #1b7a34; }
+  .pipe-step.running { background: rgba(59,110,245,.07); }
+  .pipe-step.running .st { color: var(--primary, #3b6ef5); }
+  .pipe-step.failed .st { color: #c0392b; }
+  .pipe-step .score { margin-left: auto; font-size: 12px; color: var(--muted, #888); }
+
+  /* ---------- 素材墙 ---------- */
+  .section-title { display: flex; align-items: center; gap: 8px; margin: 18px 0 8px; font-size: 14px; font-weight: 600; }
+  .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; }
+  .asset-card { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; overflow: hidden; background: var(--bg, #fff); position: relative; }
+  .asset-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #f4f4f4; }
+  .asset-card.master img { aspect-ratio: 16/9; object-fit: cover; }
   .asset-body { padding: 8px 10px 10px; }
-  .tone-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 2px 8px;
-                border-radius: 20px; }
+  .tone-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 2px 8px; border-radius: 20px; }
   .tone-pass { background: #e6f6ea; color: #1b7a34; }
   .tone-fail { background: #fdf0e2; color: #b25e00; }
-  .tone-swatches { display: flex; gap: 3px; margin-top: 6px; }
-  .tone-swatches i { width: 16px; height: 16px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); }
+  .tone-swatches { display: flex; gap: 3px; margin-top: 6px; flex-wrap: wrap; }
+  .tone-swatches i { width: 15px; height: 15px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); }
   .master-palette { display: flex; gap: 4px; align-items: center; }
   .master-palette i { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(0,0,0,.15); }
   .kind-chip { font-size: 11px; padding: 1px 8px; border-radius: 12px; background: rgba(59,110,245,.1); color: var(--primary, #3b6ef5); }
+  .status-chip { font-size: 11px; padding: 2px 10px; border-radius: 12px; }
+  .status-running { background: rgba(59,110,245,.12); color: #3b6ef5; }
+  .status-done { background: #e6f6ea; color: #1b7a34; }
+  .status-done_with_errors, .status-failed { background: #fdf0e2; color: #b25e00; }
+  .card-actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; }
+  .card-actions button { border: none; border-radius: 6px; padding: 3px 8px; font-size: 11.5px; cursor: pointer;
+                         background: rgba(255,255,255,.92); box-shadow: 0 1px 4px rgba(0,0,0,.18); }
 </style>
 </head>
 <body>
@@ -38,7 +69,7 @@
     <span class="logo">🎮</span>
     <div>
       <h1>游戏素材工坊</h1>
-      <p class="sub">角色 / 场景 / 道具 · 色调与时间背景锚定一致</p>
+      <p class="sub">一次配置 · 整包产出 · 风格与色调全程锚定</p>
     </div>
   </div>
   <nav class="mainnav">
@@ -47,66 +78,74 @@
 </header>
 
 <main class="layout">
-  <!-- ==================== 左侧 ==================== -->
+  <!-- ==================== 左侧：流水线配置 ==================== -->
   <aside class="panel">
     <section class="field">
-      <div class="field-head"><label>新建素材集</label></div>
-      <input type="text" id="setName" placeholder="素材集名称，如：雾港小镇" />
-      <p class="hint">时间背景 = 全集统一的色调与光照锚点</p>
-      <div class="preset-cards" id="presetCards"></div>
-      <textarea id="setDesc" rows="2" placeholder="美术风格补充（可选），如：吉卜力水彩、低饱和"></textarea>
-      <button id="btnCreateSet" class="btn btn-primary" style="width:100%">创建素材集</button>
+      <div class="field-head"><label>新建流水线</label></div>
+      <input type="text" id="pName" placeholder="项目名，如：雾港小镇" />
+
+      <p class="hint" style="margin-top:10px">美术风格（全集统一）</p>
+      <div class="preset-cards" id="styleCards"></div>
+
+      <p class="hint" style="margin-top:10px">时间背景（色调与光照锚点）</p>
+      <div class="preset-cards" id="timeCards"></div>
+
+      <textarea id="pDesc" rows="2" style="margin-top:10px"
+        placeholder="风格补充（可选），拼进全集的风格基因"></textarea>
+
+      <div class="briefs" style="margin-top:10px">
+        <div class="brief-row"><label>场景</label>
+          <textarea id="pScenes" rows="3" placeholder="每行一个，第 1 行作基准图&#10;海边小镇石头街道&#10;集市小巷&#10;灯塔山顶"></textarea></div>
+        <div class="brief-row"><label>角色</label>
+          <textarea id="pChars" rows="3" placeholder="每行一个，留空跳过&#10;披深蓝斗篷的年轻渔夫&#10;白发老船长"></textarea></div>
+        <div class="brief-row"><label>道具</label>
+          <textarea id="pProps" rows="2" placeholder="每行一个，留空跳过&#10;铜制罗盘&#10;旧航海图"></textarea></div>
+      </div>
+
+      <button id="btnCreate" class="btn btn-primary" style="width:100%">🚀 一键生成整套素材</button>
+      <p class="hint">流水线：基准图 → 场景 → 角色 → 道具，每张自动校验色调；单次最多 12 张</p>
     </section>
 
     <section class="field">
-      <div class="field-head"><label>素材集</label></div>
-      <div id="setList"><p class="muted">还没有素材集</p></div>
+      <div class="field-head"><label>我的项目</label></div>
+      <div id="setList"><p class="muted">还没有项目</p></div>
     </section>
   </aside>
 
-  <!-- ==================== 右侧 ==================== -->
+  <!-- ==================== 右侧：运行 / 结果 ==================== -->
   <section class="content">
     <div class="empty" id="empty">
       <div class="empty-icon">🎮</div>
-      <p>左侧创建或选择一个素材集</p>
-      <p class="muted">流程：出场景基准图（色调锚点）→ 角色 / 场景 / 道具逐张生成 → 每张自动做色调校验</p>
+      <p>左侧配置一条流水线，一键产出整套素材</p>
+      <p class="muted">风格基因 + 时间背景 + 基准图融合三层锚定，角色 / 场景 / 道具自动同调</p>
     </div>
 
     <div id="detail" style="display:none">
-      <div class="toolbar">
-        <b id="dName"></b>
-        <span class="kind-chip" id="dPreset"></span>
+      <div class="toolbar" style="margin-bottom:10px">
+        <b id="dName" style="font-size:16px"></b>
+        <span class="kind-chip" id="dStyle"></span>
+        <span class="kind-chip" id="dTime"></span>
         <span class="muted" id="dDesc"></span>
         <span class="spacer"></span>
-        <button class="btn btn-danger" id="btnDelSet">删除素材集</button>
+        <button class="btn btn-ghost" id="btnRerunAll">重跑全部</button>
+        <button class="btn btn-danger" id="btnDelSet">删除</button>
       </div>
 
-      <!-- 基准图 -->
-      <div class="field" style="margin-bottom:14px">
-        <div class="field-head"><label>场景基准图（色调锚点）</label></div>
-        <div id="masterBox" class="asset-grid"></div>
-        <div style="display:flex; gap:8px; margin-top:8px">
-          <input type="text" id="masterDesc" style="flex:1"
-                 placeholder="基准场景描述，如：海边小镇的石头街道，远处有灯塔" />
-          <button id="btnMaster" class="btn btn-primary">生成基准图</button>
+      <!-- 流水线进度 -->
+      <div class="pipe-card" id="pipeCard">
+        <div style="display:flex;align-items:center;gap:10px">
+          <b>流水线</b>
+          <span class="status-chip" id="pipeStatus"></span>
+          <span class="muted" id="pipeCount"></span>
+          <span class="spacer"></span>
+          <span class="muted" id="pipeErr"></span>
         </div>
+        <div class="pipe-bar"><b id="pipeFill" style="width:0%"></b></div>
+        <div class="pipe-steps" id="pipeSteps"></div>
       </div>
 
-      <!-- 素材 -->
-      <div class="toolbar">
-        <b>素材 <span id="astCount" class="pill">0</span></b>
-        <span class="spacer"></span>
-        <button class="btn btn-secondary" data-kind="character">＋角色</button>
-        <button class="btn btn-secondary" data-kind="scene">＋场景</button>
-        <button class="btn btn-secondary" data-kind="prop">＋道具</button>
-      </div>
-      <div id="assetForm" style="display:none; margin-bottom:10px">
-        <div style="display:flex; gap:8px">
-          <input type="text" id="assetDesc" style="flex:1" placeholder="描述这一件素材，如：披蓝色斗篷的年轻渔夫" />
-          <button id="btnGenAsset" class="btn btn-primary">生成</button>
-        </div>
-      </div>
-      <div class="asset-grid" id="assetGrid"></div>
+      <!-- 基准图 + 分区素材墙（JS 渲染） -->
+      <div id="resultArea"></div>
     </div>
   </section>
 </main>
@@ -116,29 +155,28 @@
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { presets: [], sets: [], current: null, kind: null };
+  const state = { styles: [], times: [], sets: [], current: null, timer: null };
 
-  // ---------- 启动 ----------
+  // ================= 启动 =================
   (async () => {
     const [pr, st] = await Promise.all([
       fetch('/api/v1/gameassets/presets').then(r => r.json()),
       fetch('/api/v1/gameassets/sets').then(r => r.json()),
     ]);
-    state.presets = pr.items;
-    state.sets = st.items;
-    renderPresets();
+    state.styles = pr.styles; state.times = pr.times; state.sets = st.items;
+    renderCards($('styleCards'), state.styles);
+    renderCards($('timeCards'), state.times, 1);   // 默认选黄昏
     renderSetList();
   })();
 
-  function renderPresets() {
-    const box = $('presetCards');
+  function renderCards(box, items, activeIdx = 0) {
     box.innerHTML = '';
-    state.presets.forEach((p, i) => {
+    items.forEach((p, i) => {
       const el = document.createElement('div');
-      el.className = 'preset-card' + (i === 0 ? ' active' : '');
+      el.className = 'preset-card' + (i === activeIdx ? ' active' : '');
       el.dataset.id = p.id;
       el.innerHTML = '<div class="preset-band">' +
-        p.swatch.map(c => '<i style="background:' + c + '"></i>').join('') +
+        (p.swatch || []).map(c => '<i style="background:' + c + '"></i>').join('') +
         '</div><span class="preset-name">' + p.name + '</span>';
       el.addEventListener('click', () => {
         box.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
@@ -147,170 +185,207 @@
       box.appendChild(el);
     });
   }
+  const activeId = (box) => box.querySelector('.preset-card.active')?.dataset.id;
 
-  // ---------- 素材集 ----------
-  $('btnCreateSet').addEventListener('click', async () => {
-    const name = $('setName').value.trim();
-    if (!name) return toast('先给素材集起个名字');
-    const preset = document.querySelector('.preset-card.active');
-    if (!preset) return toast('选一个时间背景');
-    const res = await fetch('/api/v1/gameassets/sets', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, time_preset: preset.dataset.id, desc: $('setDesc').value.trim() }),
-    });
-    const data = await res.json();
-    if (!res.ok) return toast(data.detail?.message || '创建失败');
-    state.sets.unshift(data);
-    $('setName').value = ''; $('setDesc').value = '';
-    selectSet(data.id);
+  // ================= 创建流水线 =================
+  $('btnCreate').addEventListener('click', async () => {
+    const name = $('pName').value.trim();
+    if (!name) return toast('先给项目起个名字');
+    const lines = (id) => $(id).value.split('\n').map(s => s.trim()).filter(Boolean);
+    const body = {
+      name, style: activeId($('styleCards')), time_preset: activeId($('timeCards')),
+      desc: $('pDesc').value.trim(),
+      scenes: lines('pScenes'), characters: lines('pChars'), props: lines('pProps'),
+    };
+    if (!body.scenes.length) return toast('场景清单至少写 1 行（第 1 行作基准图）');
+    busy($('btnCreate'), true, '流水线启动中…');
+    try {
+      const res = await fetch('/api/v1/gameassets/sets', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail?.message || 'HTTP ' + res.status);
+      $('pName').value = ''; $('pDesc').value = '';
+      $('pScenes').value = $('pChars').value = $('pProps').value = '';
+      await refreshSets();
+      selectSet(data.id);
+    } catch (e) { toast('创建失败：' + e.message); }
+    finally { busy($('btnCreate'), false); }
   });
+
+  // ================= 项目列表 =================
+  async function refreshSets() {
+    const st = await fetch('/api/v1/gameassets/sets').then(r => r.json());
+    state.sets = st.items;
+    renderSetList();
+  }
 
   function renderSetList() {
     const box = $('setList');
     box.innerHTML = '';
-    if (!state.sets.length) { box.innerHTML = '<p class="muted">还没有素材集</p>'; return; }
-    state.sets.forEach(s => {
+    if (!state.sets.length) { box.innerHTML = '<p class="muted">还没有项目</p>'; return; }
+    for (const s of state.sets) {
       const el = document.createElement('div');
       el.className = 'set-item' + (state.current?.id === s.id ? ' active' : '');
-      el.innerHTML = '<b>' + esc(s.name) + '</b> <span class="kind-chip">' + s.time_name + '</span>'
-        + '<div class="muted" style="font-size:12px">' + s.assets.length + ' 件素材'
-        + (s.master ? ' · 有基准' : ' · 未出基准') + '</div>';
+      const pct = s.total ? Math.round(s.done / s.total * 100) : 0;
+      el.innerHTML = '<b>' + esc(s.name) + '</b> <span class="kind-chip">' + esc(s.style_name || '') + '</span>'
+        + '<div class="muted" style="font-size:12px;margin-top:2px">' + s.asset_count + ' 件素材</div>'
+        + (s.status === 'running'
+            ? '<div class="set-progress"><b style="width:' + pct + '%"></b></div>'
+            : '');
       el.addEventListener('click', () => selectSet(s.id));
       box.appendChild(el);
-    });
+    }
   }
 
+  // ================= 详情 / 轮询 =================
   async function selectSet(sid) {
-    const res = await fetch('/api/v1/gameassets/sets/' + sid);
-    if (!res.ok) return toast('读取素材集失败');
-    state.current = await res.json();
+    state.current = await fetch('/api/v1/gameassets/sets/' + sid).then(r => r.json());
     $('empty').style.display = 'none';
     $('detail').style.display = 'block';
-    $('dName').textContent = state.current.name;
-    $('dPreset').textContent = state.current.time_name;
-    $('dDesc').textContent = state.current.desc || '';
-    renderMaster();
-    renderAssets();
+    renderDetail();
     renderSetList();
+    schedulePoll();
   }
 
+  function schedulePoll() {
+    clearInterval(state.timer);
+    if (state.current?.pipeline?.status === 'running') {
+      state.timer = setInterval(async () => {
+        if (!state.current) return clearInterval(state.timer);
+        const s = await fetch('/api/v1/gameassets/sets/' + state.current.id).then(r => r.json());
+        state.current = s;
+        renderDetail();
+        if (s.pipeline.status !== 'running') {
+          clearInterval(state.timer);
+          refreshSets();
+          toast(s.pipeline.status === 'done' ? '整套素材完成 ✓' : '流水线结束（有失败步骤，可单独重跑）');
+        } else { refreshSets(); }
+      }, 2000);
+    }
+  }
+
+  function renderDetail() {
+    const s = state.current, p = s.pipeline || {};
+    $('dName').textContent = s.name;
+    $('dStyle').textContent = s.style_name || '';
+    $('dTime').textContent = s.time_name || '';
+    $('dDesc').textContent = s.desc || '';
+
+    // 状态徽章
+    const chip = $('pipeStatus');
+    chip.className = 'status-chip status-' + (p.status || 'idle');
+    chip.textContent = { idle: '未开始', running: '生成中…', done: '已完成',
+                         done_with_errors: '完成（有失败）', failed: '失败' }[p.status || 'idle'];
+    $('pipeCount').textContent = p.total ? (p.done + ' / ' + p.total) : '';
+    $('pipeFill').style.width = (p.total ? Math.round(p.done / p.total * 100) : 0) + '%';
+    $('pipeErr').textContent = p.error || '';
+
+    // 步骤日志
+    const steps = $('pipeSteps');
+    steps.innerHTML = '';
+    for (const st of (p.steps || [])) {
+      const row = document.createElement('div');
+      row.className = 'pipe-step ' + st.status;
+      const icon = { pending: '·', running: '◌', done: '✓', failed: '✗' }[st.status] || '·';
+      const score = (st.score != null)
+        ? (st.score <= s.threshold ? '色调 ' + st.score + ' ✓' : '色调 ' + st.score + ' ⚠')
+        : (st.error ? esc(st.error).slice(0, 60) : '');
+      row.innerHTML = '<span class="st">' + icon + '</span>'
+        + '<span>' + st.kind_label + ' · ' + esc(st.desc) + '</span>'
+        + '<span class="score">' + score + '</span>';
+      steps.appendChild(row);
+    }
+
+    // 结果区：基准图 + 分区
+    const area = $('resultArea');
+    area.innerHTML = '';
+    if (s.master) {
+      area.appendChild(section('基准图（风格 × 时间背景的锚）', [masterCard(s.master)], true));
+    }
+    const groups = [['scene', '场景'], ['character', '角色'], ['prop', '道具']];
+    for (const [kind, label] of groups) {
+      const list = (s.assets || []).filter(a => a.kind === kind);
+      if (!list.length) continue;
+      area.appendChild(section(label + ' ' + list.length, list.map(assetCard)));
+    }
+    if (!s.master && p.status !== 'running') {
+      area.innerHTML = '<p class="muted">尚无产出。配置好左侧清单后点「一键生成整套素材」。</p>';
+    }
+  }
+
+  function section(title, cards, isMaster = false) {
+    const wrap = document.createElement('div');
+    const h = document.createElement('div');
+    h.className = 'section-title'; h.textContent = title;
+    const grid = document.createElement('div');
+    grid.className = 'asset-grid';
+    cards.forEach(c => grid.appendChild(c));
+    wrap.appendChild(h); wrap.appendChild(grid);
+    return wrap;
+  }
+
+  function masterCard(m) {
+    const card = document.createElement('div');
+    card.className = 'asset-card master';
+    card.innerHTML = '<img src="' + m.url + '?v=' + (m.seed || '') + '" />'
+      + '<div class="asset-body"><div class="master-palette">'
+      + (m.palette || []).map(c => '<i style="background:' + c + '" title="' + c + '"></i>').join('')
+      + '</div><p class="muted" style="margin:6px 0 0;font-size:12px">' + esc(m.desc) + '</p></div>';
+    return card;
+  }
+
+  function assetCard(a) {
+    const t = a.tone || { pass: true, score: 0, ref_colors: [], asset_colors: [] };
+    const card = document.createElement('div');
+    card.className = 'asset-card';
+    card.innerHTML =
+      '<img src="' + a.url + '?v=' + (a.seed || '') + '" loading="lazy" />'
+      + '<div class="card-actions"><button class="rerun" title="保持锚点重出这一张">↻ 重跑</button></div>'
+      + '<div class="asset-body">'
+      + '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+      + '<span class="kind-chip">' + a.kind_label + '</span>'
+      + '<span class="tone-badge ' + (t.pass ? 'tone-pass' : 'tone-fail') + '">'
+      + (t.pass ? '✓ 色调一致 ' : '✗ 色调偏离 ') + t.score + '</span></div>'
+      + '<p style="margin:6px 0 0;font-size:13px">' + esc(a.desc) + '</p>'
+      + '<div class="tone-swatches">'
+      + (t.asset_colors || []).map(c => '<i style="background:' + c + '" title="素材主色"></i>').join('')
+      + '<span style="width:6px"></span>'
+      + (t.ref_colors || []).map(c => '<i style="background:' + c + ';opacity:.45" title="基准主色"></i>').join('')
+      + '</div></div>';
+    card.querySelector('.rerun').addEventListener('click', async () => {
+      toast('重跑中…');
+      const res = await fetch(`/api/v1/gameassets/sets/${state.current.id}/assets/${a.id}/rerun`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) return toast(data.detail?.message || '重跑失败');
+      toast(data.tone.pass ? '重跑完成，色调 ✓' : '重跑完成，但仍偏离（' + data.tone.score + '），可再试或换描述');
+      selectSet(state.current.id);
+    });
+    return card;
+  }
+
+  // ================= 工具 =================
   $('btnDelSet').addEventListener('click', async () => {
     if (!state.current) return;
-    if (!confirm('删除素材集「' + state.current.name + '」？图片文件保留在 data/images/gameassets/。')) return;
-    await fetch('/api/v1/gameassets/sets/' + state.current.id, { method: 'DELETE' });
-    state.sets = state.sets.filter(s => s.id !== state.current.id);
+    if (!confirm('删除项目「' + state.current.name + '」？图片文件保留在 data/outputs/gameassets/。')) return;
+    const res = await fetch('/api/v1/gameassets/sets/' + state.current.id, { method: 'DELETE' });
+    if (!res.ok) { const d = await res.json(); return toast(d.detail?.message || '删除失败'); }
+    state.sets = state.sets.filter(x => x.id !== state.current.id);
     state.current = null;
+    clearInterval(state.timer);
     $('detail').style.display = 'none';
     $('empty').style.display = 'block';
     renderSetList();
   });
 
-  // ---------- 基准图 ----------
-  function renderMaster() {
-    const box = $('masterBox');
-    box.innerHTML = '';
-    const m = state.current.master;
-    if (!m) {
-      box.innerHTML = '<div class="asset-card" style="padding:18px;text-align:center">'
-        + '<p class="muted">还没有基准图。先出基准图，之后所有素材都会贴着它的色调走。</p></div>';
-      return;
-    }
-    const pal = (m.palette || []).map(c => '<i style="background:' + c + '"></i>').join('');
-    box.innerHTML = '<div class="asset-card"><img src="' + m.url + '?v=' + Date.now() + '" />'
-      + '<div class="asset-body"><div class="master-palette">' + pal + '</div>'
-      + '<p class="muted" style="margin-top:6px;font-size:12px">' + esc(m.desc) + '</p></div></div>';
-  }
-
-  $('btnMaster').addEventListener('click', async () => {
-    const desc = $('masterDesc').value.trim();
-    if (!desc) return toast('先写基准场景描述');
-    busy($('btnMaster'), true, '生成中…（约 1-2 分钟）');
-    try {
-      const res = await fetch(`/api/v1/gameassets/sets/${state.current.id}/master`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ desc }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail?.message || 'HTTP ' + res.status);
-      state.current = data;
-      renderMaster();
-      toast('基准图已出，色调锚点就绪');
-    } catch (e) { toast('生成失败：' + e.message); }
-    finally { busy($('btnMaster'), false); }
+  $('btnRerunAll').addEventListener('click', async () => {
+    if (!state.current) return;
+    if (!confirm('重跑整条流水线会覆盖当前素材，继续？')) return;
+    const res = await fetch(`/api/v1/gameassets/sets/${state.current.id}/pipeline`, { method: 'POST' });
+    if (!res.ok) { const d = await res.json(); return toast(d.detail?.message || '无法启动'); }
+    selectSet(state.current.id);
   });
 
-  // ---------- 素材 ----------
-  document.querySelectorAll('[data-kind]').forEach(btn => btn.addEventListener('click', () => {
-    state.kind = btn.dataset.kind;
-    $('assetForm').style.display = 'flex';
-    $('assetDesc').placeholder = {
-      character: '角色描述，如：披深蓝斗篷的年轻渔夫，手持木杖',
-      scene: '场景描述，如：集市小巷，挂着暖色灯笼',
-      prop: '道具描述，如：铜制罗盘，木盒包装',
-    }[state.kind] + '（色调自动贴基准图）';
-    $('assetDesc').focus();
-  }));
-
-  $('btnGenAsset').addEventListener('click', async () => {
-    const desc = $('assetDesc').value.trim();
-    if (!desc) return toast('先写素材描述');
-    if (!state.current.master) return toast('先出基准图（色调锚点）');
-    busy($('btnGenAsset'), true, '生成中…');
-    try {
-      const res = await fetch(`/api/v1/gameassets/sets/${state.current.id}/assets`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: state.kind, desc }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail?.message || 'HTTP ' + res.status);
-      state.current.assets.unshift(data);
-      const inList = state.sets.find(s => s.id === state.current.id);
-      if (inList) inList.assets = state.current.assets;
-      $('assetDesc').value = '';
-      renderAssets();
-      if (!data.tone.pass) toast('色调偏离基准（' + data.tone.score + ' > ' + data.tone.threshold + '），建议重出');
-    } catch (e) { toast('生成失败：' + e.message); }
-    finally { busy($('btnGenAsset'), false); }
-  });
-
-  function renderAssets() {
-    $('astCount').textContent = state.current.assets.length;
-    const grid = $('assetGrid');
-    grid.innerHTML = '';
-    if (!state.current.assets.length) {
-      grid.innerHTML = '<p class="muted">还没有素材。先出基准图，再加角色 / 场景 / 道具。</p>';
-      return;
-    }
-    for (const a of state.current.assets) {
-      const t = a.tone;
-      const card = document.createElement('div');
-      card.className = 'asset-card';
-      card.innerHTML =
-        '<img src="' + a.url + '?v=' + (a.seed || '') + '" loading="lazy" />'
-        + '<div class="asset-body">'
-        + '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
-        + '<span class="kind-chip">' + a.kind_label + '</span>'
-        + '<span class="tone-badge ' + (t.pass ? 'tone-pass' : 'tone-fail') + '">'
-        + (t.pass ? '✓ 色调一致 ' : '✗ 色调偏离 ') + t.score + '</span>'
-        + '<span class="spacer"></span>'
-        + '<button class="link-btn del">删除</button></div>'
-        + '<p style="margin:6px 0 0;font-size:13px">' + esc(a.desc) + '</p>'
-        + '<div class="tone-swatches">'
-        + t.asset_colors.map(c => '<i style="background:' + c + '" title="素材主色"></i>').join('')
-        + '<span style="width:8px"></span>'
-        + t.ref_colors.map(c => '<i style="background:' + c + ';opacity:.45" title="基准主色"></i>').join('')
-        + '</div></div>';
-      card.querySelector('.del').addEventListener('click', async () => {
-        if (!confirm('删除这件素材？')) return;
-        await fetch(`/api/v1/gameassets/sets/${state.current.id}/assets/${a.id}`, { method: 'DELETE' });
-        state.current.assets = state.current.assets.filter(x => x.id !== a.id);
-        renderAssets(); renderSetList();
-      });
-      grid.appendChild(card);
-    }
-  }
-
-  // ---------- 工具 ----------
   function busy(btn, on, label) {
     if (on) { btn.dataset.old = btn.textContent; btn.textContent = label || '处理中…'; btn.disabled = true; }
     else { btn.textContent = btn.dataset.old || btn.textContent; btn.disabled = false; }
