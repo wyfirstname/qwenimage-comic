@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>游戏素材工坊 · 团子衣橱</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232851a3'/%3E%3Ctext x='16' y='23' font-size='16' text-anchor='middle' fill='white'%3E%E2%96%B6%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/web/style.css" />
+<style>
+  .preset-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .preset-card { border: 1.5px solid var(--border, #ddd); border-radius: 8px; padding: 6px 4px 4px;
+                 text-align: center; cursor: pointer; background: var(--bg, #fff); }
+  .preset-card.active { border-color: var(--primary, #3b6ef5); box-shadow: 0 0 0 2px rgba(59,110,245,.15); }
+  .preset-band { height: 12px; border-radius: 4px; margin-bottom: 4px; display: flex; overflow: hidden; }
+  .preset-band i { flex: 1; }
+  .preset-name { font-size: 12px; }
+  .set-item { padding: 8px 10px; border: 1px solid var(--border, #e3e3e3); border-radius: 8px;
+              margin-bottom: 6px; cursor: pointer; }
+  .set-item.active { border-color: var(--primary, #3b6ef5); background: rgba(59,110,245,.05); }
+  .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .asset-card { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; overflow: hidden; background: var(--bg, #fff); }
+  .asset-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+  .asset-body { padding: 8px 10px 10px; }
+  .tone-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 2px 8px;
+                border-radius: 20px; }
+  .tone-pass { background: #e6f6ea; color: #1b7a34; }
+  .tone-fail { background: #fdf0e2; color: #b25e00; }
+  .tone-swatches { display: flex; gap: 3px; margin-top: 6px; }
+  .tone-swatches i { width: 16px; height: 16px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); }
+  .master-palette { display: flex; gap: 4px; align-items: center; }
+  .master-palette i { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(0,0,0,.15); }
+  .kind-chip { font-size: 11px; padding: 1px 8px; border-radius: 12px; background: rgba(59,110,245,.1); color: var(--primary, #3b6ef5); }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🎮</span>
+    <div>
+      <h1>游戏素材工坊</h1>
+      <p class="sub">角色 / 场景 / 道具 · 色调与时间背景锚定一致</p>
+    </div>
+  </div>
+  <nav class="mainnav">
+    <a class="navitem" href="/" title="返回工作台">← 工作台</a>
+  </nav>
+</header>
+
+<main class="layout">
+  <!-- ==================== 左侧 ==================== -->
+  <aside class="panel">
+    <section class="field">
+      <div class="field-head"><label>新建素材集</label></div>
+      <input type="text" id="setName" placeholder="素材集名称，如：雾港小镇" />
+      <p class="hint">时间背景 = 全集统一的色调与光照锚点</p>
+      <div class="preset-cards" id="presetCards"></div>
+      <textarea id="setDesc" rows="2" placeholder="美术风格补充（可选），如：吉卜力水彩、低饱和"></textarea>
+      <button id="btnCreateSet" class="btn btn-primary" style="width:100%">创建素材集</button>
+    </section>
+
+    <section class="field">
+      <div class="field-head"><label>素材集</label></div>
+      <div id="setList"><p class="muted">还没有素材集</p></div>
+    </section>
+  </aside>
+
+  <!-- ==================== 右侧 ==================== -->
+  <section class="content">
+    <div class="empty" id="empty">
+      <div class="empty-icon">🎮</div>
+      <p>左侧创建或选择一个素材集</p>
+      <p class="muted">流程：出场景基准图（色调锚点）→ 角色 / 场景 / 道具逐张生成 → 每张自动做色调校验</p>
+    </div>
+
+    <div id="detail" style="display:none">
+      <div class="toolbar">
+        <b id="dName"></b>
+        <span class="kind-chip" id="dPreset"></span>
+        <span class="muted" id="dDesc"></span>
+        <span class="spacer"></span>
+        <button class="btn btn-danger" id="btnDelSet">删除素材集</button>
+      </div>
+
+      <!-- 基准图 -->
+      <div class="field" style="margin-bottom:14px">
+        <div class="field-head"><label>场景基准图（色调锚点）</label></div>
+        <div id="masterBox" class="asset-grid"></div>
+        <div style="display:flex; gap:8px; margin-top:8px">
+          <input type="text" id="masterDesc" style="flex:1"
+                 placeholder="基准场景描述，如：海边小镇的石头街道，远处有灯塔" />
+          <button id="btnMaster" class="btn btn-primary">生成基准图</button>
+        </div>
+      </div>
+
+      <!-- 素材 -->
+      <div class="toolbar">
+        <b>素材 <span id="astCount" class="pill">0</span></b>
+        <span class="spacer"></span>
+        <button class="btn btn-secondary" data-kind="character">＋角色</button>
+        <button class="btn btn-secondary" data-kind="scene">＋场景</button>
+        <button class="btn btn-secondary" data-kind="prop">＋道具</button>
+      </div>
+      <div id="assetForm" style="display:none; margin-bottom:10px">
+        <div style="display:flex; gap:8px">
+          <input type="text" id="assetDesc" style="flex:1" placeholder="描述这一件素材，如：披蓝色斗篷的年轻渔夫" />
+          <button id="btnGenAsset" class="btn btn-primary">生成</button>
+        </div>
+      </div>
+      <div class="asset-grid" id="assetGrid"></div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const state = { presets: [], sets: [], current: null, kind: null };
+
+  // ---------- 启动 ----------
+  (async () => {
+    const [pr, st] = await Promise.all([
+      fetch('/api/v1/gameassets/presets').then(r => r.json()),
+      fetch('/api/v1/gameassets/sets').then(r => r.json()),
+    ]);
+    state.presets = pr.items;
+    state.sets = st.items;
+    renderPresets();
+    renderSetList();
+  })();
+
+  function renderPresets() {
+    const box = $('presetCards');
+    box.innerHTML = '';
+    state.presets.forEach((p, i) => {
+      const el = document.createElement('div');
+      el.className = 'preset-card' + (i === 0 ? ' active' : '');
+      el.dataset.id = p.id;
+      el.innerHTML = '<div class="preset-band">' +
+        p.swatch.map(c => '<i style="background:' + c + '"></i>').join('') +
+        '</div><span class="preset-name">' + p.name + '</span>';
+      el.addEventListener('click', () => {
+        box.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
+        el.classList.add('active');
+      });
+      box.appendChild(el);
+    });
+  }
+
+  // ---------- 素材集 ----------
+  $('btnCreateSet').addEventListener('click', async () => {
+    const name = $('setName').value.trim();
+    if (!name) return toast('先给素材集起个名字');
+    const preset = document.querySelector('.preset-card.active');
+    if (!preset) return toast('选一个时间背景');
+    const res = await fetch('/api/v1/gameassets/sets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, time_preset: preset.dataset.id, desc: $('setDesc').value.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) return toast(data.detail?.message || '创建失败');
+    state.sets.unshift(data);
+    $('setName').value = ''; $('setDesc').value = '';
+    selectSet(data.id);
+  });
+
+  function renderSetList() {
+    const box = $('setList');
+    box.innerHTML = '';
+    if (!state.sets.length) { box.innerHTML = '<p class="muted">还没有素材集</p>'; return; }
+    state.sets.forEach(s => {
+      const el = document.createElement('div');
+      el.className = 'set-item' + (state.current?.id === s.id ? ' active' : '');
+      el.innerHTML = '<b>' + esc(s.name) + '</b> <span class="kind-chip">' + s.time_name + '</span>'
+        + '<div class="muted" style="font-size:12px">' + s.assets.length + ' 件素材'
+        + (s.master ? ' · 有基准' : ' · 未出基准') + '</div>';
+      el.addEventListener('click', () => selectSet(s.id));
+      box.appendChild(el);
+    });
+  }
+
+  async function selectSet(sid) {
+    const res = await fetch('/api/v1/gameassets/sets/' + sid);
+    if (!res.ok) return toast('读取素材集失败');
+    state.current = await res.json();
+    $('empty').style.display = 'none';
+    $('detail').style.display = 'block';
+    $('dName').textContent = state.current.name;
+    $('dPreset').textContent = state.current.time_name;
+    $('dDesc').textContent = state.current.desc || '';
+    renderMaster();
+    renderAssets();
+    renderSetList();
+  }
+
+  $('btnDelSet').addEventListener('click', async () => {
+    if (!state.current) return;
+    if (!confirm('删除素材集「' + state.current.name + '」？图片文件保留在 data/images/gameassets/。')) return;
+    await fetch('/api/v1/gameassets/sets/' + state.current.id, { method: 'DELETE' });
+    state.sets = state.sets.filter(s => s.id !== state.current.id);
+    state.current = null;
+    $('detail').style.display = 'none';
+    $('empty').style.display = 'block';
+    renderSetList();
+  });
+
+  // ---------- 基准图 ----------
+  function renderMaster() {
+    const box = $('masterBox');
+    box.innerHTML = '';
+    const m = state.current.master;
+    if (!m) {
+      box.innerHTML = '<div class="asset-card" style="padding:18px;text-align:center">'
+        + '<p class="muted">还没有基准图。先出基准图，之后所有素材都会贴着它的色调走。</p></div>';
+      return;
+    }
+    const pal = (m.palette || []).map(c => '<i style="background:' + c + '"></i>').join('');
+    box.innerHTML = '<div class="asset-card"><img src="' + m.url + '?v=' + Date.now() + '" />'
+      + '<div class="asset-body"><div class="master-palette">' + pal + '</div>'
+      + '<p class="muted" style="margin-top:6px;font-size:12px">' + esc(m.desc) + '</p></div></div>';
+  }
+
+  $('btnMaster').addEventListener('click', async () => {
+    const desc = $('masterDesc').value.trim();
+    if (!desc) return toast('先写基准场景描述');
+    busy($('btnMaster'), true, '生成中…（约 1-2 分钟）');
+    try {
+      const res = await fetch(`/api/v1/gameassets/sets/${state.current.id}/master`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ desc }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail?.message || 'HTTP ' + res.status);
+      state.current = data;
+      renderMaster();
+      toast('基准图已出，色调锚点就绪');
+    } catch (e) { toast('生成失败：' + e.message); }
+    finally { busy($('btnMaster'), false); }
+  });
+
+  // ---------- 素材 ----------
+  document.querySelectorAll('[data-kind]').forEach(btn => btn.addEventListener('click', () => {
+    state.kind = btn.dataset.kind;
+    $('assetForm').style.display = 'flex';
+    $('assetDesc').placeholder = {
+      character: '角色描述，如：披深蓝斗篷的年轻渔夫，手持木杖',
+      scene: '场景描述，如：集市小巷，挂着暖色灯笼',
+      prop: '道具描述，如：铜制罗盘，木盒包装',
+    }[state.kind] + '（色调自动贴基准图）';
+    $('assetDesc').focus();
+  }));
+
+  $('btnGenAsset').addEventListener('click', async () => {
+    const desc = $('assetDesc').value.trim();
+    if (!desc) return toast('先写素材描述');
+    if (!state.current.master) return toast('先出基准图（色调锚点）');
+    busy($('btnGenAsset'), true, '生成中…');
+    try {
+      const res = await fetch(`/api/v1/gameassets/sets/${state.current.id}/assets`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: state.kind, desc }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail?.message || 'HTTP ' + res.status);
+      state.current.assets.unshift(data);
+      const inList = state.sets.find(s => s.id === state.current.id);
+      if (inList) inList.assets = state.current.assets;
+      $('assetDesc').value = '';
+      renderAssets();
+      if (!data.tone.pass) toast('色调偏离基准（' + data.tone.score + ' > ' + data.tone.threshold + '），建议重出');
+    } catch (e) { toast('生成失败：' + e.message); }
+    finally { busy($('btnGenAsset'), false); }
+  });
+
+  function renderAssets() {
+    $('astCount').textContent = state.current.assets.length;
+    const grid = $('assetGrid');
+    grid.innerHTML = '';
+    if (!state.current.assets.length) {
+      grid.innerHTML = '<p class="muted">还没有素材。先出基准图，再加角色 / 场景 / 道具。</p>';
+      return;
+    }
+    for (const a of state.current.assets) {
+      const t = a.tone;
+      const card = document.createElement('div');
+      card.className = 'asset-card';
+      card.innerHTML =
+        '<img src="' + a.url + '?v=' + (a.seed || '') + '" loading="lazy" />'
+        + '<div class="asset-body">'
+        + '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+        + '<span class="kind-chip">' + a.kind_label + '</span>'
+        + '<span class="tone-badge ' + (t.pass ? 'tone-pass' : 'tone-fail') + '">'
+        + (t.pass ? '✓ 色调一致 ' : '✗ 色调偏离 ') + t.score + '</span>'
+        + '<span class="spacer"></span>'
+        + '<button class="link-btn del">删除</button></div>'
+        + '<p style="margin:6px 0 0;font-size:13px">' + esc(a.desc) + '</p>'
+        + '<div class="tone-swatches">'
+        + t.asset_colors.map(c => '<i style="background:' + c + '" title="素材主色"></i>').join('')
+        + '<span style="width:8px"></span>'
+        + t.ref_colors.map(c => '<i style="background:' + c + ';opacity:.45" title="基准主色"></i>').join('')
+        + '</div></div>';
+      card.querySelector('.del').addEventListener('click', async () => {
+        if (!confirm('删除这件素材？')) return;
+        await fetch(`/api/v1/gameassets/sets/${state.current.id}/assets/${a.id}`, { method: 'DELETE' });
+        state.current.assets = state.current.assets.filter(x => x.id !== a.id);
+        renderAssets(); renderSetList();
+      });
+      grid.appendChild(card);
+    }
+  }
+
+  // ---------- 工具 ----------
+  function busy(btn, on, label) {
+    if (on) { btn.dataset.old = btn.textContent; btn.textContent = label || '处理中…'; btn.disabled = true; }
+    else { btn.textContent = btn.dataset.old || btn.textContent; btn.disabled = false; }
+  }
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function toast(msg) {
+    const el = $('toast');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+    setTimeout(() => el.classList.add('hidden'), 3000);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "id": "gameassets",
+  "name": "游戏素材工坊",
+  "icon": "🎮",
+  "description": "角色 / 场景 / 道具批量生成，色调与时间背景锚定一致（基准图融合 + 色板后验校验）",
+  "version": "1.0.0",
+  "api_prefix": "/api/v1/gameassets",
+  "entry": "/apps/gameassets/",
+  "standalone_port": 8107,
+  "capabilities": ["txt2img", "img2img"]
+}
