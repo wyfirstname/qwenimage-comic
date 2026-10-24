@@ -7,7 +7,17 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232851a3'/%3E%3Ctext x='16' y='23' font-size='16' text-anchor='middle' fill='white'%3E%E2%96%B6%3C/text%3E%3C/svg%3E" />
 <link rel="stylesheet" href="/web/style.css" />
 <style>
-  /* ---------- 预设卡片 ---------- */
+  .idea-box { width: 100%; font-size: 15px; padding: 12px; border-radius: 10px;
+              border: 1.5px solid var(--border, #ccc); resize: vertical; }
+  .example-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .example-chips button { border: 1px dashed var(--border, #bbb); background: none; border-radius: 14px;
+                          padding: 3px 12px; font-size: 12.5px; cursor: pointer; color: var(--muted, #777); }
+  .example-chips button:hover { border-color: var(--primary, #3b6ef5); color: var(--primary, #3b6ef5); }
+  .opt-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .opt-grid .opt label { display: block; font-size: 12px; color: var(--muted, #888); margin-bottom: 4px; }
+  .opt-grid select { width: 100%; }
+  .scale-info { font-size: 12px; color: var(--muted, #888); margin-top: 4px; min-height: 16px; }
+
   .preset-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
   .preset-card { border: 1.5px solid var(--border, #ddd); border-radius: 8px; padding: 6px 4px 4px;
                  text-align: center; cursor: pointer; background: var(--bg, #fff); }
@@ -15,22 +25,21 @@
   .preset-band { height: 12px; border-radius: 4px; margin-bottom: 4px; display: flex; overflow: hidden; }
   .preset-band i { flex: 1; }
   .preset-name { font-size: 12px; }
-  .briefs textarea { width: 100%; font-size: 12.5px; }
-  .briefs .brief-row { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 6px; }
-  .briefs .brief-row label { flex: none; width: 42px; padding-top: 6px; font-size: 12.5px; color: var(--muted, #888); }
 
-  /* ---------- 素材集列表 ---------- */
   .set-item { padding: 8px 10px; border: 1px solid var(--border, #e3e3e3); border-radius: 8px;
               margin-bottom: 6px; cursor: pointer; }
   .set-item.active { border-color: var(--primary, #3b6ef5); background: rgba(59,110,245,.05); }
   .set-progress { height: 5px; border-radius: 3px; background: rgba(0,0,0,.08); margin-top: 6px; overflow: hidden; }
-  .set-progress b { display: block; height: 100%; background: var(--primary, #3b6ef5); border-radius: 3px; transition: width .5s; }
+  .set-progress b { display: block; height: 100%; background: var(--primary, #3b6ef5); transition: width .5s; }
 
-  /* ---------- 流水线运行视图 ---------- */
-  .pipe-card { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; background: var(--bg, #fff); }
+  .pipe-card { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; padding: 12px 14px;
+               margin-bottom: 14px; background: var(--bg, #fff); }
   .pipe-bar { height: 8px; border-radius: 4px; background: rgba(0,0,0,.08); overflow: hidden; margin: 8px 0 10px; }
-  .pipe-bar b { display: block; height: 100%; background: linear-gradient(90deg,#3b6ef5,#43c59e); border-radius: 4px; transition: width .5s; }
-  .pipe-steps { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow: auto; }
+  .pipe-bar b { display: block; height: 100%; background: linear-gradient(90deg,#3b6ef5,#43c59e); transition: width .5s; }
+  .plan-box { border-left: 3px solid var(--primary, #3b6ef5); padding: 6px 12px; margin-bottom: 10px;
+              background: rgba(59,110,245,.04); border-radius: 0 8px 8px 0; }
+  .plan-box .counts { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; margin-top: 4px; }
+  .pipe-steps { display: flex; flex-direction: column; gap: 3px; max-height: 230px; overflow: auto; }
   .pipe-step { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 4px; border-radius: 6px; }
   .pipe-step .st { flex: none; width: 18px; text-align: center; }
   .pipe-step.done .st { color: #1b7a34; }
@@ -39,28 +48,32 @@
   .pipe-step.failed .st { color: #c0392b; }
   .pipe-step .score { margin-left: auto; font-size: 12px; color: var(--muted, #888); }
 
-  /* ---------- 素材墙 ---------- */
   .section-title { display: flex; align-items: center; gap: 8px; margin: 18px 0 8px; font-size: 14px; font-weight: 600; }
-  .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; }
-  .asset-card { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; overflow: hidden; background: var(--bg, #fff); position: relative; }
+  .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+  .asset-card { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; overflow: hidden;
+                background: var(--bg, #fff); position: relative; }
   .asset-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #f4f4f4; }
-  .asset-card.master img { aspect-ratio: 16/9; object-fit: cover; }
+  .asset-card.master img { aspect-ratio: 16/9; }
   .asset-body { padding: 8px 10px 10px; }
-  .tone-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 2px 8px; border-radius: 20px; }
+  .tone-badge { display: inline-flex; font-size: 12px; padding: 2px 8px; border-radius: 20px; }
   .tone-pass { background: #e6f6ea; color: #1b7a34; }
   .tone-fail { background: #fdf0e2; color: #b25e00; }
+  .kind-chip { font-size: 11px; padding: 1px 8px; border-radius: 12px; background: rgba(59,110,245,.1); color: var(--primary, #3b6ef5); }
+  .tier-chip { font-size: 11px; padding: 1px 8px; border-radius: 12px; color: #fff; }
+  .tier-common { background: #909399; } .tier-fine { background: #4a90d9; }
+  .tier-epic { background: #8e44ad; } .tier-legendary { background: #e67e22; }
+  .season-chip { font-size: 11px; padding: 1px 7px; border-radius: 12px; background: rgba(67,197,158,.15); color: #1b7a5a; }
+  .master-palette { display: flex; gap: 4px; }
+  .master-palette i { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(0,0,0,.15); }
   .tone-swatches { display: flex; gap: 3px; margin-top: 6px; flex-wrap: wrap; }
   .tone-swatches i { width: 15px; height: 15px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); }
-  .master-palette { display: flex; gap: 4px; align-items: center; }
-  .master-palette i { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(0,0,0,.15); }
-  .kind-chip { font-size: 11px; padding: 1px 8px; border-radius: 12px; background: rgba(59,110,245,.1); color: var(--primary, #3b6ef5); }
-  .status-chip { font-size: 11px; padding: 2px 10px; border-radius: 12px; }
-  .status-running { background: rgba(59,110,245,.12); color: #3b6ef5; }
-  .status-done { background: #e6f6ea; color: #1b7a34; }
-  .status-done_with_errors, .status-failed { background: #fdf0e2; color: #b25e00; }
-  .card-actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; }
+  .card-actions { position: absolute; top: 6px; right: 6px; }
   .card-actions button { border: none; border-radius: 6px; padding: 3px 8px; font-size: 11.5px; cursor: pointer;
                          background: rgba(255,255,255,.92); box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+  .status-chip { font-size: 11px; padding: 2px 10px; border-radius: 12px; }
+  .status-planning, .status-running { background: rgba(59,110,245,.12); color: #3b6ef5; }
+  .status-done { background: #e6f6ea; color: #1b7a34; }
+  .status-done_with_errors, .status-failed { background: #fdf0e2; color: #b25e00; }
 </style>
 </head>
 <body>
@@ -69,7 +82,7 @@
     <span class="logo">🎮</span>
     <div>
       <h1>游戏素材工坊</h1>
-      <p class="sub">一次配置 · 整包产出 · 风格与色调全程锚定</p>
+      <p class="sub">一句话 → 自动策划 → 整包素材（含四季场景与分级武器）</p>
     </div>
   </div>
   <nav class="mainnav">
@@ -78,32 +91,40 @@
 </header>
 
 <main class="layout">
-  <!-- ==================== 左侧：流水线配置 ==================== -->
+  <!-- ==================== 左侧：一句话 ==================== -->
   <aside class="panel">
     <section class="field">
-      <div class="field-head"><label>新建流水线</label></div>
-      <input type="text" id="pName" placeholder="项目名，如：雾港小镇" />
+      <div class="field-head"><label>描述你想要的游戏世界</label></div>
+      <textarea id="idea" class="idea-box" rows="3"
+        placeholder="例：一个东方修仙题材的开放世界，剑修与灵兽相伴"></textarea>
+      <div class="example-chips">
+        <button data-i="东方修仙题材的开放世界，剑修与灵兽相伴">东方修仙</button>
+        <button data-i="蒸汽朋克飞空艇城市的冒险故事">蒸汽朋克</button>
+        <button data-i="北欧神话风格的维京村落与冰海">北欧维京</button>
+        <button data-i="萌系 Q 版农场经营小镇">萌系农场</button>
+      </div>
 
-      <p class="hint" style="margin-top:10px">美术风格（全集统一）</p>
+      <p class="hint" style="margin-top:10px">美术风格</p>
       <div class="preset-cards" id="styleCards"></div>
 
       <p class="hint" style="margin-top:10px">时间背景（色调与光照锚点）</p>
       <div class="preset-cards" id="timeCards"></div>
 
-      <textarea id="pDesc" rows="2" style="margin-top:10px"
-        placeholder="风格补充（可选），拼进全集的风格基因"></textarea>
-
-      <div class="briefs" style="margin-top:10px">
-        <div class="brief-row"><label>场景</label>
-          <textarea id="pScenes" rows="3" placeholder="每行一个，第 1 行作基准图&#10;海边小镇石头街道&#10;集市小巷&#10;灯塔山顶"></textarea></div>
-        <div class="brief-row"><label>角色</label>
-          <textarea id="pChars" rows="3" placeholder="每行一个，留空跳过&#10;披深蓝斗篷的年轻渔夫&#10;白发老船长"></textarea></div>
-        <div class="brief-row"><label>道具</label>
-          <textarea id="pProps" rows="2" placeholder="每行一个，留空跳过&#10;铜制罗盘&#10;旧航海图"></textarea></div>
+      <div class="opt-grid">
+        <div class="opt"><label>规模</label>
+          <select id="scale"></select></div>
+        <div class="opt"><label>风格补充</label>
+          <select id="descPreset">
+            <option value="">（不补充）</option>
+            <option value="低饱和莫兰迪配色">莫兰迪</option>
+            <option value="高饱和明快配色">明快</option>
+            <option value="暗调电影感">电影感</option>
+          </select></div>
+        <div class="opt"><label>&nbsp;</label>
+          <button id="btnGen" class="btn btn-primary" style="width:100%">生成素材包</button></div>
       </div>
-
-      <button id="btnCreate" class="btn btn-primary" style="width:100%">🚀 一键生成整套素材</button>
-      <p class="hint">流水线：基准图 → 场景 → 角色 → 道具，每张自动校验色调；单次最多 12 张</p>
+      <p class="scale-info" id="scaleInfo"></p>
+      <p class="hint">系统自动策划角色/宠物/武器（分等级）/建筑/野怪的数量与设定，场景自动出春夏秋冬四季</p>
     </section>
 
     <section class="field">
@@ -112,12 +133,12 @@
     </section>
   </aside>
 
-  <!-- ==================== 右侧：运行 / 结果 ==================== -->
+  <!-- ==================== 右侧：进度 / 结果 ==================== -->
   <section class="content">
     <div class="empty" id="empty">
       <div class="empty-icon">🎮</div>
-      <p>左侧配置一条流水线，一键产出整套素材</p>
-      <p class="muted">风格基因 + 时间背景 + 基准图融合三层锚定，角色 / 场景 / 道具自动同调</p>
+      <p>写一句话，系统自动策划并生成整套游戏素材</p>
+      <p class="muted">策划（LLM/规则）→ 基准图 → 场景×四季 → 角色 → 宠物 → 武器 → 建筑 → 野怪</p>
     </div>
 
     <div id="detail" style="display:none">
@@ -125,14 +146,12 @@
         <b id="dName" style="font-size:16px"></b>
         <span class="kind-chip" id="dStyle"></span>
         <span class="kind-chip" id="dTime"></span>
-        <span class="muted" id="dDesc"></span>
         <span class="spacer"></span>
         <button class="btn btn-ghost" id="btnRerunAll">重跑全部</button>
         <button class="btn btn-danger" id="btnDelSet">删除</button>
       </div>
 
-      <!-- 流水线进度 -->
-      <div class="pipe-card" id="pipeCard">
+      <div class="pipe-card">
         <div style="display:flex;align-items:center;gap:10px">
           <b>流水线</b>
           <span class="status-chip" id="pipeStatus"></span>
@@ -141,10 +160,10 @@
           <span class="muted" id="pipeErr"></span>
         </div>
         <div class="pipe-bar"><b id="pipeFill" style="width:0%"></b></div>
+        <div id="planBox"></div>
         <div class="pipe-steps" id="pipeSteps"></div>
       </div>
 
-      <!-- 基准图 + 分区素材墙（JS 渲染） -->
       <div id="resultArea"></div>
     </div>
   </section>
@@ -155,17 +174,18 @@
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { styles: [], times: [], sets: [], current: null, timer: null };
+  const state = { styles: [], times: [], scales: [], sets: [], current: null, timer: null };
 
-  // ================= 启动 =================
   (async () => {
     const [pr, st] = await Promise.all([
       fetch('/api/v1/gameassets/presets').then(r => r.json()),
       fetch('/api/v1/gameassets/sets').then(r => r.json()),
     ]);
-    state.styles = pr.styles; state.times = pr.times; state.sets = st.items;
+    state.styles = pr.styles; state.times = pr.times; state.scales = pr.scales;
+    state.sets = st.items;
     renderCards($('styleCards'), state.styles);
-    renderCards($('timeCards'), state.times, 1);   // 默认选黄昏
+    renderCards($('timeCards'), state.times, 2);       // 默认黄昏
+    renderScales();
     renderSetList();
   })();
 
@@ -187,36 +207,47 @@
   }
   const activeId = (box) => box.querySelector('.preset-card.active')?.dataset.id;
 
-  // ================= 创建流水线 =================
-  $('btnCreate').addEventListener('click', async () => {
-    const name = $('pName').value.trim();
-    if (!name) return toast('先给项目起个名字');
-    const lines = (id) => $(id).value.split('\n').map(s => s.trim()).filter(Boolean);
-    const body = {
-      name, style: activeId($('styleCards')), time_preset: activeId($('timeCards')),
-      desc: $('pDesc').value.trim(),
-      scenes: lines('pScenes'), characters: lines('pChars'), props: lines('pProps'),
-    };
-    if (!body.scenes.length) return toast('场景清单至少写 1 行（第 1 行作基准图）');
-    busy($('btnCreate'), true, '流水线启动中…');
+  function renderScales() {
+    const sel = $('scale');
+    sel.innerHTML = state.scales.map(s =>
+      `<option value="${s.id}">${s.name}（约 ${s.images} 张）</option>`).join('');
+    updateScaleInfo();
+    sel.addEventListener('change', updateScaleInfo);
+  }
+  function updateScaleInfo() {
+    const s = state.scales.find(x => x.id === $('scale').value);
+    if (s) $('scaleInfo').textContent =
+      `场景 ${s.scenes}×4季 · 角色 ${s.characters} · 宠物 ${s.pets} · 武器 ${s.weapons}（分等级） · 建筑 ${s.buildings} · 野怪 ${s.monsters}`;
+  }
+
+  document.querySelectorAll('.example-chips button').forEach(b =>
+    b.addEventListener('click', () => { $('idea').value = b.dataset.i; }));
+
+  // ================= 一键生成 =================
+  $('btnGen').addEventListener('click', async () => {
+    const idea = $('idea').value.trim();
+    if (!idea) return toast('先写一句话描述你的游戏世界');
+    busy($('btnGen'), true, '策划与生成中…');
     try {
-      const res = await fetch('/api/v1/gameassets/sets', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      const res = await fetch('/api/v1/gameassets/generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          idea, style: activeId($('styleCards')), time_preset: activeId($('timeCards')),
+          scale: $('scale').value, desc: $('descPreset').value,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail?.message || 'HTTP ' + res.status);
-      $('pName').value = ''; $('pDesc').value = '';
-      $('pScenes').value = $('pChars').value = $('pProps').value = '';
+      $('idea').value = '';
       await refreshSets();
       selectSet(data.id);
-    } catch (e) { toast('创建失败：' + e.message); }
-    finally { busy($('btnCreate'), false); }
+    } catch (e) { toast('启动失败：' + e.message); }
+    finally { busy($('btnGen'), false); }
   });
 
   // ================= 项目列表 =================
   async function refreshSets() {
-    const st = await fetch('/api/v1/gameassets/sets').then(r => r.json());
-    state.sets = st.items;
+    state.sets = (await fetch('/api/v1/gameassets/sets').then(r => r.json())).items;
     renderSetList();
   }
 
@@ -228,11 +259,12 @@
       const el = document.createElement('div');
       el.className = 'set-item' + (state.current?.id === s.id ? ' active' : '');
       const pct = s.total ? Math.round(s.done / s.total * 100) : 0;
-      el.innerHTML = '<b>' + esc(s.name) + '</b> <span class="kind-chip">' + esc(s.style_name || '') + '</span>'
-        + '<div class="muted" style="font-size:12px;margin-top:2px">' + s.asset_count + ' 件素材</div>'
-        + (s.status === 'running'
-            ? '<div class="set-progress"><b style="width:' + pct + '%"></b></div>'
-            : '');
+      const statusText = { planning: '策划中…', running: '生成中', done: '完成',
+                           done_with_errors: '完成(有失败)', failed: '失败', idle: '' }[s.status] || '';
+      el.innerHTML = `<b>${esc(s.name)}</b> <span class="kind-chip">${esc(s.style_name || '')}</span>
+        <div class="muted" style="font-size:12px;margin-top:2px">${statusText} ${s.asset_count} 件素材</div>`
+        + (['planning', 'running'].includes(s.status)
+            ? '<div class="set-progress"><b style="width:' + (s.status === 'planning' ? 5 : pct) + '%"></b></div>' : '');
       el.addEventListener('click', () => selectSet(s.id));
       box.appendChild(el);
     }
@@ -250,16 +282,16 @@
 
   function schedulePoll() {
     clearInterval(state.timer);
-    if (state.current?.pipeline?.status === 'running') {
+    if (['planning', 'running'].includes(state.current?.pipeline?.status)) {
       state.timer = setInterval(async () => {
         if (!state.current) return clearInterval(state.timer);
         const s = await fetch('/api/v1/gameassets/sets/' + state.current.id).then(r => r.json());
         state.current = s;
         renderDetail();
-        if (s.pipeline.status !== 'running') {
+        if (!['planning', 'running'].includes(s.pipeline.status)) {
           clearInterval(state.timer);
           refreshSets();
-          toast(s.pipeline.status === 'done' ? '整套素材完成 ✓' : '流水线结束（有失败步骤，可单独重跑）');
+          toast(s.pipeline.status === 'done' ? `整套素材完成 ✓ 共 ${s.assets.length} 张` : '流水线结束（有失败步骤，可单独重跑）');
         } else { refreshSets(); }
       }, 2000);
     }
@@ -270,16 +302,28 @@
     $('dName').textContent = s.name;
     $('dStyle').textContent = s.style_name || '';
     $('dTime').textContent = s.time_name || '';
-    $('dDesc').textContent = s.desc || '';
 
-    // 状态徽章
     const chip = $('pipeStatus');
     chip.className = 'status-chip status-' + (p.status || 'idle');
-    chip.textContent = { idle: '未开始', running: '生成中…', done: '已完成',
-                         done_with_errors: '完成（有失败）', failed: '失败' }[p.status || 'idle'];
+    chip.textContent = { planning: '策划中…', running: '生成中…', done: '已完成',
+                         done_with_errors: '完成（有失败）', failed: '失败', idle: '未开始' }[p.status || 'idle'];
     $('pipeCount').textContent = p.total ? (p.done + ' / ' + p.total) : '';
-    $('pipeFill').style.width = (p.total ? Math.round(p.done / p.total * 100) : 0) + '%';
+    $('pipeFill').style.width = (p.status === 'planning' ? 3
+                                 : p.total ? Math.round(p.done / p.total * 100) : 0) + '%';
     $('pipeErr').textContent = p.error || '';
+
+    // 方案预览
+    const plan = s.plan;
+    $('planBox').innerHTML = !plan ? '<p class="muted">系统正在策划素材方案…</p>' :
+      '<div class="plan-box"><b>' + esc(plan.title) + '</b>'
+      + '<span class="kind-chip" style="margin-left:8px">' + (plan.planner === 'llm' ? 'LLM 策划' : '模板策划') + '</span>'
+      + '<span class="kind-chip">' + esc(plan.scale_name || '') + '</span>'
+      + '<p class="muted" style="font-size:12.5px;margin:4px 0">' + esc(plan.synopsis || '') + '</p>'
+      + '<div class="counts">'
+      + [['场景', plan.scenes, '×4季'], ['角色', plan.characters], ['宠物', plan.pets],
+         ['武器', plan.weapons], ['建筑', plan.buildings], ['野怪', plan.monsters]]
+        .map(([l, arr, extra]) => `<span>${l} <b>${(arr || []).length}</b>${extra || ''}</span>`).join('')
+      + '</div></div>';
 
     // 步骤日志
     const steps = $('pipeSteps');
@@ -288,33 +332,31 @@
       const row = document.createElement('div');
       row.className = 'pipe-step ' + st.status;
       const icon = { pending: '·', running: '◌', done: '✓', failed: '✗' }[st.status] || '·';
+      const extra = st.season ? `（${{spring:'春',summer:'夏',autumn:'秋',winter:'冬'}[st.season]}）`
+                  : st.tier ? `（${st.tier}）` : '';
       const score = (st.score != null)
-        ? (st.score <= s.threshold ? '色调 ' + st.score + ' ✓' : '色调 ' + st.score + ' ⚠')
+        ? (st.pass ? '色调 ' + st.score + ' ✓' : '色调 ' + st.score + ' ⚠')
         : (st.error ? esc(st.error).slice(0, 60) : '');
       row.innerHTML = '<span class="st">' + icon + '</span>'
-        + '<span>' + st.kind_label + ' · ' + esc(st.desc) + '</span>'
+        + '<span>' + st.kind_label + ' · ' + esc(st.name) + extra + '</span>'
         + '<span class="score">' + score + '</span>';
       steps.appendChild(row);
     }
 
-    // 结果区：基准图 + 分区
+    // 结果分区
     const area = $('resultArea');
     area.innerHTML = '';
-    if (s.master) {
-      area.appendChild(section('基准图（风格 × 时间背景的锚）', [masterCard(s.master)], true));
-    }
-    const groups = [['scene', '场景'], ['character', '角色'], ['prop', '道具']];
+    if (s.master) area.appendChild(section('基准图（风格 × 时间背景的锚）', [masterCard(s.master)]));
+    const groups = [['scene', '场景（四季）'], ['character', '角色'], ['pet', '宠物'],
+                    ['weapon', '武器（分等级）'], ['building', '建筑'], ['monster', '野怪']];
     for (const [kind, label] of groups) {
       const list = (s.assets || []).filter(a => a.kind === kind);
       if (!list.length) continue;
       area.appendChild(section(label + ' ' + list.length, list.map(assetCard)));
     }
-    if (!s.master && p.status !== 'running') {
-      area.innerHTML = '<p class="muted">尚无产出。配置好左侧清单后点「一键生成整套素材」。</p>';
-    }
   }
 
-  function section(title, cards, isMaster = false) {
+  function section(title, cards) {
     const wrap = document.createElement('div');
     const h = document.createElement('div');
     h.className = 'section-title'; h.textContent = title;
@@ -331,7 +373,7 @@
     card.innerHTML = '<img src="' + m.url + '?v=' + (m.seed || '') + '" />'
       + '<div class="asset-body"><div class="master-palette">'
       + (m.palette || []).map(c => '<i style="background:' + c + '" title="' + c + '"></i>').join('')
-      + '</div><p class="muted" style="margin:6px 0 0;font-size:12px">' + esc(m.desc) + '</p></div>';
+      + '</div></div>';
     return card;
   }
 
@@ -339,15 +381,18 @@
     const t = a.tone || { pass: true, score: 0, ref_colors: [], asset_colors: [] };
     const card = document.createElement('div');
     card.className = 'asset-card';
+    const chips = ['<span class="kind-chip">' + a.kind_label + '</span>'];
+    if (a.season_name) chips.push('<span class="season-chip">' + a.season_name + '</span>');
+    if (a.tier) chips.push('<span class="tier-chip tier-' + a.tier_id + '">' + a.tier + '</span>');
+    chips.push('<span class="tone-badge ' + (t.pass ? 'tone-pass' : 'tone-fail') + '">'
+      + (t.pass ? '✓ ' : '✗ ') + t.score + '</span>');
     card.innerHTML =
       '<img src="' + a.url + '?v=' + (a.seed || '') + '" loading="lazy" />'
-      + '<div class="card-actions"><button class="rerun" title="保持锚点重出这一张">↻ 重跑</button></div>'
+      + '<div class="card-actions"><button class="rerun" title="保持锚点重出这一张">↻</button></div>'
       + '<div class="asset-body">'
-      + '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
-      + '<span class="kind-chip">' + a.kind_label + '</span>'
-      + '<span class="tone-badge ' + (t.pass ? 'tone-pass' : 'tone-fail') + '">'
-      + (t.pass ? '✓ 色调一致 ' : '✗ 色调偏离 ') + t.score + '</span></div>'
-      + '<p style="margin:6px 0 0;font-size:13px">' + esc(a.desc) + '</p>'
+      + '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">' + chips.join('') + '</div>'
+      + '<p style="margin:6px 0 0;font-size:13px"><b>' + esc(a.name) + '</b></p>'
+      + '<p class="muted" style="margin:2px 0 0;font-size:12px">' + esc(a.desc) + '</p>'
       + '<div class="tone-swatches">'
       + (t.asset_colors || []).map(c => '<i style="background:' + c + '" title="素材主色"></i>').join('')
       + '<span style="width:6px"></span>'
@@ -358,7 +403,7 @@
       const res = await fetch(`/api/v1/gameassets/sets/${state.current.id}/assets/${a.id}/rerun`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) return toast(data.detail?.message || '重跑失败');
-      toast(data.tone.pass ? '重跑完成，色调 ✓' : '重跑完成，但仍偏离（' + data.tone.score + '），可再试或换描述');
+      toast(data.tone.pass ? '重跑完成，色调 ✓' : '重跑完成，但仍偏离（' + data.tone.score + '）');
       selectSet(state.current.id);
     });
     return card;
@@ -380,7 +425,7 @@
 
   $('btnRerunAll').addEventListener('click', async () => {
     if (!state.current) return;
-    if (!confirm('重跑整条流水线会覆盖当前素材，继续？')) return;
+    if (!confirm('重跑会重新策划并覆盖全部素材，继续？')) return;
     const res = await fetch(`/api/v1/gameassets/sets/${state.current.id}/pipeline`, { method: 'POST' });
     if (!res.ok) { const d = await res.json(); return toast(d.detail?.message || '无法启动'); }
     selectSet(state.current.id);

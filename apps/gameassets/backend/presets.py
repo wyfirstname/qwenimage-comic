@@ -70,3 +70,37 @@ def get_preset(preset_id: str) -> dict:
     if preset_id not in TIME_PRESETS:
         raise KeyError(f"未知时间背景：{preset_id}（可选：{', '.join(TIME_PRESETS)}）")
     return TIME_PRESETS[preset_id]
+
+
+# ------------------------------------------------------------
+#  四季变体：场景在同一时间背景（光照色温）下换季。
+#  季节改变的是内容（植被/雪/花）与部分环境色，不改变色温与光源方向，
+#  所以季节卡的色调校验阈值在流水线里放宽 1.6 倍（合法偏色，不是跑色）。
+# ------------------------------------------------------------
+SEASONS: dict[str, dict] = {
+    "spring": {"name": "春", "prompt": ("fresh spring atmosphere, tender green foliage, "
+                                        "pink blossoms drifting, soft rain-washed light, new growth")},
+    "summer": {"name": "夏", "prompt": ("lush summer atmosphere, deep green foliage, "
+                                        "vivid flowers, bright warm sunlight, clear air")},
+    "autumn": {"name": "秋", "prompt": ("autumn atmosphere, golden and crimson foliage, "
+                                        "harvest light, falling leaves, mellow warm haze")},
+    "winter": {"name": "冬", "prompt": ("winter atmosphere, thick snow cover, bare branches, "
+                                        "icicles, cold pale light, breath fog")},
+}
+SEASON_ORDER = ["spring", "summer", "autumn", "winter"]
+
+
+# ------------------------------------------------------------
+#  武器等级：固定四级，等级词直接描述材质与光效（模型可画）。
+# ------------------------------------------------------------
+WEAPON_TIERS: dict[str, dict] = {
+    "common":    {"name": "普通", "prompt": ("simple humble equipment, rough wood and iron, "
+                                             "visible wear, no glow, practical design")},
+    "fine":      {"name": "精良", "prompt": ("well-forged steel equipment, fine craftsmanship, "
+                                             "clean polish, subtle engraved pattern")},
+    "epic":      {"name": "史诗", "prompt": ("enchanted equipment, glowing runes carved along the blade, "
+                                             "ornate metalwork, faint magical aura")},
+    "legendary": {"name": "传说", "prompt": ("legendary artifact, radiant divine glow, elaborate "
+                                             "gold filigree, gemstones, awe-inspiring presence")},
+}
+TIER_ORDER = ["common", "fine", "epic", "legendary"]

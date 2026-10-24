@@ -51,18 +51,20 @@ def _write(data: dict) -> None:
     _tmp.replace(f)  # 原子替换，避免写一半崩掉整个库
 
 
-def make_set(*, name: str, style: str, style_name: str, time_preset: str,
-             time_name: str, desc: str, threshold: float, briefs: dict) -> dict:
+def make_set(*, name: str, idea: str, style: str, style_name: str, time_preset: str,
+             time_name: str, desc: str, threshold: float, scale: str) -> dict:
     return {
         "id": new_id("gas"),
         "name": name,
+        "idea": idea,            # 用户的一句话需求
         "style": style,
         "style_name": style_name,
         "time_preset": time_preset,
         "time_name": time_name,
         "desc": desc,
         "threshold": threshold,
-        "briefs": briefs,        # {scenes:[], characters:[], props:[]} 逐条清单
+        "scale": scale,
+        "plan": None,            # 策划方案（流水线阶段 1 产出）
         "master": None,          # 场景基准图 {path,url,seed,palette:[hex]}
         "assets": [],
         "pipeline": {"status": "idle", "steps": [], "total": 0, "done": 0,
