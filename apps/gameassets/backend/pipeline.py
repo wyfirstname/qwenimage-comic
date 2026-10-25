@@ -134,11 +134,12 @@ async def _worker() -> None:
 
 
 async def _run_all(sid: str) -> None:
-    """编排：plan（缺才跑）→ master（缺才跑）→ 六类（全部重跑）。"""
+    """编排：plan → master → 六类。已完成（done）的阶段跳过——「全部生成」
+    即「续做到全齐」，中断后点生成不会重跑已出的素材；要重做某一类用该类的单独重试。"""
+    skipped: list[str] = []
     for kind in ("plan", "master", *ASSET_KINDS):
-        need = (kind in ("plan", "master")
-                and stage_status(sid, kind) != "done") or kind in ASSET_KINDS
-        if not need:
+        if stage_status(sid, kind) == "done":
+            skipped.append(store.STAGE_LABELS[kind])
             continue
         try:
             await _run_stage(sid, kind)
@@ -148,6 +149,8 @@ async def _run_all(sid: str) -> None:
             # 单类失败不断链——记日志，继续下一类
             print(f"[gameassets] [all] {kind} 失败，继续：{exc}")
             store.append_log(sid, "error", f"「{store.STAGE_LABELS[kind]}」失败：{exc}")
+    if skipped:
+        store.append_log(sid, "info", f"续做：已完成类跳过（{'、'.join(skipped)}）")
 
 
 def _mark_stage(sid: str, kind: str, *, status: str, error: str = "") -> None:
