@@ -18,6 +18,28 @@ from shared.models_util import new_id
 
 _LOCK = threading.Lock()
 
+# 八个子阶段（顺序即依赖顺序）。策划→基准图→六类素材，各自独立状态。
+STAGES: list[tuple[str, str]] = [
+    ("plan", "自动策划"),
+    ("master", "基准图"),
+    ("scene", "场景"),
+    ("character", "角色"),
+    ("pet", "宠物"),
+    ("weapon", "武器"),
+    ("building", "建筑"),
+    ("monster", "野怪"),
+]
+STAGE_IDS = [k for k, _ in STAGES]
+STAGE_LABELS = dict(STAGES)
+
+
+def _empty_stage() -> dict:
+    return {"status": "idle", "done": 0, "total": 0, "error": "", "items": []}
+
+
+def _empty_pipeline() -> dict:
+    return {"stages": {k: _empty_stage() for k in STAGE_IDS}, "log": []}
+
 
 def _file() -> Path:
     return settings.data_dir_path / "gameassets" / "sets.json"
@@ -32,12 +54,76 @@ def _now() -> str:
 now_iso = _now  # 对外别名：素材记录的时间戳与内部保持同一口径
 
 
+def _normalize(data: dict) -> dict:
+    """把任意历史版本的 pipeline 结构归一到 stages+log（内存内，写库时持久化）。"""
+    from .presets import ASSET_KINDS, build_stage_items
+
+    for s in data.get("sets", []):
+        p = s.get("pipeline") or {}
+        if not isinstance(p.get("stages"), dict):
+            old_status = p.get("status")
+            stages = {k: _empty_stage() for k in STAGE_IDS}
+            if s.get("plan"):
+                stages["plan"]["status"] = "done"
+                # 旧数据没展开过条目表——补上，让每类能看到要出几张、可单独生成
+                items = build_stage_items(s["plan"])
+                for kind in ASSET_KINDS:
+                    stages[kind]["items"] = items[kind]
+                    stages[kind]["total"] = len(items[kind])
+            if s.get("master"):
+                stages["master"]["status"] = "done"
+            if old_status in ("planning", "running") and not s.get("plan"):
+                stages["plan"] = {**_empty_stage(), "status": "failed",
+                                  "error": "服务中断，策划未完成（可重新生成）"}
+            s["pipeline"] = {"stages": stages,
+                             "log": [{"ts": _now(), "level": "warn",
+                                      "msg": "检测到旧版进度数据，已重置为分类模式（已有素材保留）"}]}
+        else:
+            for k in STAGE_IDS:  # 补齐缺的阶段/字段
+                st = p["stages"].setdefault(k, _empty_stage())
+                st.setdefault("items", [])
+                st.setdefault("done", 0)
+                st.setdefault("total", 0)
+                st.setdefault("error", "")
+                st.setdefault("status", "idle")
+            # 条目表为空但有方案 → 补展开（历史遗留数据）
+            if s.get("plan"):
+                items = build_stage_items(s["plan"])
+                for kind in ASSET_KINDS:
+                    st = p["stages"][kind]
+                    if not st["items"]:
+                        st["items"] = items[kind]
+                        st["total"] = len(items[kind])
+            # 注意：这里不翻 queued/running——正常运行的阶段也会被并发读到。
+            # "服务被杀留下假 running" 的清理只在启动时做一次，见 recover_interrupted()。
+        p.setdefault("log", [])
+    return data
+
+
+def recover_interrupted() -> None:
+    """仅服务启动时调用一次：此刻不可能有活任务，假 running/queued 一定是上次进程被杀留下的。"""
+    for s in list_sets():
+        stuck = [k for k, st in s["pipeline"]["stages"].items()
+                 if st["status"] in ("queued", "running")]
+        if not stuck:
+            continue
+        def _mark(t: dict, stuck=stuck) -> None:
+            for k in stuck:
+                t["pipeline"]["stages"][k]["status"] = "failed"
+                t["pipeline"]["stages"][k]["error"] = "服务重启，任务中断（可重试）"
+        mutate(s["id"], _mark)
+        append_log(s["id"], "warn",
+                   "检测到上次服务中断的未完成任务：" + "、".join(STAGE_LABELS[k] for k in stuck)
+                   + "（可单独重试）")
+        print(f"[gameassets] 清理中断任务：{s['id']} {stuck}")
+
+
 def _read() -> dict:
     f = _file()
     if not f.exists():
         return {"sets": []}
     try:
-        return json.loads(f.read_text(encoding="utf-8"))
+        return _normalize(json.loads(f.read_text(encoding="utf-8")))
     except Exception as exc:  # pragma: no cover - 防御性
         print(f"[gameassets] 读取 sets.json 失败：{exc}")
         return {"sets": []}
@@ -64,13 +150,24 @@ def make_set(*, name: str, idea: str, style: str, style_name: str, time_preset: 
         "desc": desc,
         "threshold": threshold,
         "scale": scale,
-        "plan": None,            # 策划方案（流水线阶段 1 产出）
+        "plan": None,            # 策划方案（plan 阶段产出）
         "master": None,          # 场景基准图 {path,url,seed,palette:[hex]}
         "assets": [],
-        "pipeline": {"status": "idle", "steps": [], "total": 0, "done": 0,
-                     "started_at": None, "finished_at": None, "error": ""},
+        "pipeline": _empty_pipeline(),
         "created_at": _now(),
     }
+
+
+def append_log(sid: str, level: str, msg: str) -> None:
+    """操作日志（每类动作/异常都落一条，前端日志面板直接显示）。"""
+    from datetime import datetime
+
+    def _apply(t: dict) -> None:
+        log = t["pipeline"]["log"]
+        log.append({"ts": datetime.now().strftime("%H:%M:%S"),
+                    "level": level, "msg": msg[:300]})
+        del log[:-200]           # 上限 200 条
+    mutate(sid, _apply)
 
 
 def list_sets() -> list[dict]:

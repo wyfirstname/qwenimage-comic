@@ -104,3 +104,28 @@ WEAPON_TIERS: dict[str, dict] = {
                                              "gold filigree, gemstones, awe-inspiring presence")},
 }
 TIER_ORDER = ["common", "fine", "epic", "legendary"]
+
+
+# ------------------------------------------------------------
+#  方案 → 阶段条目表（store 归一化与 pipeline 执行共用；场景全部 ×4 季）
+# ------------------------------------------------------------
+PLAN_KEYS = {"scene": "scenes", "character": "characters", "pet": "pets",
+             "weapon": "weapons", "building": "buildings", "monster": "monsters"}
+ASSET_KINDS = ("scene", "character", "pet", "weapon", "building", "monster")
+
+
+def build_stage_items(plan: dict) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for kind in ASSET_KINDS:
+        items: list[dict] = []
+        for entry in plan[PLAN_KEYS[kind]]:
+            if kind == "scene":
+                for season in SEASON_ORDER:
+                    items.append({"name": entry["name"], "desc": entry["desc"],
+                                  "season": season, "status": "pending"})
+            else:
+                items.append({"name": entry["name"], "desc": entry["desc"],
+                              "tier": entry.get("tier"), "tier_id": entry.get("tier_id"),
+                              "status": "pending"})
+        out[kind] = items
+    return out

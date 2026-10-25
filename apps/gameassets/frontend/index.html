@@ -29,24 +29,54 @@
   .set-item { padding: 8px 10px; border: 1px solid var(--border, #e3e3e3); border-radius: 8px;
               margin-bottom: 6px; cursor: pointer; }
   .set-item.active { border-color: var(--primary, #3b6ef5); background: rgba(59,110,245,.05); }
-  .set-progress { height: 5px; border-radius: 3px; background: rgba(0,0,0,.08); margin-top: 6px; overflow: hidden; }
-  .set-progress b { display: block; height: 100%; background: var(--primary, #3b6ef5); transition: width .5s; }
 
-  .pipe-card { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; padding: 12px 14px;
-               margin-bottom: 14px; background: var(--bg, #fff); }
-  .pipe-bar { height: 8px; border-radius: 4px; background: rgba(0,0,0,.08); overflow: hidden; margin: 8px 0 10px; }
-  .pipe-bar b { display: block; height: 100%; background: linear-gradient(90deg,#3b6ef5,#43c59e); transition: width .5s; }
+  /* ===== 断线/中断横幅 ===== */
+  #connBanner { display: none; margin-bottom: 12px; padding: 10px 14px; border-radius: 10px;
+                background: #fdf0e2; border: 1.5px solid #e8b36a; color: #8a5300; font-size: 13.5px;
+                align-items: center; gap: 10px; }
+  #connBanner.show { display: flex; }
+  #connBanner.danger { background: #fdeaea; border-color: #e08a8a; color: #a03030; }
+  #connBanner button { margin-left: auto; }
+
+  /* ===== 阶段卡片 ===== */
+  .stage-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0; }
+  .stage-card { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; padding: 9px 10px;
+                background: var(--bg, #fff); display: flex; flex-direction: column; gap: 5px; }
+  .stage-card.running { border-color: var(--primary, #3b6ef5); background: rgba(59,110,245,.05); }
+  .stage-card.failed { border-color: #e08a8a; }
+  .stage-head { display: flex; align-items: center; gap: 6px; }
+  .stage-head b { font-size: 13px; }
+  .stage-bar { height: 5px; border-radius: 3px; background: rgba(0,0,0,.08); overflow: hidden; }
+  .stage-bar b { display: block; height: 100%; background: linear-gradient(90deg,#3b6ef5,#43c59e); transition: width .5s; }
+  .stage-meta { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted, #888); }
+  .stage-meta .err { color: #c0392b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .stage-btn { align-self: flex-start; border: 1px solid var(--border, #ccc); background: none; border-radius: 7px;
+               padding: 2px 10px; font-size: 12px; cursor: pointer; color: var(--primary, #3b6ef5); }
+  .stage-btn:hover { background: rgba(59,110,245,.07); }
+  .stage-btn:disabled { opacity: .45; cursor: default; }
+  .st-chip { font-size: 10.5px; padding: 1px 7px; border-radius: 10px; }
+  .st-idle { background: rgba(0,0,0,.06); color: #888; }
+  .st-queued { background: rgba(230,162,60,.15); color: #b26a00; }
+  .st-running { background: rgba(59,110,245,.12); color: #3b6ef5; }
+  .st-done { background: #e6f6ea; color: #1b7a34; }
+  .st-failed { background: #fdeaea; color: #c0392b; }
+
+  .status-chip { font-size: 11px; padding: 2px 10px; border-radius: 12px; }
+  .status-running, .status-planning { background: rgba(59,110,245,.12); color: #3b6ef5; }
+  .status-done { background: #e6f6ea; color: #1b7a34; }
+  .status-partial { background: rgba(230,162,60,.15); color: #b26a00; }
+  .status-done_with_errors, .status-failed { background: #fdf0e2; color: #b25e00; }
+
+  /* ===== 操作日志 ===== */
+  .log-box { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; background: var(--bg, #fff);
+             max-height: 180px; overflow: auto; padding: 8px 10px; font-size: 12.5px; }
+  .log-line { display: flex; gap: 8px; padding: 1.5px 0; }
+  .log-line .ts { color: var(--muted, #999); flex: none; font-family: monospace; font-size: 11.5px; }
+  .log-line.warn { color: #b26a00; }
+  .log-line.error { color: #c0392b; }
+
   .plan-box { border-left: 3px solid var(--primary, #3b6ef5); padding: 6px 12px; margin-bottom: 10px;
-              background: rgba(59,110,245,.04); border-radius: 0 8px 8px 0; }
-  .plan-box .counts { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; margin-top: 4px; }
-  .pipe-steps { display: flex; flex-direction: column; gap: 3px; max-height: 230px; overflow: auto; }
-  .pipe-step { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 4px; border-radius: 6px; }
-  .pipe-step .st { flex: none; width: 18px; text-align: center; }
-  .pipe-step.done .st { color: #1b7a34; }
-  .pipe-step.running { background: rgba(59,110,245,.07); }
-  .pipe-step.running .st { color: var(--primary, #3b6ef5); }
-  .pipe-step.failed .st { color: #c0392b; }
-  .pipe-step .score { margin-left: auto; font-size: 12px; color: var(--muted, #888); }
+              background: rgba(59,110,245,.04); border-radius: 0 8px 8px 0; font-size: 13px; }
 
   .section-title { display: flex; align-items: center; gap: 8px; margin: 18px 0 8px; font-size: 14px; font-weight: 600; }
   .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
@@ -65,15 +95,9 @@
   .season-chip { font-size: 11px; padding: 1px 7px; border-radius: 12px; background: rgba(67,197,158,.15); color: #1b7a5a; }
   .master-palette { display: flex; gap: 4px; }
   .master-palette i { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(0,0,0,.15); }
-  .tone-swatches { display: flex; gap: 3px; margin-top: 6px; flex-wrap: wrap; }
-  .tone-swatches i { width: 15px; height: 15px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); }
   .card-actions { position: absolute; top: 6px; right: 6px; }
   .card-actions button { border: none; border-radius: 6px; padding: 3px 8px; font-size: 11.5px; cursor: pointer;
                          background: rgba(255,255,255,.92); box-shadow: 0 1px 4px rgba(0,0,0,.18); }
-  .status-chip { font-size: 11px; padding: 2px 10px; border-radius: 12px; }
-  .status-planning, .status-running { background: rgba(59,110,245,.12); color: #3b6ef5; }
-  .status-done { background: #e6f6ea; color: #1b7a34; }
-  .status-done_with_errors, .status-failed { background: #fdf0e2; color: #b25e00; }
 </style>
 </head>
 <body>
@@ -82,7 +106,7 @@
     <span class="logo">🎮</span>
     <div>
       <h1>游戏素材工坊</h1>
-      <p class="sub">一句话 → 自动策划 → 整包素材（含四季场景与分级武器）</p>
+      <p class="sub">一句话 → 自动策划 → 分类生成整套素材（每类独立出图、独立重试）</p>
     </div>
   </div>
   <nav class="mainnav">
@@ -124,7 +148,7 @@
           <button id="btnGen" class="btn btn-primary" style="width:100%">生成素材包</button></div>
       </div>
       <p class="scale-info" id="scaleInfo"></p>
-      <p class="hint">系统自动策划角色/宠物/武器（分等级）/建筑/野怪的数量与设定，场景自动出春夏秋冬四季</p>
+      <p class="hint">系统自动策划角色/宠物/武器（分等级）/建筑/野怪；场景自动出春夏秋冬四季。每类素材独立生成、独立重试，一类失败不影响其他类。</p>
     </section>
 
     <section class="field">
@@ -138,32 +162,31 @@
     <div class="empty" id="empty">
       <div class="empty-icon">🎮</div>
       <p>写一句话，系统自动策划并生成整套游戏素材</p>
-      <p class="muted">策划（LLM/规则）→ 基准图 → 场景×四季 → 角色 → 宠物 → 武器 → 建筑 → 野怪</p>
+      <p class="muted">策划 → 基准图 → 场景×四季 / 角色 / 宠物 / 武器 / 建筑 / 野怪（各类独立）</p>
     </div>
 
     <div id="detail" style="display:none">
+      <div id="connBanner">
+        <span id="connMsg"></span>
+        <button class="btn btn-ghost" onclick="location.reload()">刷新页面</button>
+      </div>
+
       <div class="toolbar" style="margin-bottom:10px">
         <b id="dName" style="font-size:16px"></b>
         <span class="kind-chip" id="dStyle"></span>
         <span class="kind-chip" id="dTime"></span>
         <span class="spacer"></span>
-        <button class="btn btn-ghost" id="btnRerunAll">重跑全部</button>
+        <button class="btn btn-ghost" id="btnRunAll">全部生成</button>
         <button class="btn btn-danger" id="btnDelSet">删除</button>
       </div>
 
-      <div class="pipe-card">
-        <div style="display:flex;align-items:center;gap:10px">
-          <b>流水线</b>
-          <span class="status-chip" id="pipeStatus"></span>
-          <span class="muted" id="pipeCount"></span>
-          <span class="spacer"></span>
-          <span class="muted" id="pipeErr"></span>
-        </div>
-        <div class="pipe-bar"><b id="pipeFill" style="width:0%"></b></div>
-        <div id="planBox"></div>
-        <div class="pipe-steps" id="pipeSteps"></div>
-      </div>
+      <div class="stage-grid" id="stageGrid"></div>
 
+      <p class="section-title" style="margin-top:14px">操作日志</p>
+      <div class="log-box" id="logBox"><span class="muted">暂无日志</span></div>
+
+      <div id="planArea"></div>
+      <div id="masterArea"></div>
       <div id="resultArea"></div>
     </div>
   </section>
@@ -174,14 +197,28 @@
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { styles: [], times: [], scales: [], sets: [], current: null, timer: null };
+  const state = { styles: [], times: [], scales: [], sets: [], current: null,
+                  timer: null, failCount: 0, stages: [] };
 
+  const STAGE_TIP = {
+    plan: '一句话 → 完整设定（各类数量与描述）',
+    master: '全集色调锚点，其他素材都融合它',
+    scene: '每个场景自动出春夏秋冬',
+    character: '全身立绘 · 干净底色可抠图',
+    pet: '宠物伙伴设计',
+    weapon: '按 普通/精良/史诗/传说 分级',
+    building: '建筑外观设定',
+    monster: '野怪设计',
+  };
+
+  // ================= 启动 =================
   (async () => {
     const [pr, st] = await Promise.all([
       fetch('/api/v1/gameassets/presets').then(r => r.json()),
       fetch('/api/v1/gameassets/sets').then(r => r.json()),
     ]);
     state.styles = pr.styles; state.times = pr.times; state.scales = pr.scales;
+    state.stages = pr.stages || [];
     state.sets = st.items;
     renderCards($('styleCards'), state.styles);
     renderCards($('timeCards'), state.times, 2);       // 默认黄昏
@@ -227,7 +264,7 @@
   $('btnGen').addEventListener('click', async () => {
     const idea = $('idea').value.trim();
     if (!idea) return toast('先写一句话描述你的游戏世界');
-    busy($('btnGen'), true, '策划与生成中…');
+    busy($('btnGen'), true, '创建中…');
     try {
       const res = await fetch('/api/v1/gameassets/generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -247,203 +284,260 @@
 
   // ================= 项目列表 =================
   async function refreshSets() {
-    state.sets = (await fetch('/api/v1/gameassets/sets').then(r => r.json())).items;
-    renderSetList();
+    try {
+      const st = await fetch('/api/v1/gameassets/sets').then(r => r.json());
+      state.sets = st.items;
+      renderSetList();
+    } catch (e) { /* 列表刷新失败不弹窗，详情轮询会提示断线 */ }
   }
+
+  const STATUS_TEXT = { idle: '未开始', partial: '部分完成', running: '生成中',
+                        done: '已完成', done_with_errors: '部分失败', failed: '失败' };
 
   function renderSetList() {
     const box = $('setList');
-    box.innerHTML = '';
     if (!state.sets.length) { box.innerHTML = '<p class="muted">还没有项目</p>'; return; }
-    for (const s of state.sets) {
+    box.innerHTML = '';
+    state.sets.forEach(s => {
       const el = document.createElement('div');
-      el.className = 'set-item' + (state.current?.id === s.id ? ' active' : '');
-      const pct = s.total ? Math.round(s.done / s.total * 100) : 0;
-      const statusText = { planning: '策划中…', running: '生成中', done: '完成',
-                           done_with_errors: '完成(有失败)', failed: '失败', idle: '' }[s.status] || '';
-      el.innerHTML = `<b>${esc(s.name)}</b> <span class="kind-chip">${esc(s.style_name || '')}</span>
-        <div class="muted" style="font-size:12px;margin-top:2px">${statusText} ${s.asset_count} 件素材</div>`
-        + (['planning', 'running'].includes(s.status)
-            ? '<div class="set-progress"><b style="width:' + (s.status === 'planning' ? 5 : pct) + '%"></b></div>' : '');
+      el.className = 'set-item' + (s.id === state.current ? ' active' : '');
+      el.innerHTML = `<b>${esc(s.name)}</b>
+        <span class="status-chip status-${s.status}" style="margin-left:6px">${STATUS_TEXT[s.status] || s.status}</span>
+        <div class="muted" style="font-size:11.5px;margin-top:2px">${s.asset_count} 张素材</div>`;
       el.addEventListener('click', () => selectSet(s.id));
       box.appendChild(el);
-    }
+    });
   }
 
-  // ================= 详情 / 轮询 =================
-  async function selectSet(sid) {
-    state.current = await fetch('/api/v1/gameassets/sets/' + sid).then(r => r.json());
+  function selectSet(sid) {
+    state.current = sid;
     $('empty').style.display = 'none';
-    $('detail').style.display = 'block';
-    renderDetail();
+    $('detail').style.display = '';
     renderSetList();
-    schedulePoll();
+    poll(true);
+    clearInterval(state.timer);
+    state.timer = setInterval(poll, 2000);
   }
 
-  function schedulePoll() {
-    clearInterval(state.timer);
-    if (['planning', 'running'].includes(state.current?.pipeline?.status)) {
-      state.timer = setInterval(async () => {
-        if (!state.current) return clearInterval(state.timer);
-        const s = await fetch('/api/v1/gameassets/sets/' + state.current.id).then(r => r.json());
-        state.current = s;
-        renderDetail();
-        if (!['planning', 'running'].includes(s.pipeline.status)) {
-          clearInterval(state.timer);
-          refreshSets();
-          toast(s.pipeline.status === 'done' ? `整套素材完成 ✓ 共 ${s.assets.length} 张` : '流水线结束（有失败步骤，可单独重跑）');
-        } else { refreshSets(); }
-      }, 2000);
+  // ================= 轮询 + 断线检测 =================
+  function showBanner(msg, danger) {
+    $('connMsg').textContent = msg;
+    $('connBanner').classList.add('show');
+    $('connBanner').classList.toggle('danger', !!danger);
+  }
+  function hideBanner() { $('connBanner').classList.remove('show', 'danger'); }
+
+  async function poll(first = false) {
+    if (!state.current) return;
+    try {
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}`);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const s = await r.json();
+      state.failCount = 0;
+      hideBanner();
+      renderDetail(s);
+    } catch (e) {
+      state.failCount++;
+      if (state.failCount >= 3) {
+        showBanner('⚠ 与服务失去连接——进度可能已中断。恢复后可对失败/中断的类别单独点「生成」续做。', true);
+        stopSpinners();          // 别再让进度条假装在跑
+      }
     }
   }
 
-  function renderDetail() {
-    const s = state.current, p = s.pipeline || {};
+  function stopSpinners() {
+    document.querySelectorAll('.stage-card.running').forEach(el => {
+      el.classList.remove('running');
+      const chip = el.querySelector('.st-chip');
+      if (chip && (chip.textContent === '执行中' || chip.textContent === '排队中')) {
+        chip.textContent = '已中断'; chip.className = 'st-chip st-failed';
+      }
+      const bar = el.querySelector('.stage-bar b');
+      if (bar) bar.style.transition = 'none';
+    });
+  }
+
+  // ================= 详情渲染 =================
+  const ST_ORDER = ['plan', 'master', 'scene', 'character', 'pet', 'weapon', 'building', 'monster'];
+  const ST_NAME = { plan: '自动策划', master: '基准图', scene: '场景×四季', character: '角色',
+                    pet: '宠物', weapon: '武器', building: '建筑', monster: '野怪' };
+  const ST_CHIP = { idle: ['待生成', 'st-idle'], queued: ['排队中', 'st-queued'],
+                    running: ['执行中', 'st-running'], done: ['完成', 'st-done'],
+                    failed: ['失败', 'st-failed'] };
+
+  function renderDetail(s) {
     $('dName').textContent = s.name;
     $('dStyle').textContent = s.style_name || '';
     $('dTime').textContent = s.time_name || '';
 
-    const chip = $('pipeStatus');
-    chip.className = 'status-chip status-' + (p.status || 'idle');
-    chip.textContent = { planning: '策划中…', running: '生成中…', done: '已完成',
-                         done_with_errors: '完成（有失败）', failed: '失败', idle: '未开始' }[p.status || 'idle'];
-    $('pipeCount').textContent = p.total ? (p.done + ' / ' + p.total) : '';
-    $('pipeFill').style.width = (p.status === 'planning' ? 3
-                                 : p.total ? Math.round(p.done / p.total * 100) : 0) + '%';
-    $('pipeErr').textContent = p.error || '';
-
-    // 方案预览
-    const plan = s.plan;
-    $('planBox').innerHTML = !plan ? '<p class="muted">系统正在策划素材方案…</p>' :
-      '<div class="plan-box"><b>' + esc(plan.title) + '</b>'
-      + '<span class="kind-chip" style="margin-left:8px">' + (plan.planner === 'llm' ? 'LLM 策划' : '模板策划') + '</span>'
-      + '<span class="kind-chip">' + esc(plan.scale_name || '') + '</span>'
-      + '<p class="muted" style="font-size:12.5px;margin:4px 0">' + esc(plan.synopsis || '') + '</p>'
-      + '<div class="counts">'
-      + [['场景', plan.scenes, '×4季'], ['角色', plan.characters], ['宠物', plan.pets],
-         ['武器', plan.weapons], ['建筑', plan.buildings], ['野怪', plan.monsters]]
-        .map(([l, arr, extra]) => `<span>${l} <b>${(arr || []).length}</b>${extra || ''}</span>`).join('')
-      + '</div></div>';
-
-    // 步骤日志
-    const steps = $('pipeSteps');
-    steps.innerHTML = '';
-    for (const st of (p.steps || [])) {
-      const row = document.createElement('div');
-      row.className = 'pipe-step ' + st.status;
-      const icon = { pending: '·', running: '◌', done: '✓', failed: '✗' }[st.status] || '·';
-      const extra = st.season ? `（${{spring:'春',summer:'夏',autumn:'秋',winter:'冬'}[st.season]}）`
-                  : st.tier ? `（${st.tier}）` : '';
-      const score = (st.score != null)
-        ? (st.pass ? '色调 ' + st.score + ' ✓' : '色调 ' + st.score + ' ⚠')
-        : (st.error ? esc(st.error).slice(0, 60) : '');
-      row.innerHTML = '<span class="st">' + icon + '</span>'
-        + '<span>' + st.kind_label + ' · ' + esc(st.name) + extra + '</span>'
-        + '<span class="score">' + score + '</span>';
-      steps.appendChild(row);
+    // alive 对账：页面显示在跑，但服务端没有任务 → 明确告知中断，不再空转
+    const stages = s.pipeline?.stages || {};
+    const anyActive = ST_ORDER.some(k => ['queued', 'running'].includes(stages[k]?.status));
+    if (anyActive && !s.alive) {
+      showBanner('⚠ 流水线已中断（服务重启或异常退出）。下面标黄的类别点「生成」即可续做，已完成的不受影响。', true);
+      ST_ORDER.forEach(k => { if (['queued', 'running'].includes(stages[k]?.status)) {
+        stages[k].status = 'failed';
+        stages[k].error = stages[k].error || '任务中断';
+      }});
     }
 
-    // 结果分区
-    const area = $('resultArea');
-    area.innerHTML = '';
-    if (s.master) area.appendChild(section('基准图（风格 × 时间背景的锚）', [masterCard(s.master)]));
-    const groups = [['scene', '场景（四季）'], ['character', '角色'], ['pet', '宠物'],
-                    ['weapon', '武器（分等级）'], ['building', '建筑'], ['monster', '野怪']];
-    for (const [kind, label] of groups) {
-      const list = (s.assets || []).filter(a => a.kind === kind);
-      if (!list.length) continue;
-      area.appendChild(section(label + ' ' + list.length, list.map(assetCard)));
-    }
+    renderStages(s, stages);
+    renderLog(s.pipeline?.log || []);
+    renderPlan(s);
+    renderMaster(s);
+    renderResults(s);
   }
 
-  function section(title, cards) {
-    const wrap = document.createElement('div');
-    const h = document.createElement('div');
-    h.className = 'section-title'; h.textContent = title;
-    const grid = document.createElement('div');
-    grid.className = 'asset-grid';
-    cards.forEach(c => grid.appendChild(c));
-    wrap.appendChild(h); wrap.appendChild(grid);
-    return wrap;
-  }
-
-  function masterCard(m) {
-    const card = document.createElement('div');
-    card.className = 'asset-card master';
-    card.innerHTML = '<img src="' + m.url + '?v=' + (m.seed || '') + '" />'
-      + '<div class="asset-body"><div class="master-palette">'
-      + (m.palette || []).map(c => '<i style="background:' + c + '" title="' + c + '"></i>').join('')
-      + '</div></div>';
-    return card;
-  }
-
-  function assetCard(a) {
-    const t = a.tone || { pass: true, score: 0, ref_colors: [], asset_colors: [] };
-    const card = document.createElement('div');
-    card.className = 'asset-card';
-    const chips = ['<span class="kind-chip">' + a.kind_label + '</span>'];
-    if (a.season_name) chips.push('<span class="season-chip">' + a.season_name + '</span>');
-    if (a.tier) chips.push('<span class="tier-chip tier-' + a.tier_id + '">' + a.tier + '</span>');
-    chips.push('<span class="tone-badge ' + (t.pass ? 'tone-pass' : 'tone-fail') + '">'
-      + (t.pass ? '✓ ' : '✗ ') + t.score + '</span>');
-    card.innerHTML =
-      '<img src="' + a.url + '?v=' + (a.seed || '') + '" loading="lazy" />'
-      + '<div class="card-actions"><button class="rerun" title="保持锚点重出这一张">↻</button></div>'
-      + '<div class="asset-body">'
-      + '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">' + chips.join('') + '</div>'
-      + '<p style="margin:6px 0 0;font-size:13px"><b>' + esc(a.name) + '</b></p>'
-      + '<p class="muted" style="margin:2px 0 0;font-size:12px">' + esc(a.desc) + '</p>'
-      + '<div class="tone-swatches">'
-      + (t.asset_colors || []).map(c => '<i style="background:' + c + '" title="素材主色"></i>').join('')
-      + '<span style="width:6px"></span>'
-      + (t.ref_colors || []).map(c => '<i style="background:' + c + ';opacity:.45" title="基准主色"></i>').join('')
-      + '</div></div>';
-    card.querySelector('.rerun').addEventListener('click', async () => {
-      toast('重跑中…');
-      const res = await fetch(`/api/v1/gameassets/sets/${state.current.id}/assets/${a.id}/rerun`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) return toast(data.detail?.message || '重跑失败');
-      toast(data.tone.pass ? '重跑完成，色调 ✓' : '重跑完成，但仍偏离（' + data.tone.score + '）');
-      selectSet(state.current.id);
+  function renderStages(s, stages) {
+    const grid = $('stageGrid');
+    if (!grid.children.length) grid.innerHTML = ST_ORDER.map(k => `
+      <div class="stage-card" data-k="${k}">
+        <div class="stage-head"><b>${ST_NAME[k]}</b><span class="st-chip st-idle">待生成</span></div>
+        <div class="stage-bar"><b style="width:0%"></b></div>
+        <div class="stage-meta"><span class="cnt"></span><span class="err"></span></div>
+        <div class="stage-meta" style="font-size:11px">${STAGE_TIP[k] || ''}</div>
+        <button class="stage-btn">生成</button>
+      </div>`).join('');
+    ST_ORDER.forEach(k => {
+      const el = grid.querySelector(`[data-k="${k}"]`);
+      const st = stages[k] || { status: 'idle', done: 0, total: 0, error: '' };
+      const [chipText, chipCls] = ST_CHIP[st.status] || ST_CHIP.idle;
+      el.querySelector('.st-chip').textContent = chipText;
+      el.querySelector('.st-chip').className = 'st-chip ' + chipCls;
+      el.classList.toggle('running', st.status === 'running' || st.status === 'queued');
+      el.classList.toggle('failed', st.status === 'failed');
+      el.querySelector('.stage-bar b').style.width =
+        st.total ? (st.done / st.total * 100) + '%' : (st.status === 'done' ? '100%' : '0%');
+      el.querySelector('.cnt').textContent = st.total ? `${st.done}/${st.total}` : '';
+      el.querySelector('.err').textContent = st.error || '';
+      const btn = el.querySelector('.stage-btn');
+      const active = ['queued', 'running'].includes(st.status);
+      btn.disabled = active;
+      btn.textContent = active ? '进行中…' : (st.status === 'failed' ? '重试'
+                         : (st.status === 'done' ? '重新生成' : '生成'));
+      btn.onclick = () => runStage(k, btn);
     });
-    return card;
   }
+
+  async function runStage(kind, btn) {
+    btn.disabled = true;
+    try {
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/stages/${kind}/run`, { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      toast(kind === 'all' ? '已加入队列：策划 → 基准图 → 各类素材' : `「${ST_NAME[kind]}」已加入队列`);
+      poll(true);
+    } catch (e) { toast(e.message); btn.disabled = false; }
+  }
+  $('btnRunAll').addEventListener('click', (e) => runStage('all', e.target));
+
+  function renderLog(log) {
+    const box = $('logBox');
+    if (!log.length) { box.innerHTML = '<span class="muted">暂无日志</span>'; return; }
+    box.innerHTML = log.slice(-60).map(l =>
+      `<div class="log-line ${l.level}"><span class="ts">${l.ts}</span><span>${esc(l.msg)}</span></div>`).join('');
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function renderPlan(s) {
+    const box = $('planArea');
+    const plan = s.plan;
+    if (!plan) { box.innerHTML = ''; return; }
+    const counts = [['场景', plan.scenes], ['角色', plan.characters], ['宠物', plan.pets],
+                    ['武器', plan.weapons], ['建筑', plan.buildings], ['野怪', plan.monsters]];
+    box.innerHTML = `<p class="section-title">策划方案 <span class="kind-chip">${plan.planner === 'llm' ? 'LLM 策划' : '规则模板'}</span></p>
+      <div class="plan-box"><b>${esc(plan.title)}</b><span class="muted" style="font-size:12px">（${esc(plan.scale_name)}）</span>
+      <div class="muted" style="font-size:12.5px;margin-top:2px">${esc(plan.synopsis)}</div>
+      <div class="muted" style="font-size:12px;margin-top:4px">${counts.map(([n, l]) => `${n}×${l.length}`).join(' · ')}</div></div>`;
+  }
+
+  function renderMaster(s) {
+    const box = $('masterArea');
+    if (!s.master) { box.innerHTML = ''; return; }
+    box.innerHTML = `<p class="section-title">基准图 <span class="muted" style="font-weight:400;font-size:12px">全集色调锚点</span></p>
+      <div class="asset-grid"><div class="asset-card master">
+        <img src="${s.master.url}" loading="lazy">
+        <div class="asset-body">
+          <div class="master-palette">${(s.master.palette || []).map(c => `<i style="background:${c}"></i>`).join('')}</div>
+        </div>
+      </div></div>`;
+  }
+
+  function renderResults(s) {
+    const box = $('resultArea');
+    const groups = {};
+    (s.assets || []).forEach(a => (groups[a.kind] = groups[a.kind] || []).push(a));
+    const order = ['scene', 'character', 'pet', 'weapon', 'building', 'monster'];
+    const names = { scene: '场景', character: '角色', pet: '宠物', weapon: '武器',
+                    building: '建筑', monster: '野怪' };
+    let html = '';
+    for (const k of order) {
+      const list = groups[k];
+      if (!list || !list.length) continue;
+      html += `<p class="section-title">${names[k]} <span class="muted" style="font-weight:400;font-size:12px">${list.length} 张 · 可单卡重跑</span></p>
+        <div class="asset-grid">` + list.map(a => {
+        const tone = a.tone || {};
+        return `<div class="asset-card">
+          <img src="${a.url}" loading="lazy">
+          <div class="card-actions"><button onclick="window.__rerun('${a.id}')">↻</button></div>
+          <div class="asset-body">
+            <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+              <b style="font-size:13px">${esc(a.name)}</b>
+              ${a.season_name ? `<span class="season-chip">${a.season_name}</span>` : ''}
+              ${a.tier ? `<span class="tier-chip tier-${a.tier_id}">${a.tier}</span>` : ''}
+            </div>
+            <div style="margin-top:4px">
+              <span class="tone-badge ${tone.pass ? 'tone-pass' : 'tone-fail'}">
+                ${tone.pass ? '✓ 色调一致' : '⚠ 色调偏离'} ${Math.round(tone.score)}
+              </span>
+            </div>
+            <div class="tone-swatches">${(tone.palette || []).map(c => `<i style="background:${c}"></i>`).join('')}</div>
+          </div>
+        </div>`;
+      }).join('') + '</div>';
+    }
+    box.innerHTML = html || '';
+  }
+
+  window.__rerun = async (aid) => {
+    try {
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/assets/${aid}/rerun`, { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      toast('重跑完成');
+      poll(true);
+    } catch (e) { toast('重跑失败：' + e.message); }
+  };
+
+  $('btnDelSet').addEventListener('click', async () => {
+    if (!confirm('删除这个项目和它的全部素材？')) return;
+    try {
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}`, { method: 'DELETE' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      state.current = null;
+      clearInterval(state.timer);
+      $('detail').style.display = 'none';
+      $('empty').style.display = '';
+      refreshSets();
+    } catch (e) { toast(e.message); }
+  });
 
   // ================= 工具 =================
-  $('btnDelSet').addEventListener('click', async () => {
-    if (!state.current) return;
-    if (!confirm('删除项目「' + state.current.name + '」？图片文件保留在 data/outputs/gameassets/。')) return;
-    const res = await fetch('/api/v1/gameassets/sets/' + state.current.id, { method: 'DELETE' });
-    if (!res.ok) { const d = await res.json(); return toast(d.detail?.message || '删除失败'); }
-    state.sets = state.sets.filter(x => x.id !== state.current.id);
-    state.current = null;
-    clearInterval(state.timer);
-    $('detail').style.display = 'none';
-    $('empty').style.display = 'block';
-    renderSetList();
-  });
-
-  $('btnRerunAll').addEventListener('click', async () => {
-    if (!state.current) return;
-    if (!confirm('重跑会重新策划并覆盖全部素材，继续？')) return;
-    const res = await fetch(`/api/v1/gameassets/sets/${state.current.id}/pipeline`, { method: 'POST' });
-    if (!res.ok) { const d = await res.json(); return toast(d.detail?.message || '无法启动'); }
-    selectSet(state.current.id);
-  });
-
-  function busy(btn, on, label) {
-    if (on) { btn.dataset.old = btn.textContent; btn.textContent = label || '处理中…'; btn.disabled = true; }
-    else { btn.textContent = btn.dataset.old || btn.textContent; btn.disabled = false; }
-  }
-  function esc(s) {
-    return String(s ?? '').replace(/[&<>"']/g, c =>
+  function esc(x) {
+    return String(x ?? '').replace(/[&<>"']/g, c =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
   function toast(msg) {
-    const el = $('toast');
-    el.textContent = msg;
-    el.classList.remove('hidden');
-    setTimeout(() => el.classList.add('hidden'), 3000);
+    const t = $('toast');
+    t.textContent = msg;
+    t.classList.remove('hidden');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.add('hidden'), 3200);
+  }
+  function busy(btn, on, text) {
+    if (on) { btn.dataset.old = btn.textContent; btn.textContent = text || '处理中…'; btn.disabled = true; }
+    else { btn.textContent = btn.dataset.old || btn.textContent; btn.disabled = false; }
   }
 })();
 </script>

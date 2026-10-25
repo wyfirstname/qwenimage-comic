@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""游戏素材工坊接口 3.0 —— 一句话，整包产出。
+"""游戏素材工坊接口 4.0 —— 分类独立生成 + 异常透明。
 
-用户只给一句话需求 + （可选）风格 / 时间背景 / 规模档：
-    POST /generate → 后台自动策划（LLM 优先，规则兜底）→ 流水线出图
-    （基准图 → 场景×四季 → 角色 → 宠物 → 武器按等级 → 建筑 → 野怪）
-前端轮询 GET /sets/{sid} 看进度与结果。
+    POST /generate                      一句话建项目 + 全量编排（plan→master→六类）
+    POST /sets/{sid}/stages/{kind}/run  单独生成某类（plan/master/scene/…/monster）
+    GET  /sets/{sid}                    详情：stages 各类状态/进度/错误 + 日志 + alive
+    POST /sets/{sid}/assets/{aid}/rerun 单卡重跑
 
-一致性三层：风格基因（styles.py）+ 时间背景（presets.py）+ 基准图融合；
-季节变体在同一光照锚下换季，色调阈值放宽 1.6 倍。详见 pipeline.py。
+异常原则：任何阶段失败都落库并展示（状态 chip + 日志行），前端还有
+alive 标志与服务断线检测——绝不出现"页面还在转但其实已经死了"。
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ from .presets import TIME_PRESETS, SEASONS, SEASON_ORDER, WEAPON_TIERS, TIER_ORD
 from .styles import STYLE_PRESETS
 
 router = APIRouter(prefix="/gameassets", tags=["gameassets"])
+
+_RUNNABLE = set(store.STAGE_IDS) | {"all"}
 
 
 class GenerateIn(BaseModel):
@@ -47,10 +49,11 @@ async def list_presets():
                    for k, v in SCALES.items()],
         "seasons": [{"id": k, "name": SEASONS[k]["name"]} for k in SEASON_ORDER],
         "tiers": [{"id": k, "name": WEAPON_TIERS[k]["name"]} for k in TIER_ORDER],
+        "stages": [{"id": k, "name": v} for k, v in store.STAGES],
     }
 
 
-@router.post("/generate", summary="一句话 → 自动策划 → 整包生成（后台流水线）")
+@router.post("/generate", summary="一句话 → 建项目 → 全量编排生成（后台队列）")
 async def generate(req: GenerateIn):
     if req.style not in STYLE_PRESETS:
         raise HTTPException(status_code=400, detail={
@@ -70,46 +73,54 @@ async def generate(req: GenerateIn):
         desc=req.desc.strip(), threshold=req.threshold, scale=req.scale,
     )
     store.add_set(s)
-    pipeline.start(s["id"])     # 后台：策划 → 出图，前端轮询
+    _enqueue_or_409(s["id"], "all")
     return s
+
+
+def _enqueue_or_409(sid: str, kind: str) -> None:
+    try:
+        pipeline.enqueue(sid, kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={
+            "code": "BUSY" if "已在队列" in str(exc) else "NOT_READY",
+            "message": str(exc)})
+
+
+@router.post("/sets/{sid}/stages/{kind}/run",
+             summary="单独生成/重试一个阶段（plan/master/scene/character/pet/weapon/building/monster/all）")
+async def run_stage(sid: str, kind: str):
+    if not store.get_set(sid):
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    if kind not in _RUNNABLE:
+        raise HTTPException(status_code=400, detail={
+            "code": "BAD_STAGE", "message": f"未知阶段：{kind}（可选：{', '.join(sorted(_RUNNABLE))}）"})
+    _enqueue_or_409(sid, kind)
+    return {"ok": True}
 
 
 @router.get("/sets", summary="项目列表")
 async def list_sets():
     items = []
     for s in store.list_sets():
-        p = s.get("pipeline") or {}
         items.append({
             "id": s["id"], "name": s["name"], "idea": s.get("idea"),
             "style_name": s.get("style_name"), "time_name": s.get("time_name"),
-            "status": p.get("status", "idle"),
-            "done": p.get("done", 0), "total": p.get("total", 0),
+            "status": pipeline.overall_status(s),
             "asset_count": len(s.get("assets") or []),
             "created_at": s.get("created_at"),
         })
     return {"items": items}
 
 
-@router.get("/sets/{sid}", summary="项目详情（含方案与流水线进度）")
+@router.get("/sets/{sid}", summary="项目详情（阶段状态/进度/错误 + 日志 + alive）")
 async def get_set(sid: str):
     s = store.get_set(sid)
     if not s:
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    s = dict(s)
+    s["alive"] = pipeline.is_busy(sid)      # 页面用它在"队列中/执行中"与真实状态间对账
+    s["overall"] = pipeline.overall_status(s)
     return s
-
-
-@router.post("/sets/{sid}/pipeline", summary="重跑整条流水线（重新策划 + 覆盖素材）")
-async def rerun_pipeline(sid: str):
-    s = store.get_set(sid)
-    if not s:
-        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
-    if pipeline.is_running(sid):
-        raise HTTPException(status_code=409, detail={"code": "BUSY", "message": "流水线正在运行"})
-    try:
-        pipeline.start(sid)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail={"code": "BUSY", "message": str(exc)})
-    return {"ok": True}
 
 
 @router.post("/sets/{sid}/assets/{aid}/rerun", summary="重跑单张素材（保持锚点不变）")
@@ -117,10 +128,12 @@ async def rerun_asset(sid: str, aid: str):
     s = store.get_set(sid)
     if not s:
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    if pipeline.is_busy(sid):
+        raise HTTPException(status_code=409, detail={"code": "BUSY", "message": "项目有任务在队列中，稍后再试"})
     master = s.get("master")
     if not master:
         raise HTTPException(status_code=409, detail={
-            "code": "NEED_MASTER", "message": "基准图缺失，请重跑整条流水线"})
+            "code": "NEED_MASTER", "message": "基准图缺失，请先生成基准图"})
     idx = next((i for i, a in enumerate(s["assets"]) if a["id"] == aid), None)
     if idx is None:
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "素材不存在"})
@@ -131,9 +144,13 @@ async def rerun_asset(sid: str, aid: str):
     prompt = pipeline.asset_prompt(s, item)
     base = float(s.get("threshold") or tonecheck.DEFAULT_THRESHOLD)
     threshold = base * (pipeline._SEASON_THRESHOLD_FACTOR if old.get("season") else 1.0)
-    rec = await pipeline._run_job(prompt=prompt, negative=pipeline._COMMON_NEG,
-                                  width=pipeline._ASSET_W, height=pipeline._ASSET_H,
-                                  seed=-1, ref_path=master["path"])
+    try:
+        rec = await pipeline._run_job(prompt=prompt, negative=pipeline._COMMON_NEG,
+                                      width=pipeline._ASSET_W, height=pipeline._ASSET_H,
+                                      seed=-1, ref_path=master["path"])
+    except Exception as exc:
+        store.append_log(sid, "error", f"重跑「{old['name']}」失败：{exc}")
+        raise HTTPException(status_code=500, detail={"code": "GEN_FAILED", "message": str(exc)[:200]})
     tone = tonecheck.check(rec["path"], master["path"], threshold=threshold)
     new_asset = {**old,
                  "path": rec["path"], "url": rec["url"], "seed": rec.get("seed"),
@@ -143,13 +160,14 @@ async def rerun_asset(sid: str, aid: str):
     def _apply(t: dict) -> None:
         t["assets"][idx] = new_asset
     store.mutate(sid, _apply)
+    store.append_log(sid, "info", f"重跑「{old['name']}」完成 色调{tone['score']:.0f}")
     return new_asset
 
 
 @router.delete("/sets/{sid}", summary="删除项目")
 async def delete_set(sid: str):
-    if pipeline.is_running(sid):
-        raise HTTPException(status_code=409, detail={"code": "BUSY", "message": "流水线正在运行，不能删除"})
+    if pipeline.is_busy(sid):
+        raise HTTPException(status_code=409, detail={"code": "BUSY", "message": "项目有任务在队列中，不能删除"})
     if not store.delete_set(sid):
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
     return {"ok": True}
@@ -172,18 +190,6 @@ async def delete_asset(sid: str, aid: str):
 # ============================================================
 #  独立运行入口
 # ============================================================
-def _cleanup_orphan_pipelines() -> None:
-    """服务重启后，上一进程没跑完的流水线永远是"生成中"假死——启动时统一标记。"""
-    for s in store.list_sets():
-        status = (s.get("pipeline") or {}).get("status")
-        if status in ("planning", "running") and not pipeline.is_running(s["id"]):
-            def _mark(t: dict) -> None:
-                t["pipeline"]["status"] = "failed"
-                t["pipeline"]["error"] = "服务重启，流水线中断（可点重跑全部续做）"
-            store.mutate(s["id"], _mark)
-            print(f"[gameassets] 清理中断流水线：{s['id']}")
-
-
 def create_app():
     """uvicorn apps.gameassets.backend.routes:create_app --factory --port 8107"""
     from pathlib import Path as _Path
@@ -192,10 +198,10 @@ def create_app():
 
     from shared.webapp import mount_frontend, mount_media
 
-    _cleanup_orphan_pipelines()
-    application = FastAPI(title="游戏素材工坊", version="3.0.0")
+    application = FastAPI(title="游戏素材工坊", version="4.0.0")
     application.include_router(router, prefix="/api/v1")
 
+    store.recover_interrupted()     # 启动时一次性清理上次进程留下的假 running
     mount_media(application)
     frontend = _Path(__file__).resolve().parents[1] / "frontend"
     mount_frontend(application, frontend, at="/", name="index")
