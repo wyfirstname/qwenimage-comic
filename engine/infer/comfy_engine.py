@@ -301,29 +301,38 @@ class ComfyEngine:
                             filename_prefix="qwenimages/api")
             return {"prompt": nodes, "client_id": self.client_id}
 
-        nodes["5"] = g("CLIPTextEncode", clip=["2", 0], text=prompt)
-        nodes["6"] = g("CLIPTextEncode", clip=["2", 0],
-                       text=negative or "")
-
         if ref_name:
-            # 传统图生图：参考图编码回 latent，按 strength 降噪
+            # 传统图生图：参考图编码回 latent，按 strength 降噪（仅 1.0 基线；
+            # 2.1 一律走上面 ref_names 融合路径）
+            nodes["5"] = g("CLIPTextEncode", clip=["2", 0], text=prompt)
+            nodes["6"] = g("CLIPTextEncode", clip=["2", 0],
+                           text=negative or "")
             nodes["7"] = g("LoadImage", image=ref_name)
             nodes["8"] = g("VAEEncode", pixels=["7", 0], vae=["3", 0])
             latent = ["8", 0]
             denoise = strength
+            cfg = guidance_scale
         else:
+            # 2.1 官方 txt2img：TextEncodeQwenImage21 无参考编码 + CFG 固定 1。
+            # 2.1 是 CFG 蒸馏模型，喂 cfg=guidance_scale(4.0) 会把整张图烧成
+            # 纯黑（实测 2026-10-25）；负面提示词在 CFG=1 下不生效属官方约定。
+            nodes["12"] = g("TextEncodeQwenImage21",
+                            clip=["2", 0], prompt=prompt,
+                            negative_prompt=negative or "",
+                            vae=["3", 0], resolution=0)
             nodes["7"] = g("EmptySD3LatentImage",
                            width=width, height=height, batch_size=1)
             latent = ["7", 0]
             denoise = 1.0
+            cfg = 1.0
 
         nodes["9"] = g("KSampler",
                        model=model_link,
-                       positive=["5", 0],
-                       negative=["6", 0],
+                       positive=["12" if ref_name is None else "5", 0],
+                       negative=["12" if ref_name is None else "6", 0],
                        latent_image=latent,
                        seed=seed, steps=steps,
-                       cfg=guidance_scale,
+                       cfg=cfg,
                        sampler_name="euler",
                        scheduler="simple",
                        denoise=denoise)

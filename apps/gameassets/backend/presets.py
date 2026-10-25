@@ -40,8 +40,11 @@ TIME_PRESETS: dict[str, dict] = {
         "id": "night",
         "name": "夜晚",
         "hour": "22:00",
-        "prompt": ("deep blue moonlight, cool desaturated shadows, strong chiaroscuro, "
-                    "small warm lantern accents against vast cold darkness"),
+        # 注意：旧措辞 "deep blue moonlight, cool desaturated shadows, strong chiaroscuro,
+        # vast cold darkness" 会把 2.1 蒸馏模型（CFG=1、8步）推进采样崩溃，整图烧成
+        # 近纯黑（实测 2026-10-25，多组对照实验定位）。改用温和夜色词。
+        "prompt": ("night, bright moonlight, deep blue night sky, "
+                    "warm lantern glow, gentle contrast, details visible in shadows"),
         "negative": "bright daylight, clear blue sky, warm sunset tones",
         "swatch": ["#1F2E5C", "#2851A3", "#565B63", "#F5B041"],
     },

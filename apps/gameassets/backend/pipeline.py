@@ -304,7 +304,8 @@ async def _stage_assets(sid: str, kind: str) -> None:
     for i, item in enumerate(items):
         _item_update(sid, kind, i, status="running")
         try:
-            payload_item = {"kind": kind, "name": item["name"], "desc": item["desc"],
+            payload_item = {"kind": kind, "name": item["name"],
+                            "desc": _clean(item["desc"]),
                             "season": item.get("season"), "tier_id": item.get("tier_id")}
             prompt = asset_prompt(s, payload_item)
             threshold = base_threshold * (_SEASON_THRESHOLD_FACTOR
@@ -343,6 +344,17 @@ async def _stage_assets(sid: str, kind: str) -> None:
 #  提示词组装（与 3.0 相同：风格基因 + 时间背景不缺勤）
 # ============================================================
 
+import re as _re
+
+_PAREN_RE = _re.compile(r"[（(][^）)]*[）)]")
+
+def _clean(text: str) -> str:
+    """剥掉方案文案里的中文括号注记（如「（XX风格）」）。
+    Qwen-Image 2.1 是文字渲染强模型，括号内的中文会被当成「要画到图上的
+    文字」整排渲染出来（实测 2026-10-25），提示词里必须去掉。"""
+    return _PAREN_RE.sub("", str(text or "")).strip().strip("，,、 ")
+
+
 def _style_block(s: dict) -> str:
     style = get_style(s["style"])
     preset = get_preset(s["time_preset"])
@@ -355,7 +367,7 @@ def master_prompt(s: dict) -> tuple[str, str]:
     style, preset = get_style(s["style"]), get_preset(s["time_preset"])
     scene = (s["plan"]["scenes"] or [{"name": "主场景", "desc": s["idea"]}])[0]
     prompt = (f"game concept art, environment establishing shot, "
-              f"{scene['name']} - {scene['desc']}, {_style_block(s)}, "
+              f"{scene['name']} - {_clean(scene['desc'])}, {_style_block(s)}, "
               "rich details, no characters, no text")
     return prompt, f"{_COMMON_NEG}, {style['negative']}, {preset['negative']}"
 
