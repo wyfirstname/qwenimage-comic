@@ -142,6 +142,91 @@ TIER_ORDER = ["common", "fine", "epic", "legendary"]
 
 
 # ------------------------------------------------------------
+#  怪物等级：不再是一锅「野怪」，按战斗定位分四级。
+#  等级同时决定画幅——体积感是等级的主要视觉信号，杂兵用 640 省显存，
+#  终局 1024 顶到 6GB 卡能稳出的上限。size 后面的 note 就是「为什么这么大」。
+# ------------------------------------------------------------
+MONSTER_TIERS: dict[str, dict] = {
+    "minion": {
+        "name": "杂兵", "size": (640, 640),
+        "prompt": ("small minion creature, low threat level, simple readable silhouette, "
+                   "hunched scavenger proportions, single accent color, plain hide"),
+        "note": "成群刷的杂兵，640 见方足够又省显存；轮廓要一眼能认，细节多了反而糊",
+    },
+    "elite": {
+        "name": "精英", "size": (768, 768),
+        "prompt": ("elite variant creature, heavier armored hide, old battle scars, "
+                   "glowing eyes, clearly larger and meaner than a common one"),
+        "note": "带甲带光效的精英，768 才留得住材质与伤疤细节",
+    },
+    "boss": {
+        "name": "首领", "size": (896, 896),
+        "prompt": ("boss-tier behemoth, towering imposing scale, heavy horned silhouette, "
+                   "dramatic menacing presence, powerful planted stance"),
+        "note": "单个 BOSS 要撑满屏幕，896 保证体积感不被压糊",
+    },
+    "worldboss": {
+        "name": "终局", "size": (1024, 1024),
+        "prompt": ("world-ending colossus, colossal otherworldly anatomy, cataclysmic aura, "
+                   "silhouette dwarfs the frame, epic apocalyptic scale"),
+        "note": "终局演出用，1024 是 2060 6GB 能稳定出图的上限，再大就开始崩结构",
+    },
+}
+MONSTER_TIER_ORDER = ["minion", "elite", "boss", "worldboss"]
+
+
+def monster_tier(entry: dict) -> str:
+    """方案条目的怪物等级 id（老数据没有就按杂兵）。"""
+    tid = str(entry.get("tier_id") or "").strip()
+    return tid if tid in MONSTER_TIERS else "minion"
+
+
+# ------------------------------------------------------------
+#  场景用途：每条场景必须显式选一个用途，用途决定画幅。
+#  以前「场景统一 1152×640」是拍脑袋——平铺地表和竖屏副本根本不该同尺寸。
+#  reason 会直接显示在 UI 上，让「为什么这么大」有据可查。
+# ------------------------------------------------------------
+SCENE_USAGES: dict[str, dict] = {
+    "battle": {
+        "name": "横版战斗背景", "size": (1152, 640), "aspect": "16:9",
+        "reason": ("对齐全高清 16:9，等比缩到 1920×1080 不裁切；主体压中央 70% 安全区，"
+                   "左右各留 15% 作视差滚动带，站中轴的角色不会被切到"),
+    },
+    "tile": {
+        "name": "可平铺地表", "size": (1024, 1024), "aspect": "1:1",
+        "reason": ("四边无缝的方形贴图，按 512 网格切片进 TileMap 无限拼接；"
+                   "横竖等长保证任意方向平铺都不拉伸"),
+    },
+    "portrait": {
+        "name": "竖屏副本", "size": (768, 1152), "aspect": "2:3",
+        "reason": ("手机竖屏 9:16 的中间安全区，满屏显示不裁切；上下各留一段给状态栏与对话框"),
+    },
+    "banner": {
+        "name": "章节横幅", "size": (1152, 512), "aspect": "9:4",
+        "reason": ("加载页 / 章节标题的超宽横幅，故意压扁高度让天际线成主导，左右留白写标题"),
+    },
+    "iso": {
+        "name": "等距斜视小场景", "size": (896, 896), "aspect": "1:1",
+        "reason": ("战棋 / 等距副本的一整块战场：7×7 格 × 128px 正好铺满，"
+                   "方图便于相机 45° 环绕不露边"),
+    },
+}
+SCENE_USAGE_ORDER = ["battle", "tile", "portrait", "banner", "iso"]
+
+
+def scene_usage(entry: dict) -> str:
+    """方案条目的场景用途 id。老数据没有 usage 就按 tileable 猜。"""
+    uid = str(entry.get("usage") or "").strip()
+    if uid in SCENE_USAGES:
+        return uid
+    return "tile" if entry.get("tileable") else "battle"
+
+
+def scene_size(entry: dict) -> tuple[int, int]:
+    return SCENE_USAGES[scene_usage(entry)]["size"]
+
+
+# ------------------------------------------------------------
 #  方案 → 阶段条目表（store 归一化与 pipeline 执行共用；场景全部 ×4 季）
 #  条目带稳定 id（itm_*）：方案编辑后靠 id 对账，没改动的条目不重跑。
 # ------------------------------------------------------------
@@ -166,13 +251,16 @@ def build_stage_items(plan: dict, existing: dict[str, list[dict]] | None = None
             old_by_key.setdefault(it.get("key") or it.get("id"), it)
         items: list[dict] = []
         for idx, entry in enumerate(plan[PLAN_KEYS[kind]]):
-            def _inherit(old, name, desc, tier):
-                """旧条目内容没变才沿用状态；变了的回到 pending（触发重跑）。"""
-                if old and old.get("name") == name and old.get("desc") == desc \
-                        and old.get("tier_id", "") == (tier or ""):
-                    return old.get("status", "pending")
-                return "pending"
+            def _inherit(old, name, desc, **meta):
+                """旧条目内容没变才沿用状态；任一字段变了回到 pending（触发重跑）。"""
+                if not old or old.get("name") != name or old.get("desc") != desc:
+                    return "pending"
+                for k, v in meta.items():
+                    if (old.get(k) or "") != (v or ""):
+                        return "pending"
+                return old.get("status", "pending")
             if kind == "scene":
+                usage = scene_usage(entry)
                 seasons = entry.get("seasons") or SEASON_ORDER
                 for season in seasons:
                     key = f"{idx}:{season}"
@@ -181,8 +269,11 @@ def build_stage_items(plan: dict, existing: dict[str, list[dict]] | None = None
                         "id": (old or {}).get("id") or new_id("itm"),
                         "key": key,
                         "name": entry["name"], "desc": entry["desc"],
-                        "season": season, "tileable": bool(entry.get("tileable")),
-                        "status": _inherit(old, entry["name"], entry["desc"], None),
+                        "season": season,
+                        "usage": usage, "usage_name": SCENE_USAGES[usage]["name"],
+                        "tileable": usage == "tile",
+                        "status": _inherit(old, entry["name"], entry["desc"],
+                                           usage=usage),
                     })
             elif kind == "character":
                 gids = entry_genders(entry)
@@ -196,43 +287,62 @@ def build_stage_items(plan: dict, existing: dict[str, list[dict]] | None = None
                         "key": key,
                         "name": entry["name"], "desc": entry["desc"],
                         "gender": gid,
-                        "status": _inherit(old, entry["name"], entry["desc"], None),
+                        "status": _inherit(old, entry["name"], entry["desc"],
+                                           gender=gid),
                     })
             else:
                 key = str(idx)
                 old = old_by_key.get(key) or old_by_key.get(entry["name"])
-                items.append({
-                    "id": (old or {}).get("id") or new_id("itm"),
-                    "key": key,
-                    "name": entry["name"], "desc": entry["desc"],
-                    "tier": entry.get("tier"), "tier_id": entry.get("tier_id"),
-                    "status": _inherit(old, entry["name"], entry["desc"],
-                                       entry.get("tier_id")),
-                })
+                item = {"id": (old or {}).get("id") or new_id("itm"),
+                        "key": key,
+                        "name": entry["name"], "desc": entry["desc"]}
+                if kind == "monster":
+                    tid = monster_tier(entry)
+                    item.update({"tier_id": tid,
+                                 "tier": MONSTER_TIERS[tid]["name"],
+                                 "scene": entry.get("scene")})
+                else:
+                    item.update({"tier": entry.get("tier"),
+                                 "tier_id": entry.get("tier_id")})
+                item["status"] = _inherit(old, entry["name"], entry["desc"],
+                                          tier_id=item.get("tier_id"),
+                                          scene=item.get("scene"))
+                items.append(item)
         out[kind] = items
     return out
 
 
 # ------------------------------------------------------------
 #  按类画幅：640~1152 长边、64 对齐（ComfyUI latent 对齐要求）。
-#  set["sizes"][kind] = [w, h] 可按项目覆盖。
+#  场景/怪物不用这里的默认值——它们的画幅由「场景用途 / 怪物等级」逐条决定，
+#  见 SCENE_USAGES / MONSTER_TIERS 里的 size + reason。
+#  set["sizes"][kind] 只对没有逐条设计的类（character/pet/weapon/building）生效。
 # ------------------------------------------------------------
 ASPECTS: dict[str, tuple[int, int]] = {
-    "scene":     (1152, 640),   # 16:9 横幅概念图
+    "scene":     (1152, 640),   # 16:9 横幅概念图（= battle 用途，仅兜底）
     "character": (512, 768),    # 2:3 立绘
     "pet":       (768, 768),    # 1:1
     "weapon":    (768, 768),    # 1:1 图标
     "building":  (896, 672),    # 4:3
-    "monster":   (768, 768),    # 1:1
+    "monster":   (640, 640),    # 1:1（= 杂兵，仅兜底）
 }
 _MASTER_SIZE = (1152, 640)
 
 
-def asset_size(s: dict, kind: str) -> tuple[int, int]:
-    """项目级覆盖 > 按类默认。"""
-    size = ((s.get("sizes") or {}).get(kind)) or ASPECTS.get(kind, (768, 768))
+def _align(size) -> tuple[int, int]:
     w, h = int(size[0]), int(size[1])
     return max(256, w - w % 64), max(256, h - h % 64)
+
+
+def asset_size(s: dict, kind: str, item: dict | None = None) -> tuple[int, int]:
+    """画幅：本条设计（场景用途 / 怪物等级）> 项目按类覆盖 > 类默认。"""
+    if item:
+        if kind == "scene":
+            return _align(scene_size(item))
+        if kind == "monster":
+            return _align(MONSTER_TIERS[monster_tier(item)]["size"])
+    size = ((s.get("sizes") or {}).get(kind)) or ASPECTS.get(kind, (768, 768))
+    return _align(size)
 
 
 # ------------------------------------------------------------
@@ -262,12 +372,14 @@ CLASS_LABELS: dict[str, str] = {
 
 # 给 UI 显示的固定模板摘要（真正的拼装在 pipeline.asset_prompt 里）
 CLASS_TEMPLATE_HINT: dict[str, str] = {
-    "scene": "环境概念图 · 大全景 · 无角色无文字 · 可叠加季节 / 可平铺",
+    "scene": ("环境概念图 · 大全景 · 无角色无文字 · 画幅由「用途」定："
+              "16:9 战斗 / 1:1 平铺 / 2:3 竖屏 / 9:4 横幅 / 1:1 等距战场"),
     "character": "全身立绘 · 单角色 · 正面站姿 · 居中 · 先写性别再写外观",
     "pet": "宠物伙伴设计 · 全身 · 侧前 45° · 居中",
     "weapon": "武器设计 · 单件 · 四分之三视角 · 居中 · 可叠加等级词",
     "building": "建筑外观概念图 · 完整结构可见 · 无内部视角",
-    "monster": "怪物设计 · 全身 · 剪影有压迫感 · 居中",
+    "monster": ("怪物设计 · 全身 · 居中 · 画幅由「等级」定："
+                "杂兵 640 / 精英 768 / 首领 896 / 终局 1024，并写明出没场景"),
 }
 
 

@@ -52,6 +52,7 @@ def _manifest(s: dict) -> dict:
             "file": f"{a['kind']}/{asset_filename(a)}",
             "kind": a["kind"], "name": a["name"], "desc": a.get("desc"),
             "season": a.get("season"), "tier": a.get("tier"),
+            "usage": a.get("usage"), "scene": a.get("scene"),
             "seed": a.get("seed"), "size": a.get("size"),
             "transparent": (a.get("transparent") or {}).get("method"),
             "tone_score": (a.get("tone") or {}).get("score"),
@@ -67,6 +68,7 @@ def _engine_manifest(s: dict, engine: str) -> dict:
     m = _manifest(s)
     base = [{"file": a["file"], "kind": a["kind"], "name": a["name"],
              "season": a.get("season"), "tier": a.get("tier"),
+             "usage": a.get("usage"), "scene": a.get("scene"),
              "width": (a.get("size") or [None])[0],
              "height": (a.get("size") or [None, None])[1]}
             for a in m["assets"]]
@@ -103,13 +105,14 @@ def build_zip(s: dict, engine_tpl: str | None = None) -> Path:
         # 逐张清单 CSV
         csv_buf = io.StringIO()
         w = csv.writer(csv_buf)
-        w.writerow(["file", "kind", "name", "season", "tier",
+        w.writerow(["file", "kind", "name", "season", "tier", "usage", "scene",
                     "seed", "width", "height", "transparent",
                     "tone_score", "quality_pass", "attempts"])
         for a in m["assets"]:
             size = a.get("size") or [None, None]
             w.writerow([a["file"], a["kind"], a["name"], a["season"] or "",
-                        a["tier"] or "", a["seed"], size[0], size[1],
+                        a["tier"] or "", a["usage"] or "", a["scene"] or "",
+                        a["seed"], size[0], size[1],
                         a["transparent"] or "", a["tone_score"],
                         a["quality"]["pass"], a["quality"]["attempts"]])
         zf.writestr(f"{root}/palette.csv", csv_buf.getvalue().encode("utf-8-sig"))

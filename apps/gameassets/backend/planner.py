@@ -17,7 +17,8 @@ import re
 
 from engine.sdk import engine
 
-from .presets import SEASON_ORDER, TIER_ORDER
+from .presets import (MONSTER_TIER_ORDER, SEASON_ORDER, TIER_ORDER,
+                      SCENE_USAGE_ORDER)
 
 # ------------------------------------------------------------
 #  规模档：每类数量（场景条数 ×4 季 = 场景图数）
@@ -34,13 +35,45 @@ SCALES: dict[str, dict] = {
 _PLAN_SCHEMA = """{
   "title": "游戏名",
   "synopsis": "两三句世界观",
-  "scenes": [{"name": "场景名", "desc": "外观描述，15-40字"}],
+  "scenes": [{"name": "场景名", "usage": "battle|tile|portrait|banner|iso", "desc": "外观描述，15-40字"}],
   "characters": [{"name": "角色名", "gender": "男|女|男女", "desc": "外形/服装/气质描述，15-40字"}],
   "pets": [{"name": "宠物名", "desc": "物种/体型/特征描述，15-40字"}],
   "weapons": [{"name": "武器名", "tier": "普通|精良|史诗|传说", "desc": "形制/材质描述，15-40字"}],
   "buildings": [{"name": "建筑名", "desc": "结构/材质/氛围描述，15-40字"}],
-  "monsters": [{"name": "野怪名", "desc": "物种/体型/威胁感描述，15-40字"}]
+  "monsters": [{"name": "野怪名", "tier": "杂兵|精英|首领|终局", "scene": "出没场景名（必须是上面场景之一）", "desc": "物种/体型/威胁感描述，15-40字"}]
 }"""
+
+_USAGE_ALIAS = {
+    "battle": "battle", "横版战斗背景": "battle", "战斗背景": "battle",
+    "战斗": "battle", "16:9": "battle", "横版": "battle",
+    "tile": "tile", "可平铺地表": "tile", "可平铺": "tile", "平铺": "tile",
+    "地表": "tile", "材质": "tile",
+    "portrait": "portrait", "竖屏副本": "portrait", "竖屏": "portrait",
+    "手机": "portrait", "9:16": "portrait",
+    "banner": "banner", "章节横幅": "banner", "横幅": "banner", "加载页": "banner",
+    "iso": "iso", "等距斜视小场景": "iso", "等距": "iso", "战棋": "iso",
+    "斜视": "iso",
+}
+
+_TIER_ALIAS = {
+    "minion": "minion", "杂兵": "minion", "小怪": "minion", "普通": "minion",
+    "普通怪": "minion", "群体": "minion",
+    "elite": "elite", "精英": "elite", "精英怪": "elite", "精良": "elite",
+    "boss": "boss", "首领": "boss", "BOSS": "boss", "boss怪": "boss", "精英首领": "boss",
+    "worldboss": "worldboss", "终局": "worldboss", "世界首领": "worldboss",
+    "世界boss": "worldboss", "传说": "worldboss", "终极": "worldboss",
+}
+
+
+def _resolve(aliaz: dict, raw: str, fallback: str) -> str:
+    """把模型给的中文/英文标签归一到 id：优先精确命中，其次取最长包含项。"""
+    key = str(raw or "").strip().lower()
+    if not key:
+        return fallback
+    if key in aliaz:
+        return aliaz[key]
+    hits = [(len(k), v) for k, v in aliaz.items() if k in key]
+    return max(hits)[1] if hits else fallback
 
 
 def plan_from_idea(idea: str, scale_id: str) -> dict:
@@ -89,6 +122,14 @@ def _llm_prompt(idea: str, scale: dict) -> str:
         f"建筑 {scale['buildings']} 座、野怪 {scale['monsters']} 种。\n"
         "角色里至少一位是「主角」，主角的 gender 必须是「男女」（系统会生成男女两版），"
         "其余角色按设定填「男」或「女」。\n"
+        "场景每个必须给 usage，按它在游戏里的实际用途选，不要全填 battle：\n"
+        "  battle=横版战斗背景(16:9 1152×640) / tile=可平铺地表(1:1 1024) / "
+        "portrait=竖屏副本(2:3 768×1152) / banner=加载页章节横幅(9:4 1152×512) / "
+        "iso=战棋等距战场(1:1 896)。至少有一个是可玩战斗场景。\n"
+        "野怪必须分级，等级只用：杂兵/精英/首领/终局，且从杂兵起逐级覆盖"
+        f"（{scale['monsters']} 只就从杂兵开始往上排），每级体型威胁感要有明显差别；"
+        "每只野怪必须写 scene（出没场景，必须精确等于上面某个场景的 name），"
+        "尽量让每个场景都有对应的怪，同一场景允许不止一只。\n"
         "名字与描述要贴合用户的游戏题材，不要用示例里的占位词。"
     )
 
@@ -117,11 +158,12 @@ def _parse_plan(raw: str) -> dict | None:
 _FALLBACK_TPL = {
     "title": "新世界",
     "synopsis": "",
+    # (名称, 用途, 描述) —— 用途决定画幅，见 presets.SCENE_USAGES
     "scenes": [
-        ("起点村庄", "依山而建的石头村庄，炊烟袅袅，木质牌坊立在村口"),
-        ("主城集市", "青石板广场两侧排满摊位，彩旗与灯笼横跨街道"),
-        ("边境荒野", "风蚀岩丘与枯草平原，远处矗立着残破的界碑"),
-        ("最终秘境", "悬浮的古代遗迹群，符文石柱环绕中央祭坛"),
+        ("起点村庄", "battle", "依山而建的石头村庄，炊烟袅袅，木质牌坊立在村口"),
+        ("荒野古道", "battle", "风蚀岩丘与枯草平原，远处矗立着残破的界碑"),
+        ("村外农田", "tile", "规整的田垄与低矮石埂，灌溉水渠纵横交错"),
+        ("古神祭坛", "iso", "悬浮的古代遗迹群，符文石柱环绕中央祭坛"),
     ],
     "characters": [
         ("主角·战士", "身披重型铠甲的年轻战士，肩披染风尘的斗篷，手持巨剑", "男女"),
@@ -145,11 +187,12 @@ _FALLBACK_TPL = {
         ("传送塔", "高耸的石头法阵塔，塔顶悬浮着旋转的光环"),
         ("村长会堂", "厚重的木石会堂，横梁上挂着兽骨与地图"),
     ],
+    # (名称, 等级, 出没场景, 描述) —— 等级决定画幅，场景是配属关系
     "monsters": [
-        ("野狼", "灰毛野狼，压低前身龇牙，眼睛在阴影里发亮"),
-        ("石像守卫", "半人高石像怪，苔藓覆肩，双臂是粗重的石锤"),
-        ("暗影蝠群", "成群的黑紫色巨蝠，翼膜半透明，群聚盘旋"),
-        ("腐沼巨蟾", "沼泽巨蟾，背部疣突冒着毒泡，长舌垂地"),
+        ("荒野狼群", "杂兵", "起点村庄", "灰毛野狼，压低前身龇牙，眼睛在阴影里发亮"),
+        ("石像守卫", "精英", "荒野古道", "半人高石像怪，苔藓覆肩，双臂是粗重的石锤"),
+        ("腐沼巨蟾", "首领", "村外农田", "沼泽巨蟾，背部疣突冒着毒泡，长舌垂地"),
+        ("深渊守望者", "终局", "古神祭坛", "披着破碎黑袍的巨影，六条手臂各持一柄裂刃"),
     ],
 }
 
@@ -168,6 +211,13 @@ def _rule_plan(idea: str) -> dict:
             elif kind == "characters":     # (name, desc, gender)
                 n, d, g = e
                 items.append({"name": n, "desc": f"{d}（{idea}风格）", "gender": g})
+            elif kind == "scenes":         # (name, usage, desc)
+                n, u, d = e
+                items.append({"name": n, "usage": u, "desc": f"{d}（{idea}风格）"})
+            elif kind == "monsters":       # (name, tier, scene, desc)
+                n, t, sc, d = e
+                items.append({"name": n, "tier": t, "scene": sc,
+                              "desc": f"{d}（{idea}风格）"})
             else:                          # (name, desc)
                 n, d = e
                 items.append({"name": n, "desc": f"{d}（{idea}风格）"})
@@ -227,11 +277,32 @@ def _normalize(plan: dict, scale: dict) -> dict:
                 entry["tier"] = {"common": "普通", "fine": "精良",
                                  "epic": "史诗", "legendary": "传说"}[tier_id]
                 entry["tier_id"] = tier_id
+            if kind == "scenes":
+                # 用途必须落在一个已知画幅上（大小有据可查）
+                usage = _resolve(_USAGE_ALIAS, it.get("usage"), "battle")
+                entry["usage"] = usage
+                entry["tileable"] = usage == "tile"
+            if kind == "monsters":
+                tier_id = _resolve(_TIER_ALIAS, it.get("tier"), "minion")
+                entry["tier_id"] = tier_id
+                entry["tier"] = {"minion": "杂兵", "elite": "精英",
+                                 "boss": "首领", "worldboss": "终局"}[tier_id]
+                entry["scene"] = str(it.get("scene") or "").strip()[:30]
             norm.append(entry)
         if kind == "scenes" and not norm:
-            norm = [{"name": "主场景", "desc": plan.get("synopsis") or out["title"]}]
+            norm = [{"name": "主场景", "desc": plan.get("synopsis") or out["title"],
+                     "usage": "battle", "tileable": False}]
         out[kind] = norm
     # 武器按等级排序（普通在前），确保等级覆盖
     out["weapons"].sort(key=lambda w: TIER_ORDER.index(w.get("tier_id", "common")))
+    # 野怪按等级排序（杂兵→终局），并补齐「出没场景」的配属关系
+    scene_names = [sc["name"] for sc in out["scenes"]]
+    for i, m in enumerate(out["monsters"]):
+        want = m.get("scene") or ""
+        hit = next((n for n in scene_names if n == want), None) \
+            or next((n for n in scene_names if want and (want in n or n in want)), None)
+        m["scene"] = hit or scene_names[i % len(scene_names)]
+    out["monsters"].sort(key=lambda m: MONSTER_TIER_ORDER.index(
+        m.get("tier_id", "minion")))
     out["season_order"] = SEASON_ORDER
     return out

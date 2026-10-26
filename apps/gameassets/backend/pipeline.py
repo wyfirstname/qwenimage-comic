@@ -10,7 +10,9 @@
 5.0 新增：
   - 质量守门（quality.py）：黑图/纯色/低熵/跑色 四重检测，不过关自动换 seed 重试
   - 透明底（transmat.py）：按类指定 chroma 色键 / rembg，出图后即转 RGBA
-  - 按类画幅（presets.ASPECTS）：场景 16:9、角色 2:3、武器/宠物/野怪 1:1、建筑 4:3
+  - 按类画幅（presets.ASPECTS）：角色 2:3、武器/宠物 1:1、建筑 4:3；
+    场景按「用途」、怪物按「等级」逐条定画幅——每条都有写死的理由，不再是拍脑袋
+  - 场景 ↔ 怪物配属：每只野怪写明出没场景，提示词里带环境上下文，可按场景筛选重跑
   - 筛选重跑：enqueue 带 opts（failed / tone / season），只重跑命中的条目
   - 阶段取消：cancel_stage()，逐张检查取消标志，已出的素材保留
   - 多候选：gen_variants() 一次出 N 张候选，选优提交（提交时旧图进版本历史）
@@ -35,7 +37,9 @@ from . import quality, store, tonecheck, transmat
 from .planner import plan_from_idea
 from .presets import (ASPECTS, get_preset, asset_size, transparent_mode,
                       SEASONS, WEAPON_TIERS, ASSET_KINDS, build_stage_items,
-                      GENDERS, prompt_extra, prompt_negative)
+                      GENDERS, prompt_extra, prompt_negative,
+                      MONSTER_TIERS, MONSTER_TIER_ORDER, monster_tier,
+                      SCENE_USAGES, scene_usage)
 from .styles import get_style
 
 _MASTER_SIZE = (1152, 640)
@@ -105,6 +109,10 @@ def enqueue(sid: str, kind: str, opts: dict | None = None) -> None:
             raise ValueError(f"未知季节：{opts.get('season')}")
         if opts.get("filter") == "gender" and opts.get("gender") not in GENDERS:
             raise ValueError(f"未知性别：{opts.get('gender')}")
+        if opts.get("filter") == "tier" and opts.get("tier") not in MONSTER_TIERS:
+            raise ValueError(f"未知怪物等级：{opts.get('tier')}")
+        if opts.get("filter") == "zone" and not str(opts.get("zone") or "").strip():
+            raise ValueError("按场景筛选需要 zone（场景名）")
 
     if kind in store.STAGE_IDS:
         def _mark(t: dict) -> None:
@@ -123,6 +131,10 @@ def enqueue(sid: str, kind: str, opts: dict | None = None) -> None:
             suffix = f"（仅 {SEASONS[opts['season']]['name']}季）"
         elif f == "gender" and opts.get("gender") in GENDERS:
             suffix = f"（仅 {GENDERS[opts['gender']]['name']}版）"
+        elif f == "tier" and opts.get("tier") in MONSTER_TIERS:
+            suffix = f"（仅 {MONSTER_TIERS[opts['tier']]['name']}级）"
+        elif f == "zone" and opts.get("zone"):
+            suffix = f"（仅「{opts['zone']}」场景）"
         if kind in ASSET_KINDS:
             store.append_log(sid, "info", f"「{label}」筛选重跑{suffix}")
     _queue.append((sid, kind, opts or {}))
@@ -289,11 +301,11 @@ def _item_update(sid: str, kind: str, idx: int, *, status: str,
 
 
 def _upsert_asset(sid: str, asset: dict) -> None:
-    """同条目（item_id 优先，兼容旧 kind+name+season+gender）原位替换；
+    """同条目（item_id 优先，兼容旧 kind+name+season+gender+tier）原位替换；
     被替换的旧图进版本历史（最多 _MAX_HISTORY 版）。
 
-    注意：同名角色的男版/女版是两条不同素材，旧式键必须带 gender，
-    否则后出的女版会把男版顶掉（只剩一张）。
+    注意：同名角色的男版/女版、同名怪的不同等级都是不同素材，
+    旧式键必须带 gender + tier_id，否则同类后出的那张会把前一张顶掉。
     """
     def _apply(t: dict) -> None:
         kept, old = [], None
@@ -301,7 +313,8 @@ def _upsert_asset(sid: str, asset: dict) -> None:
             same = ((asset.get("item_id") and a.get("item_id") == asset["item_id"])
                     or (a["kind"] == asset["kind"] and a["name"] == asset["name"]
                         and a.get("season") == asset.get("season")
-                        and a.get("gender") == asset.get("gender")))
+                        and a.get("gender") == asset.get("gender")
+                        and a.get("tier_id") == asset.get("tier_id")))
             if same and old is None:
                 old = a
             else:
@@ -394,13 +407,15 @@ async def _stage_master(sid: str) -> None:
     raise RuntimeError(f"基准图 {_MAX_ATTEMPTS} 次尝试均失败：{last_err}")
 
 
-def _item_tag(item: dict) -> str:
-    """日志/报错里的条目名：角色带性别，场景带季节。"""
+def _item_tag(item: dict, kind: str | None = None) -> str:
+    """日志/报错里的条目名：场景带季节、角色带性别、野怪带等级。"""
     tag = item.get("name") or ""
     if item.get("season"):
         tag += f"·{SEASONS[item['season']]['name']}"
     if item.get("gender") in GENDERS:
         tag += f"·{GENDERS[item['gender']]['name']}版"
+    if kind == "monster" and item.get("tier"):
+        tag += f"·{item['tier']}"
     return tag
 
 
@@ -423,6 +438,10 @@ def _pick_items(s: dict, kind: str, opts: dict) -> list[int]:
             out.append(i)
         elif f == "gender" and it.get("gender") == opts.get("gender"):
             out.append(i)
+        elif f == "tier" and it.get("tier_id") == opts.get("tier"):
+            out.append(i)
+        elif f == "zone" and it.get("scene") == opts.get("zone"):
+            out.append(i)
     return out
 
 
@@ -433,7 +452,6 @@ async def _stage_assets(sid: str, kind: str, opts: dict) -> None:
     master_path = s["master"]["path"]
     base_threshold = float(s.get("threshold") or tonecheck.DEFAULT_THRESHOLD)
     tmode = transparent_mode(s, kind)
-    w, h = asset_size(s, kind)
 
     # 条目兜底：有方案但条目表空（历史遗留）→ 现场展开
     if not s["pipeline"]["stages"][kind]["items"]:
@@ -461,16 +479,18 @@ async def _stage_assets(sid: str, kind: str, opts: dict) -> None:
         if _canceled(sid):
             raise _StageCanceled()
         _item_update(sid, kind, real_i, status="running")
-        name_tag = _item_tag(item)
+        name_tag = _item_tag(item, kind)
         try:
             payload_item = {"kind": kind, "name": item["name"],
                             "desc": _clean(item["desc"]),
                             "season": item.get("season"), "tier_id": item.get("tier_id"),
-                            "gender": item.get("gender")}
+                            "gender": item.get("gender"), "usage": item.get("usage"),
+                            "scene": item.get("scene")}
             prompt = asset_prompt(s, payload_item, transparent=tmode != "none",
                                   tileable=bool(item.get("tileable")))
             threshold = base_threshold * (_SEASON_THRESHOLD_FACTOR
                                           if item.get("season") else 1.0)
+            w, h = asset_size(s, kind, item)      # 场景按用途、怪物按等级逐条定画幅
             asset = await _gen_with_gate(
                 sid=sid, kind=kind, item=item, prompt=prompt,
                 negative=asset_negative(s, kind), threshold=threshold,
@@ -552,6 +572,12 @@ async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
         "gender_name": (GENDERS[item["gender"]]["name"]
                         if item.get("gender") in GENDERS else None),
         "tier": item.get("tier"), "tier_id": item.get("tier_id"),
+        "usage": item.get("usage"),
+        "usage_name": (SCENE_USAGES[item["usage"]]["name"]
+                       if item.get("usage") in SCENE_USAGES else None),
+        "usage_reason": (SCENE_USAGES[item["usage"]]["reason"]
+                         if kind == "scene" and item.get("usage") in SCENE_USAGES else None),
+        "scene": item.get("scene"),
         "path": path, "url": url, "seed": last_rec.get("seed"),
         "size": [w, h], "transparent": transparent,
         "tileable": bool(item.get("tileable")),
@@ -599,12 +625,26 @@ def master_prompt(s: dict) -> tuple[str, str]:
 _TILEABLE_HINT = ("seamless tileable texture, flat top-down perspective, even lighting, "
                   "no vignette, edges must align for infinite tiling")
 
+# 场景用途 → 构图要求。尺寸定了还得让模型知道「为什么这么大」，
+# 否则 9:4 的横幅里它照样给你画个正方构图再被裁掉。
+_SCENE_HINT: dict[str, str] = {
+    "battle": ("wide establishing shot, low horizon, main structure on the center axis, "
+               "left and right thirds kept open for camera panning"),
+    "tile": _TILEABLE_HINT,
+    "portrait": ("tall vertical composition, elements stacked upward, "
+                 "top and bottom bands kept simple for UI overlays"),
+    "banner": ("ultra wide panoramic strip, very low horizon line, "
+               "open sky filling the upper half for title text"),
+    "iso": ("isometric 45-degree view, square playable ground filling the frame, "
+            "crisp grid-friendly edges"),
+}
+
 
 def asset_prompt(s: dict, item: dict, *, transparent: bool = False,
                  tileable: bool = False) -> str:
-    """六类素材统一组装。item: {kind,name,desc,season?,tier_id?,gender?}。
+    """六类素材统一组装。item: {kind,name,desc,season?,tier_id?,gender?,usage?,scene?}。
 
-    结构：参考图锚点 → 该类固定模板 → 季节/等级/性别修饰 → 项目级补充词 → 收尾。
+    结构：参考图锚点 → 该类固定模板 → 季节/等级/性别/用途修饰 → 项目级补充词 → 收尾。
     性别词放在主体最前面（2.1 对前置主体词最敏感）。
     """
     kind = item["kind"]
@@ -612,29 +652,36 @@ def asset_prompt(s: dict, item: dict, *, transparent: bool = False,
               f"anchor (time of day: {get_preset(s['time_preset'])['name']}), ")
     bg = _ISOLATED_BG if transparent else "plain light neutral background"
     gender = GENDERS.get(item.get("gender"), {}).get("prompt", "")
-    body = {
-        "scene":    (f"game environment concept art: {_clean(item['name'])} - "
-                     f"{_clean(item['desc'])}, "
-                     + (f"{SEASONS[item['season']]['prompt']} season, "
-                        if item.get("season") else "")
-                     + ("full detailed environment, " + _TILEABLE_HINT
-                        if tileable else "full detailed environment")),
-        "character": (f"full body character design, single character, "
-                      f"{gender + ', ' if gender else ''}front view, "
-                      f"standing pose, whole body visible: {_clean(item['name'])} - "
-                      f"{_clean(item['desc'])}, {bg}, centered"),
-        "pet":      (f"cute game pet companion creature design, full body, side-front view: "
-                     f"{_clean(item['name'])} - {_clean(item['desc'])}, {bg}, centered"),
-        "weapon":   (f"game weapon design, single weapon, centered, three-quarter view: "
-                     f"{_clean(item['name'])} - {_clean(item['desc'])}, "
-                     + (f"{WEAPON_TIERS[item['tier_id']]['prompt']} quality tier, "
-                        if item.get("tier_id") else "")
-                     + bg),
-        "building": (f"game architecture concept art, exterior view: "
-                     f"{_clean(item['name'])} - {_clean(item['desc'])}, full structure visible"),
-        "monster":  (f"game monster creature design, full body, menacing silhouette: "
-                     f"{_clean(item['name'])} - {_clean(item['desc'])}, {bg}, centered"),
-    }[kind]
+    who = f"{_clean(item['name'])} - {_clean(item['desc'])}"
+
+    if kind == "scene":
+        usage = scene_usage(item) or ("tile" if tileable else "battle")
+        body = (f"game environment concept art: {who}, "
+                + (f"{SEASONS[item['season']]['prompt']} season, "
+                   if item.get("season") else "")
+                + "full detailed environment, "
+                + _SCENE_HINT.get(usage, _SCENE_HINT["battle"]))
+    elif kind == "character":
+        body = (f"full body character design, single character, "
+                f"{gender + ', ' if gender else ''}front view, "
+                f"standing pose, whole body visible: {who}, {bg}, centered")
+    elif kind == "pet":
+        body = ("cute game pet companion creature design, full body, side-front view: "
+                f"{who}, {bg}, centered")
+    elif kind == "weapon":
+        tier = WEAPON_TIERS.get(item.get("tier_id"))
+        body = ("game weapon design, single weapon, centered, three-quarter view: "
+                f"{who}, " + (f"{tier['prompt']} quality tier, " if tier else "") + bg)
+    elif kind == "building":
+        body = ("game architecture concept art, exterior view: "
+                f"{who}, full structure visible")
+    else:                                   # monster：等级定体型，场景定环境
+        tier = MONSTER_TIERS[monster_tier(item)]
+        body = (f"game monster creature design, full body, centered, tier: {tier['name']}, "
+                f"{tier['prompt']}: {who}, "
+                + (f"native to the {_clean(item['scene'])} region, "
+                   if item.get("scene") else "")
+                + bg)
     extra = _clean(prompt_extra(s, kind))          # 项目级补充（该类独有）
     if extra:
         body = f"{body}, {extra}"

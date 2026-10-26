@@ -129,10 +129,36 @@
   .var-card { border: 1.5px solid var(--border, #ddd); border-radius: 10px; overflow: hidden; cursor: pointer; position: relative; }
   .var-card:hover { border-color: var(--primary, #3b6ef5); }
   .var-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
-  .edit-row { display: grid; grid-template-columns: 110px 1fr auto; gap: 6px; margin-bottom: 6px; align-items: center; }
-  .edit-row input, .edit-row select { font-size: 13px; padding: 5px 8px; }
+  /* ===== 方案编辑：每条一张小卡，描述用多行框 ===== */
+  .plan-rows { max-height: 60vh; overflow: auto; padding-right: 4px; }
+  .edit-row { border: 1px solid var(--border, #e3e3e3); border-radius: 10px;
+              padding: 9px 11px 7px; margin-bottom: 8px; background: var(--bg, #fff); }
+  .edit-row .er-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .edit-row .pe-name { width: 152px; font-size: 13px; font-weight: 600; padding: 5px 8px; }
+  .edit-row .pe-desc { width: 100%; font-size: 13px; line-height: 1.55; padding: 7px 9px;
+                       margin-top: 6px; border-radius: 8px; border: 1.5px solid var(--border, #ddd);
+                       resize: vertical; font-family: inherit; min-height: 56px; }
+  .edit-row .pe-desc:focus { border-color: var(--primary, #3b6ef5); outline: none; }
+  .edit-row input[type=text], .edit-row select, .edit-row input[type=number] {
+    font-size: 12.5px; padding: 4px 6px; border-radius: 7px;
+    border: 1px solid var(--border, #ccc); }
+  .er-foot { display: flex; gap: 8px; align-items: center; margin-top: 5px; flex-wrap: wrap; }
+  .er-hint { font-size: 11.5px; color: var(--muted, #888); }
+  .er-hint b { color: var(--primary, #3b6ef5); font-weight: 600; }
+  .er-warn { font-size: 11.5px; color: #c0392b; }
   .season-boxes { display: flex; gap: 6px; font-size: 12px; align-items: center; }
   .muted2 { color: var(--muted, #888); font-size: 12px; }
+  .size-chip { font-size: 10.5px; padding: 1px 7px; border-radius: 12px; font-family: ui-monospace, monospace;
+               background: rgba(0,0,0,.055); color: #5f6672; }
+  .usage-chip { font-size: 11px; padding: 1px 7px; border-radius: 12px;
+                background: rgba(67,197,158,.15); color: #1b7a5a; }
+  .zone-chip { font-size: 11px; padding: 1px 7px; border-radius: 12px;
+               background: rgba(230,162,60,.18); color: #96600a; }
+  .tier-minion { background: #909399; } .tier-elite { background: #4a90d9; }
+  .tier-boss { background: #8e44ad; } .tier-worldboss { background: #b03a2e; }
+  .set-row { display: grid; grid-template-columns: 76px 1fr; gap: 8px; align-items: center;
+             margin-bottom: 6px; }
+  .set-row select { font-size: 13px; padding: 5px 8px; }
 
   /* ===== 分类页签 ===== */
   .ov-strip { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
@@ -180,7 +206,8 @@
   .item-row:last-child { border-bottom: none; }
   .item-row .it-name { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .item-row .it-desc { color: var(--muted, #999); font-size: 11.5px; margin-top: 2px;
-                       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46vw; }
+                       line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2;
+                       -webkit-box-orient: vertical; overflow: hidden; max-width: 54vw; }
   .item-row .it-acts { display: flex; gap: 5px; }
   .item-row .it-acts button { border: 1px solid var(--border, #ddd); background: none; border-radius: 6px;
                               padding: 2px 8px; font-size: 11.5px; cursor: pointer; color: var(--primary, #3b6ef5); }
@@ -322,12 +349,13 @@
 
 <!-- ==================== 方案编辑弹窗 ==================== -->
 <div class="modal-mask" id="planMask" onclick="if(event.target===this)UI.closePlan()">
-  <div class="modal" style="max-width:760px">
+  <div class="modal" style="max-width:900px">
     <h3 id="planEdTitle">编辑方案</h3>
-    <p class="muted2">改名 / 改描述 / 增删条目；保存后只重跑受影响的条目（没动过的素材保留）。</p>
-    <div id="planEdRows"></div>
-    <div style="margin-top:10px;display:flex;gap:8px">
+    <p class="muted2" id="planEdTip">改名 / 改描述 / 增删条目；保存后只重跑受影响的条目（没动过的素材保留）。</p>
+    <div class="plan-rows" id="planEdRows"></div>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
       <button class="btn btn-ghost" id="planAddRow">＋ 加一条</button>
+      <span class="muted2">Ctrl + Enter 保存</span>
       <span class="spacer"></span>
       <button class="btn btn-ghost" onclick="UI.closePlan()">取消</button>
       <button class="btn btn-primary" id="planSave">保存并重跑受影响条目</button>
@@ -341,6 +369,9 @@
     <h3>项目参数</h3>
     <p class="muted2">透明底：chroma=白底色键（快，轮廓硬）；rembg=AI 抠图（毛发自然，首次用要下 ~176MB 模型）。</p>
     <div id="setTrRows"></div>
+    <p class="muted2" style="margin-top:4px">画幅不用在这里调：场景按每条场景的「用途」定
+      （战斗 16:9 1152×640 / 平铺 1:1 1024 / 竖屏 2:3 768×1152 / 横幅 9:4 1152×512 / 等距 896），
+      怪物按「等级」定（杂兵 640 / 精英 768 / 首领 896 / 终局 1024）——都在「编辑方案」里逐条改。</p>
     <div style="margin-top:10px">
       <label class="muted2">色调阈值（色距，越大越宽容）</label>
       <input id="setThreshold" type="number" min="10" max="120" style="width:100px">
@@ -360,18 +391,31 @@
   const state = { styles: [], times: [], scales: [], sets: [], current: null,
                   timer: null, failCount: 0, stages: [], detail: null,
                   lbList: [], lbIdx: 0, varAid: null, planKind: null, aspects: {},
-                  tab: 'plan', classTemplates: {}, genders: [] };
+                  tab: 'plan', classTemplates: {}, genders: [],
+                  sceneUsages: [], monsterTiers: [] };
 
   const STAGE_TIP = {
     plan: '一句话 → 完整设定（可编辑后局部重跑）',
     master: '全集色调锚点，其他素材都融合它',
-    scene: '每个场景自动出春夏秋冬',
+    scene: '每个场景自动出春夏秋冬 · 画幅按用途定',
     character: '全身立绘 · 自动抠透明底',
     pet: '宠物伙伴设计 · 自动抠透明底',
     weapon: '按 普通/精良/史诗/传说 分级',
     building: '建筑外观设定',
-    monster: '野怪设计 · 自动抠透明底',
+    monster: '按 杂兵/精英/首领/终局 分级 · 各带出没场景',
   };
+
+  const PLAN_KEY = { scene: 'scenes', character: 'characters', pet: 'pets',
+                     weapon: 'weapons', building: 'buildings', monster: 'monsters' };
+  const SEASON_CN = { spring: '春', summer: '夏', autumn: '秋', winter: '冬' };
+  const SEASON_ORDER = ['spring', 'summer', 'autumn', 'winter'];
+  const WEAPON_TIERS = [['common', '普通'], ['fine', '精良'],
+                        ['epic', '史诗'], ['legendary', '传说']];
+
+  const usageMeta = (uid) =>
+    state.sceneUsages.find(u => u.id === uid) || state.sceneUsages[0] || null;
+  const mtierMeta = (tid) =>
+    state.monsterTiers.find(t => t.id === tid) || state.monsterTiers[0] || null;
 
   // ================= 启动 =================
   (async () => {
@@ -385,6 +429,8 @@
     state.trDefault = pr.transparent_default || {};
     state.classTemplates = pr.class_templates || {};
     state.genders = pr.genders || [];
+    state.sceneUsages = pr.scene_usages || [];
+    state.monsterTiers = pr.monster_tiers || [];
     state.sets = st.items;
     renderCards($('styleCards'), state.styles);
     renderCards($('timeCards'), state.times, 2);       // 默认黄昏
@@ -623,12 +669,40 @@
     wirePrompt(k);
   }
 
+  // 筛选下拉：把「按季 / 按性别 / 按等级 / 按场景」摊平成一级选项，
+  // 值形如 season:spring，省掉原来弹 prompt() 让你手打拼音的傻流程
+  function filterOptions(kind, st) {
+    const items = st.items || [];
+    const out = [['', '筛选…'], ['failed', '只跑失败'], ['tone', '只跑跑色']];
+    if (kind === 'scene') {
+      const has = new Set(items.map(i => i.season).filter(Boolean));
+      SEASON_ORDER.forEach(sn => {
+        if (has.has(sn)) out.push(['season:' + sn, `只跑${SEASON_CN[sn]}季`]);
+      });
+    } else if (kind === 'character') {
+      const has = new Set(items.map(i => i.gender).filter(Boolean));
+      [['male', '男'], ['female', '女']].forEach(([g, n]) => {
+        if (has.has(g)) out.push(['gender:' + g, `只跑${n}版`]);
+      });
+    } else if (kind === 'monster') {
+      const tiers = new Set(items.map(i => i.tier_id).filter(Boolean));
+      state.monsterTiers.forEach(t => {
+        if (tiers.has(t.id)) out.push(['tier:' + t.id, `只跑${t.name}级`]);
+      });
+      [...new Set(items.map(i => i.scene).filter(Boolean))].forEach(z => {
+        out.push(['zone:' + z, `只跑「${z}」的怪`]);
+      });
+    }
+    return out;
+  }
+
   // ---- 阶段控制条（两类页签共用）----
   function stageBar(kind, st) {
     const [chipText, chipCls] = ST_CHIP[st.status] || ST_CHIP.idle;
     const pct = st.total ? (st.done / st.total * 100) : (st.status === 'done' ? 100 : 0);
     const active = ['queued', 'running'].includes(st.status);
     const isClass = KINDS6.includes(kind);
+    const opts = isClass && st.total ? filterOptions(kind, st) : [];
     return `<div class="stage-card wide" data-stage="${kind}">
       <div class="stage-head"><b>${ST_NAME[kind]}生成</b>
         <span class="st-chip ${chipCls}">${chipText}</span></div>
@@ -639,12 +713,8 @@
         <button class="stage-btn go" ${active ? 'disabled' : ''}>${active ? '进行中…'
           : st.status === 'failed' ? '重试' : st.status === 'done' ? '重新生成' : '生成'}</button>
         <button class="stage-btn warn stop" ${active ? '' : 'style="display:none"'}>取消</button>
-        <select class="stage-filter" ${isClass && st.total ? '' : 'style="display:none"'}>
-          <option value="">筛选…</option>
-          <option value="failed">只跑失败</option>
-          <option value="tone">只跑跑色</option>
-          ${kind === 'scene' ? '<option value="season">按季…</option>' : ''}
-          ${kind === 'character' ? '<option value="gender">按性别…</option>' : ''}
+        <select class="stage-filter" ${opts.length ? '' : 'style="display:none"'}>
+          ${opts.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join('')}
         </select>
       </div></div>`;
   }
@@ -655,17 +725,16 @@
     const go = el.querySelector('.go'), stop = el.querySelector('.stop');
     const filt = el.querySelector('.stage-filter');
     go.onclick = () => {
-      const f = filt.value;
-      if (f === 'season') {
-        const season = prompt('输入季节拼音：spring / summer / autumn / winter');
-        if (!season) return;
-        runStage(kind, go, { filter: 'season', season });
-      } else if (f === 'gender') {
-        const g = prompt('输入性别：male（男）/ female（女）');
-        if (!g) return;
-        runStage(kind, go, { filter: 'gender', gender: g });
-      } else if (f) runStage(kind, go, { filter: f });
-      else runStage(kind, go);
+      const raw = filt.value;
+      if (!raw) return runStage(kind, go);
+      const [f, ...rest] = raw.split(':');
+      const val = rest.join(':');
+      const body = { filter: f };
+      if (f === 'season') body.season = val;
+      else if (f === 'gender') body.gender = val;
+      else if (f === 'tier') body.tier = val;
+      else if (f === 'zone') body.zone = val;
+      runStage(kind, go, body);
     };
     stop.onclick = () => cancelStage(kind, stop);
   }
@@ -674,7 +743,7 @@
   function classPane(s, kind, st) {
     const items = st.items || [];
     const assets = (s.assets || []).filter(a => a.kind === kind);
-    const sz = state.aspects[kind];
+    const sizes = [...new Set(assets.map(a => (a.size || []).join('×')).filter(Boolean))];
     const p = (s.prompts || {})[kind] || {};
     const draft = (state.ppDraft || {})[kind] || {};   // 未保存的输入，别被轮询冲掉
     const tpl = (state.classTemplates || {})[kind] || '';
@@ -683,10 +752,15 @@
       const a = assets.find(x => x.item_id === it.id || (x.name === it.name
         && (x.season || null) === (it.season || null)
         && (x.gender || null) === (it.gender || null)));
+      const meta = kind === 'scene' ? usageMeta(it.usage || (it.tileable ? 'tile' : 'battle'))
+                 : kind === 'monster' ? mtierMeta(it.tier_id) : null;
       const chips = [
         it.gender ? `<span class="gender-chip gender-${it.gender}">${it.gender === 'male' ? '男' : '女'}</span>` : '',
-        it.season ? `<span class="season-chip">${({ spring: '春', summer: '夏', autumn: '秋', winter: '冬' })[it.season] || it.season}</span>` : '',
+        it.season ? `<span class="season-chip">${SEASON_CN[it.season] || it.season}</span>` : '',
         it.tier ? `<span class="tier-chip tier-${it.tier_id}">${it.tier}</span>` : '',
+        it.scene ? `<span class="zone-chip">${esc(it.scene)}</span>` : '',
+        meta ? `<span class="usage-chip">${esc(meta.name)}</span>` : '',
+        meta ? `<span class="size-chip">${meta.size[0]}×${meta.size[1]}</span>` : '',
       ].join('');
       const [ct, cc] = ST_CHIP[it.status === 'pending' ? 'idle' : it.status] || ST_CHIP.idle;
       const acts = a
@@ -726,7 +800,7 @@
         <button class="btn btn-ghost" onclick="UI.openPlan('${kind}')">编辑条目</button></p>
       <div class="item-list">${rows}</div>
 
-      <p class="section-title">成图 <span class="muted" style="font-weight:400;font-size:12px">${assets.length} 张${sz ? ` · ${sz[0]}×${sz[1]}` : ''}</span>
+      <p class="section-title">成图 <span class="muted" style="font-weight:400;font-size:12px">${assets.length} 张${sizes.length ? ' · ' + sizes.join(' / ') : ''}</span>
         <span class="spacer"></span>
         ${assets.length ? `<button class="btn btn-ghost" onclick="UI.atlas('${kind}')">🧩 图集</button>` : ''}</p>
       ${assets.length ? `<div class="asset-grid">${assets.map(assetCard).join('')}</div>`
@@ -758,6 +832,8 @@
       a.season_name ? `<span class="season-chip">${a.season_name}</span>` : '',
       a.gender_name ? `<span class="gender-chip gender-${a.gender}">${a.gender_name}</span>` : '',
       a.tier ? `<span class="tier-chip tier-${a.tier_id}">${a.tier}</span>` : '',
+      a.scene ? `<span class="zone-chip" title="出没场景">${esc(a.scene)}</span>` : '',
+      a.size ? `<span class="size-chip">${a.size[0]}×${a.size[1]}</span>` : '',
       a.transparent ? `<span class="tr-chip">透明${a.transparent.method === 'rembg' ? '·AI' : ''}</span>` : '',
       q.pass === false ? `<span class="q-chip q-fail" title="${esc((q.reasons || []).join('；'))}">⚠ ${(q.reasons || [''])[0]?.split('（')[0] || '质量'}</span>`
         : q.pass === true ? '<span class="q-chip q-pass">✓守门</span>' : '',
@@ -806,8 +882,12 @@
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
-      const tag = opts?.filter === 'season' ? `（仅${{spring:'春',summer:'夏',autumn:'秋',winter:'冬'}[opts.season] || ''}季）`
-                : opts?.filter === 'failed' ? '（仅失败）' : opts?.filter === 'tone' ? '（仅跑色）' : '';
+      const tag = opts?.filter === 'season' ? `（仅${SEASON_CN[opts.season] || ''}季）`
+                : opts?.filter === 'gender' ? `（仅${{ male: '男', female: '女' }[opts.gender] || ''}版）`
+                : opts?.filter === 'tier' ? `（仅${mtierMeta(opts.tier)?.name || ''}级）`
+                : opts?.filter === 'zone' ? `（仅「${opts.zone}」的怪）`
+                : opts?.filter === 'failed' ? '（仅失败）'
+                : opts?.filter === 'tone' ? '（仅跑色）' : '';
       toast(`「${ST_NAME[kind] || '全部'}」已加入队列${tag}`);
       poll(true);
     } catch (e) { toast(e.message); btn.disabled = false; }
@@ -838,28 +918,48 @@
       return `<p class="section-title">策划</p><p class="muted">还没有策划方案。</p>
         ${stageBar('plan', s.pipeline?.stages?.plan || {})}`;
     }
+    const byScene = {};
+    (plan.monsters || []).forEach(m => {
+      if (!m.scene) return;
+      if (!byScene[m.scene]) byScene[m.scene] = [];
+      byScene[m.scene].push(`${m.name}${m.tier ? '·' + m.tier : ''}`);
+    });
     const rows = KINDS6.map(k => {
-      const KEY = { scene: 'scenes', character: 'characters', pet: 'pets',
-                    weapon: 'weapons', building: 'buildings', monster: 'monsters' }[k];
-      const list = plan[KEY] || [];
+      const list = plan[PLAN_KEY[k]] || [];
       const st = s.pipeline?.stages?.[k] || {};
-      const detail = k === 'character'
-        ? list.map(e => `${e.name}（${e.gender_label || (e.genders || []).map(g => g === 'male' ? '男' : '女').join('/') || '男'}）`).join('、')
-        : k === 'weapon'
-          ? list.map(e => `${e.name}·${e.tier || ''}`).join('、')
-          : list.map(e => e.name).join('、');
+      let detail = '', note = '';
+      if (k === 'scene') {
+        detail = list.map(e => {
+          const u = usageMeta(e.usage || (e.tileable ? 'tile' : 'battle'));
+          const ms = byScene[e.name] || [];
+          return `${e.name}〔${u ? `${u.name} ${u.size[0]}×${u.size[1]}` : '?'}〕`
+               + (ms.length ? ` ← ${ms.join('、')}` : ' ← 暂无专属怪');
+        }).join('；');
+        note = '×四季 · 画幅按用途';
+      } else if (k === 'monster') {
+        detail = list.map(e => `${e.name}·${e.tier || ''}@${e.scene || '未配属'}`).join('、');
+        note = '按等级分档';
+      } else if (k === 'character') {
+        detail = list.map(e => `${e.name}（${e.gender_label
+          || (e.genders || []).map(g => g === 'male' ? '男' : '女').join('/') || '男'}）`).join('、');
+        note = '主角分男女';
+      } else if (k === 'weapon') {
+        detail = list.map(e => `${e.name}·${e.tier || ''}`).join('、');
+      } else {
+        detail = list.map(e => e.name).join('、');
+      }
       return `<div class="item-row">
         <div><div class="it-name"><b>${KIND_NAME[k]}</b>
           <span class="muted" style="font-size:11.5px">${list.length} 条 · 出图 ${st.done || 0}/${st.total || 0}</span></div>
           <div class="it-desc" title="${esc(detail)}">${esc(detail || '空')}</div></div>
-        <span class="muted" style="font-size:11.5px">${k === 'scene' ? '×四季' : k === 'character' ? '主角分男女' : ''}</span>
+        <span class="muted" style="font-size:11.5px">${note}</span>
         <span class="it-acts"><button onclick="UI.openPlan('${k}')">编辑</button></span></div>`;
     }).join('');
     return `<div class="plan-box"><b>${esc(plan.title)}</b>
         <span class="muted" style="font-size:12px">（${esc(plan.scale_name)} · ${plan.planner === 'llm' ? 'LLM 策划' : '规则模板'}）</span>
         <div class="muted" style="font-size:12.5px;margin-top:2px">${esc(plan.synopsis)}</div></div>
       ${stageBar('plan', s.pipeline?.stages?.plan || {})}
-      <p class="section-title">方案条目 <span class="muted" style="font-weight:400;font-size:12px">改完只重跑受影响条目</span></p>
+      <p class="section-title">方案条目 <span class="muted" style="font-weight:400;font-size:12px">场景 ← 后面的就是该场景的怪；改完只重跑受影响条目</span></p>
       <div class="item-list">${rows}</div>`;
   }
 
@@ -876,51 +976,112 @@
   }
 
   // ---- 方案编辑弹窗 ----
+  const PLAN_TIP = {
+    scene: '画幅由「用途」决定——选战斗背景 / 可平铺 / 竖屏 / 横幅 / 等距战场，尺寸与理由在下面直接显示。',
+    monster: '怪物按等级分档（画幅随等级走），每只必须挂在某个场景下——这就是「场景 ↔ 怪物」的配属关系。',
+    character: '勾两个性别 = 同名出男女两版；不勾默认男。',
+    weapon: '等级词会进提示词（材质 + 光效），画幅固定 768×768。',
+  };
+
+  // 描述框：随内容长高，最少 3 行（原来单行 input 写不下 40 字）
+  function growDesc(ta) {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(220, Math.max(58, ta.scrollHeight)) + 'px';
+  }
+
+  function planRowHtml(kind, e, i) {
+    const scenes = (state.detail?.plan?.scenes || []).map(x => x.name);
+    let ctl = '', foot = '';
+    if (kind === 'scene') {
+      const uid = e.usage || (e.tileable ? 'tile' : 'battle');
+      ctl = `<select class="pe-usage" title="场景用途（决定画幅）">${state.sceneUsages.map(u =>
+          `<option value="${u.id}" ${u.id === uid ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>
+        <span class="season-boxes">出图季节：${SEASON_ORDER.map(sn =>
+          `<label><input type="checkbox" class="pe-season" value="${sn}"
+            ${(e.seasons || SEASON_ORDER).includes(sn) ? 'checked' : ''}>${SEASON_CN[sn]}</label>`).join('')}</span>`;
+      foot = '<span class="er-hint hint-live"></span>';
+    } else if (kind === 'monster') {
+      const tid = e.tier_id || 'minion';
+      ctl = `<select class="pe-mtier" title="怪物等级（决定画幅与体型）">${state.monsterTiers.map(t =>
+          `<option value="${t.id}" ${t.id === tid ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
+        <select class="pe-zone" title="出没场景">${scenes.length
+          ? scenes.map(n => `<option value="${esc(n)}" ${n === e.scene ? 'selected' : ''}>出没：${esc(n)}</option>`).join('')
+          : '<option value="">（先加场景）</option>'}</select>`;
+      foot = '<span class="er-hint hint-live"></span>';
+    } else if (kind === 'character') {
+      const gs = e.genders || ['male'];
+      ctl = `<span class="season-boxes">性别：${[['male', '男'], ['female', '女']].map(([g, n]) =>
+          `<label><input type="checkbox" class="pe-gender" value="${g}"
+            ${gs.includes(g) ? 'checked' : ''}>${n}</label>`).join('')}</span>`;
+      foot = '<span class="er-hint">勾两个 = 同名出男女两版（两条素材，提示词各自带性别词）</span>';
+    } else if (kind === 'weapon') {
+      ctl = `<select class="pe-tier" title="武器等级">${WEAPON_TIERS.map(([t, n]) =>
+          `<option value="${t}" ${e.tier_id === t ? 'selected' : ''}>${n}</option>`).join('')}</select>`;
+      foot = '<span class="er-hint">等级影响材质与光效强度，画幅固定 768×768</span>';
+    } else {
+      foot = `<span class="er-hint">画幅 ${kind === 'building' ? '896×672' : '768×768'}</span>`;
+    }
+    return `<div class="edit-row" data-i="${i}">
+      <div class="er-head">
+        <input type="text" class="pe-name" value="${esc(e.name || '')}" placeholder="名称">
+        ${ctl}
+        <span class="spacer"></span>
+        <span class="er-hint pe-count"></span>
+        <button class="btn btn-danger pe-del" style="padding:2px 8px;font-size:11px">删</button>
+      </div>
+      <textarea class="pe-desc" rows="3"
+        placeholder="外观描述（15-40 字，直接入画：形制 / 材质 / 颜色 / 姿态，别写剧情）">${esc(e.desc || '')}</textarea>
+      <div class="er-foot">${foot}</div>
+    </div>`;
+  }
+
+  function wirePlanRows(kind) {
+    $('planEdRows').querySelectorAll('.edit-row').forEach(row => {
+      const ta = row.querySelector('.pe-desc'), cnt = row.querySelector('.pe-count');
+      const sync = () => { cnt.textContent = `${ta.value.length}/200`; growDesc(ta); };
+      ta.oninput = sync;
+      sync();
+      row.querySelector('.pe-del').onclick = () => row.remove();
+      row.querySelectorAll('.pe-usage, .pe-mtier').forEach(sel =>
+        sel.onchange = () => rowHint(kind, row));
+      rowHint(kind, row);
+    });
+  }
+
+  function rowHint(kind, row) {
+    const box = row.querySelector('.hint-live');
+    if (!box) return;
+    if (kind === 'scene') {
+      const u = usageMeta(row.querySelector('.pe-usage')?.value);
+      box.innerHTML = u ? `<b>${esc(u.name)}</b> · 画幅 <b>${u.size[0]}×${u.size[1]}</b>`
+        + `（${esc(u.aspect)}）— ${esc(u.reason)}` : '';
+    } else if (kind === 'monster') {
+      const t = mtierMeta(row.querySelector('.pe-mtier')?.value);
+      box.innerHTML = t ? `<b>${esc(t.name)}</b> · 画幅 <b>${t.size[0]}×${t.size[1]}</b>`
+        + ` — ${esc(t.note)}` : '';
+    }
+  }
+
   function openPlan(kind) {
     const s = state.detail;
     if (!s?.plan) return toast('还没有策划方案');
     state.planKind = kind;
-    const KEY = { scene: 'scenes', character: 'characters', pet: 'pets',
-                  weapon: 'weapons', building: 'buildings', monster: 'monsters' };
-    const entries = s.plan[KEY[kind]] || [];
+    const entries = s.plan[PLAN_KEY[kind]] || [];
     $('planEdTitle').textContent = `编辑方案 · ${ST_NAME[kind]}`;
-    $('planEdRows').innerHTML = entries.map((e, i) => {
-      const seasonBox = kind === 'scene'
-        ? `<div class="season-boxes">${['spring','summer','autumn','winter'].map(sn =>
-            `<label><input type="checkbox" class="pe-season" value="${sn}"
-              ${(e.seasons || ['spring','summer','autumn','winter']).includes(sn) ? 'checked' : ''}>${{spring:'春',summer:'夏',autumn:'秋',winter:'冬'}[sn]}</label>`).join('')}
-            <label><input type="checkbox" class="pe-tile" ${e.tileable ? 'checked' : ''}>可平铺</label></div>`
-        : kind === 'character'
-          ? `<div class="season-boxes">主角性别：${[['male','男'],['female','女']].map(([g, n]) =>
-              `<label><input type="checkbox" class="pe-gender" value="${g}"
-                ${(e.genders || ['male']).includes(g) ? 'checked' : ''}>${n}</label>`).join('')}
-              <span class="muted2">勾两个 = 男女各出一版</span></div>`
-          : (kind === 'weapon'
-              ? `<select class="pe-tier">${['common','fine','epic','legendary'].map(t =>
-                  `<option value="${t}" ${e.tier_id === t ? 'selected' : ''}>${{common:'普通',fine:'精良',epic:'史诗',legendary:'传说'}[t]}</option>`).join('')}</select>`
-              : '');
-      return `<div class="edit-row" data-i="${i}">
-        <input class="pe-name" value="${esc(e.name)}" placeholder="名称">
-        <input class="pe-desc" value="${esc(e.desc)}" placeholder="外观描述（15-40 字，直接入画）">
-        <span>${seasonBox}<button class="btn btn-danger pe-del" style="padding:3px 8px;font-size:11px">删</button></span>
-      </div>`;
-    }).join('') || '<p class="muted">空方案，点「加一条」</p>';
+    $('planEdTip').textContent = PLAN_TIP[kind]
+      || '改名 / 改描述 / 增删条目；保存后只重跑受影响的条目（没动过的素材保留）。';
+    $('planEdRows').innerHTML = entries.map((e, i) => planRowHtml(kind, e, i)).join('')
+      || '<p class="muted">空方案，点「加一条」</p>';
+    wirePlanRows(kind);
     $('planAddRow').onclick = () => {
-      const row = document.createElement('div');
-      row.className = 'edit-row';
-      row.dataset.i = 'new';
-      row.innerHTML = `<input class="pe-name" placeholder="名称">
-        <input class="pe-desc" placeholder="外观描述">
-        <span>${kind === 'weapon' ? '<select class="pe-tier"><option value="common">普通</option><option value="fine">精良</option><option value="epic">史诗</option><option value="legendary">传说</option></select>'
-              : kind === 'scene' ? '<div class="season-boxes">' + ['spring','summer','autumn','winter'].map(sn => `<label><input type="checkbox" class="pe-season" value="${sn}" checked>${{spring:'春',summer:'夏',autumn:'秋',winter:'冬'}[sn]}</label>`).join('') + '</div>'
-              : kind === 'character' ? '<div class="season-boxes"><label><input type="checkbox" class="pe-gender" value="male" checked>男</label><label><input type="checkbox" class="pe-gender" value="female">女</label></div>'
-              : ''}
-        <button class="btn btn-danger pe-del" style="padding:3px 8px;font-size:11px">删</button></span>`;
-      row.querySelector('.pe-del').onclick = () => row.remove();
-      $('planEdRows').appendChild(row);
+      const box = $('planEdRows');
+      const empty = box.querySelector('p.muted');
+      if (empty) empty.remove();
+      box.insertAdjacentHTML('beforeend', planRowHtml(kind, { name: '', desc: '' }, 'new'));
+      wirePlanRows(kind);
+      const rows = box.querySelectorAll('.edit-row');
+      rows[rows.length - 1].querySelector('.pe-name').focus();
     };
-    $('planEdRows').querySelectorAll('.pe-del').forEach(b =>
-      b.onclick = () => b.closest('.edit-row').remove());
     $('planSave').onclick = savePlan;
     $('planMask').classList.add('show');
   }
@@ -929,26 +1090,36 @@
     const kind = state.planKind;
     const rows = [...$('planEdRows').querySelectorAll('.edit-row')];
     const ops = [];
-    let shift = 0;
-    rows.forEach(row => {
-      const i = row.dataset.i;
+    const picked = (row, sel) => {
+      const arr = [...row.querySelectorAll(sel)].map(c => c.value);
+      return arr.length ? arr : null;
+    };
+    for (const row of rows) {
+      const name = row.querySelector('.pe-name').value.trim();
+      if (!name) { toast('名称不能为空'); row.querySelector('.pe-name').focus(); return; }
       const body = {
-        name: row.querySelector('.pe-name').value,
-        desc: row.querySelector('.pe-desc').value,
-        tier_id: row.querySelector('.pe-tier')?.value || null,
-        seasons: [...row.querySelectorAll('.pe-season:checked')].map(c => c.value) || null,
-        genders: [...row.querySelectorAll('.pe-gender:checked')].map(c => c.value) || null,
-        tileable: row.querySelector('.pe-tile') ? row.querySelector('.pe-tile').checked : null };
-      if (i === 'new') ops.push({ action: 'add', ...body });
-      else ops.push({ action: 'update', index: parseInt(i, 10), ...body });
-    });
+        name,
+        desc: row.querySelector('.pe-desc').value.trim(),
+        tier_id: row.querySelector('.pe-tier')?.value
+              || row.querySelector('.pe-mtier')?.value || null,
+        usage: row.querySelector('.pe-usage')?.value || null,
+        scene: row.querySelector('.pe-zone')?.value || null,
+        seasons: picked(row, '.pe-season:checked'),
+        genders: picked(row, '.pe-gender:checked'),
+      };
+      if (row.dataset.i === 'new') ops.push({ action: 'add', ...body });
+      else ops.push({ action: 'update', index: parseInt(row.dataset.i, 10), ...body });
+    }
     // 被删行：原下标收集（DOM 里已移除的行按原顺序补齐）
-    const orig = state.detail.plan[{scene:'scenes',character:'characters',pet:'pets',
-      weapon:'weapons',building:'buildings',monster:'monsters'}[kind]] || [];
-    const remainIdx = new Set(rows.filter(r => r.dataset.i !== 'new').map(r => parseInt(r.dataset.i, 10)));
+    const orig = state.detail.plan[PLAN_KEY[kind]] || [];
+    const remainIdx = new Set(rows.filter(r => r.dataset.i !== 'new')
+                                  .map(r => parseInt(r.dataset.i, 10)));
     for (let i = 0; i < orig.length; i++) {
       if (!remainIdx.has(i)) ops.push({ action: 'delete', index: i });
     }
+    if (!ops.length) return toast('没有改动');
+    const btn = $('planSave');
+    btn.disabled = true;
     try {
       const r = await fetch(`/api/v1/gameassets/sets/${state.current}/plan`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -956,9 +1127,12 @@
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
       closePlan();
-      toast('方案已保存，受影响条目待重跑（点对应类的「生成」）');
+      const c = d.changed || {};
+      toast(`已保存：改 ${c.updated || 0} / 增 ${c.added || 0} / 删 ${c.deleted || 0}，`
+            + '受影响的条目待重跑（点对应类的「生成」）');
       poll(true);
     } catch (e) { toast('保存失败：' + e.message); }
+    finally { btn.disabled = false; }
   }
 
   // ================= 素材墙（单类，供分类页复用） =================
@@ -1129,7 +1303,7 @@
     if (!s) return;
     $('setTrRows').innerHTML = KINDS6.map(k => {
       const cur = (s.transparent || {})[k] || state.trDefault[k] || 'none';
-      return `<div class="edit-row" style="grid-template-columns:80px 1fr">
+      return `<div class="set-row">
         <span style="font-size:13px">${KIND_NAME[k]}</span>
         <select class="set-tr" data-k="${k}">
           <option value="none" ${cur === 'none' ? 'selected' : ''}>不抠图</option>
@@ -1166,6 +1340,15 @@
   $('varGo').onclick = genVariants;
   $('setSave').onclick = saveSettings;
   document.addEventListener('keydown', (e) => {
+    if ($('planMask').classList.contains('show')) {
+      if (e.key === 'Escape') closePlan();
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); savePlan(); }
+      return;
+    }
+    if ($('varMask').classList.contains('show') || $('setMask').classList.contains('show')) {
+      if (e.key === 'Escape') { closeVar(); closeSet(); }
+      return;
+    }
     if (!$('lbMask').classList.contains('show')) return;
     if (e.key === 'Escape') closeLb();
     if (e.key === 'ArrowLeft') lbStep(-1);

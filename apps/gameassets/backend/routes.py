@@ -26,7 +26,9 @@ from pydantic import BaseModel, Field
 from . import exporter, pipeline, store, tonecheck
 from .planner import SCALES
 from .presets import (ASSET_KINDS, SEASONS, SEASON_ORDER, TIER_ORDER,
-                      WEAPON_TIERS, TIME_PRESETS, GENDERS)
+                      WEAPON_TIERS, TIME_PRESETS, GENDERS,
+                      MONSTER_TIERS, MONSTER_TIER_ORDER,
+                      SCENE_USAGES, SCENE_USAGE_ORDER)
 from .styles import STYLE_PRESETS
 
 router = APIRouter(prefix="/gameassets", tags=["gameassets"])
@@ -46,9 +48,12 @@ class GenerateIn(BaseModel):
 
 class RunIn(BaseModel):
     """筛选重跑：只跑命中条目（不传 = 全量重跑该类）。"""
-    filter: str | None = Field(None, description="failed | tone | season | gender")
+    filter: str | None = Field(
+        None, description="failed | tone | season | gender | tier | zone")
     season: str | None = Field(None, description="filter=season 时的季节 id")
     gender: str | None = Field(None, description="filter=gender 时的性别 id：male | female")
+    tier: str | None = Field(None, description="filter=tier 时的怪物等级 id")
+    zone: str | None = Field(None, description="filter=zone 时的场景名（只跑该场景的怪）")
 
 
 class VariantsIn(BaseModel):
@@ -71,10 +76,14 @@ class PlanOp(BaseModel):
     index: int | None = Field(None, ge=0, description="方案条目下标（update/delete 必填）")
     name: str | None = Field(None, max_length=40)
     desc: str | None = Field(None, max_length=200)
-    tier_id: str | None = Field(None, description="武器等级（仅 weapon）")
+    tier_id: str | None = Field(None, description="等级：武器 common/fine/epic/legendary；"
+                                                  "怪物 minion/elite/boss/worldboss")
+    usage: str | None = Field(None, description="场景用途（仅 scene）：battle|tile|"
+                                                "portrait|banner|iso，决定画幅")
+    scene: str | None = Field(None, description="怪物出没的场景名（仅 monster）")
     seasons: list[str] | None = Field(None, description="场景季列表（仅 scene，缺省四季）")
     genders: list[str] | None = Field(None, description="角色性别列表（仅 character：male/female）")
-    tileable: bool | None = Field(None, description="场景可平铺纹理（仅 scene）")
+    tileable: bool | None = Field(None, description="兼容旧字段：等价于 usage=tile")
 
 
 class PlanEditIn(BaseModel):
@@ -91,10 +100,10 @@ class SettingsIn(BaseModel):
         None, description='按类提示词补充：{"character": {"extra": "...", "negative": "..."}}')
 
 
-@router.get("/presets", summary="风格 / 时间背景 / 规模 / 季节 / 性别 / 武器等级 预设")
+@router.get("/presets", summary="风格 / 时间背景 / 规模 / 季节 / 性别 / 等级 / 场景用途 预设")
 async def list_presets():
     from .presets import (ASPECTS, TRANSPARENT_DEFAULT, CLASS_LABELS,
-                          CLASS_TEMPLATE_HINT, GENDERS, GENDER_ORDER)
+                          CLASS_TEMPLATE_HINT, GENDER_ORDER)
     return {
         "styles": list(STYLE_PRESETS.values()),
         "times": list(TIME_PRESETS.values()),
@@ -108,6 +117,15 @@ async def list_presets():
                    for k, v in SCALES.items()],
         "seasons": [{"id": k, "name": SEASONS[k]["name"]} for k in SEASON_ORDER],
         "tiers": [{"id": k, "name": WEAPON_TIERS[k]["name"]} for k in TIER_ORDER],
+        "monster_tiers": [{"id": k, "name": MONSTER_TIERS[k]["name"],
+                           "size": list(MONSTER_TIERS[k]["size"]),
+                           "note": MONSTER_TIERS[k]["note"]}
+                          for k in MONSTER_TIER_ORDER],
+        "scene_usages": [{"id": k, "name": SCENE_USAGES[k]["name"],
+                          "size": list(SCENE_USAGES[k]["size"]),
+                          "aspect": SCENE_USAGES[k]["aspect"],
+                          "reason": SCENE_USAGES[k]["reason"]}
+                         for k in SCENE_USAGE_ORDER],
         "stages": [{"id": k, "name": v} for k, v in store.STAGES],
         "aspects": {k: list(v) for k, v in ASPECTS.items()},
         "transparent_default": TRANSPARENT_DEFAULT,
@@ -163,9 +181,10 @@ async def run_stage(sid: str, kind: str, body: RunIn | None = None):
         if kind not in ASSET_KINDS:
             raise HTTPException(status_code=400, detail={
                 "code": "BAD_FILTER", "message": "筛选重跑只对六类素材阶段有效"})
-        if body.filter not in ("failed", "tone", "season", "gender"):
+        if body.filter not in ("failed", "tone", "season", "gender", "tier", "zone"):
             raise HTTPException(status_code=400, detail={
-                "code": "BAD_FILTER", "message": "filter 可选：failed | tone | season | gender"})
+                "code": "BAD_FILTER",
+                "message": "filter 可选：failed | tone | season | gender | tier | zone"})
         if body.filter == "season":
             if body.season not in SEASONS:
                 raise HTTPException(status_code=400, detail={
@@ -176,6 +195,16 @@ async def run_stage(sid: str, kind: str, body: RunIn | None = None):
                 raise HTTPException(status_code=400, detail={
                     "code": "BAD_GENDER", "message": f"未知性别：{body.gender}"})
             opts = {"filter": "gender", "gender": body.gender}
+        elif body.filter == "tier":
+            if body.tier not in MONSTER_TIERS:
+                raise HTTPException(status_code=400, detail={
+                    "code": "BAD_TIER", "message": f"未知怪物等级：{body.tier}"})
+            opts = {"filter": "tier", "tier": body.tier}
+        elif body.filter == "zone":
+            if not str(body.zone or "").strip():
+                raise HTTPException(status_code=400, detail={
+                    "code": "BAD_ZONE", "message": "按场景筛选需要 zone（场景名）"})
+            opts = {"filter": "zone", "zone": body.zone.strip()}
         else:
             opts = {"filter": body.filter}
     _enqueue_or_409(sid, kind, opts)
@@ -239,14 +268,15 @@ async def rerun_asset(sid: str, aid: str):
     item = {"id": old.get("item_id") or pipeline.new_id("itm"),
             "kind": kind, "name": old["name"], "desc": old["desc"],
             "season": old.get("season"), "tier_id": old.get("tier_id"),
-            "gender": old.get("gender"), "tileable": old.get("tileable")}
+            "gender": old.get("gender"), "tileable": old.get("tileable"),
+            "usage": old.get("usage"), "scene": old.get("scene")}
     threshold = float(s.get("threshold") or tonecheck.DEFAULT_THRESHOLD) * (
         pipeline._SEASON_THRESHOLD_FACTOR if old.get("season") else 1.0)
     try:
         asset = await pipeline._gen_with_gate(
             sid, kind=kind, item=item, prompt=pipeline.asset_prompt(s, item),
             negative=pipeline.asset_negative(s, kind), threshold=threshold,
-            size=tuple(old.get("size") or pipeline.asset_size(s, kind)),
+            size=tuple(old.get("size") or pipeline.asset_size(s, kind, item)),
             tmode=pipeline.transparent_mode(s, kind), master_path=master["path"])
     except Exception as exc:
         store.append_log(sid, "error", f"重跑「{old['name']}」失败：{exc}")
@@ -331,6 +361,31 @@ async def edit_plan(sid: str, body: PlanEditIn):
     return {"ok": True, "changed": changed}
 
 
+def _scene_usage_fields(op) -> dict:
+    """场景用途 → 用途 id（+ 兼容字段 tileable）。用途决定画幅，见 presets.SCENE_USAGES。"""
+    if op.usage is not None and op.usage not in SCENE_USAGES:
+        raise ValueError(f"未知场景用途：{op.usage}"
+                         f"（可选：{', '.join(SCENE_USAGE_ORDER)}）")
+    uid = op.usage if op.usage in SCENE_USAGES else ("tile" if op.tileable else "battle")
+    return {"usage": uid, "tileable": uid == "tile"}
+
+
+def _monster_fields(op, s: dict, base: dict | None = None) -> dict:
+    """怪物等级 + 出没场景。场景必须是本项目已有场景名（配属关系不能悬空）。"""
+    base = base or {}
+    tid = op.tier_id if op.tier_id is not None else base.get("tier_id", "minion")
+    if tid not in MONSTER_TIERS:
+        raise ValueError(f"未知怪物等级：{tid}"
+                         f"（可选：{', '.join(MONSTER_TIER_ORDER)}）")
+    names = [sc["name"] for sc in (s.get("plan", {}).get("scenes") or [])]
+    want = op.scene if op.scene is not None else base.get("scene")
+    want = str(want or "").strip()
+    if want and want not in names:
+        raise ValueError(f"场景不存在：{want}（可选：{'、'.join(names) or '无'}）")
+    return {"tier_id": tid, "tier": MONSTER_TIERS[tid]["name"],
+            "scene": want or (names[0] if names else None)}
+
+
 def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
     """改方案条目 + 重建该类条目表。改动/新增的条目重置 pending，未动的原样保留。"""
     from .presets import PLAN_KEYS, build_stage_items, GENDERS
@@ -350,10 +405,12 @@ def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
             if kind == "scene":
                 entry["seasons"] = [x for x in (op.seasons or SEASON_ORDER)
                                     if x in SEASONS] or SEASON_ORDER
-                entry["tileable"] = bool(op.tileable)
+                entry.update(_scene_usage_fields(op))
             if kind == "character":
                 g = [x for x in (op.genders or ["male"]) if x in GENDERS]
                 entry["genders"] = g or ["male"]
+            if kind == "monster":
+                entry.update(_monster_fields(op, s))
             entries.append(entry)
             changed["added"] += 1
         elif op.action == "delete":
@@ -377,11 +434,13 @@ def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
             if kind == "scene":
                 if op.seasons is not None:
                     e["seasons"] = [x for x in op.seasons if x in SEASONS] or SEASON_ORDER
-                if op.tileable is not None:
-                    e["tileable"] = op.tileable
+                if op.usage is not None or op.tileable is not None:
+                    e.update(_scene_usage_fields(op))
             if kind == "character" and op.genders is not None:
                 g = [x for x in op.genders if x in GENDERS]
                 e["genders"] = g or ["male"]
+            if kind == "monster" and (op.tier_id is not None or op.scene is not None):
+                e.update(_monster_fields(op, s, base=e))
             entries[op.index] = e
             changed["updated"] += 1
         else:
@@ -400,7 +459,9 @@ def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
             prev = old_items_by_id.get(it.get("id"))
             if prev and prev["name"] == it["name"] and prev["desc"] == it["desc"] \
                     and prev.get("tier_id") == it.get("tier_id") \
-                    and prev.get("gender") == it.get("gender"):
+                    and prev.get("gender") == it.get("gender") \
+                    and prev.get("usage") == it.get("usage") \
+                    and prev.get("scene") == it.get("scene"):
                 it["status"] = prev["status"]
                 it["score"] = prev.get("score")
         removed = old_names - {it["name"] for it in new_items}

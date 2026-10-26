@@ -204,8 +204,110 @@ def main_v6():
     return 0
 
 
+def main_v7():
+    """7.0 自测：场景用途→画幅 / 怪物等级→画幅 / 场景↔怪物配属。"""
+    failures = []
+    from apps.gameassets.backend import pipeline
+    from apps.gameassets.backend.presets import (ASPECTS, MONSTER_TIERS,
+                                                 MONSTER_TIER_ORDER,
+                                                 SCENE_USAGES, SCENE_USAGE_ORDER,
+                                                 asset_size, build_stage_items,
+                                                 monster_tier, scene_usage)
+
+    # 1) 每个场景用途都必须给出「尺寸 + 理由」，且 64 对齐
+    for uid in SCENE_USAGE_ORDER:
+        u = SCENE_USAGES.get(uid)
+        if not u:
+            failures.append(f"场景用途缺失：{uid}")
+            continue
+        w, h = asset_size({}, "scene", {"usage": uid})
+        if [w, h] != list(u["size"]) or w % 64 or h % 64:
+            failures.append(f"{uid} 画幅不对：{w}x{h} 期望 {u['size']}")
+        if not str(u.get("reason") or "").strip() or not str(u.get("aspect") or "").strip():
+            failures.append(f"{uid} 缺尺寸理由或比例标注")
+    if len({tuple(SCENE_USAGES[k]["size"]) for k in SCENE_USAGE_ORDER}) < 4:
+        failures.append("场景用途的画幅过于单一（至少要区分横/竖/方/超宽）")
+
+    # 2) 怪物四档等级，画幅随等级递增，且都有理由
+    if MONSTER_TIER_ORDER != ["minion", "elite", "boss", "worldboss"]:
+        failures.append(f"怪物等级顺序异常：{MONSTER_TIER_ORDER}")
+    prev = 0
+    for tid in MONSTER_TIER_ORDER:
+        t = MONSTER_TIERS[tid]
+        w, h = asset_size({}, "monster", {"tier_id": tid})
+        if w != h or [w, h] != list(t["size"]) or w % 64:
+            failures.append(f"{tid} 画幅不对：{w}x{h} 期望 {t['size']}")
+        if w <= prev:
+            failures.append(f"{tid} 画幅没随等级放大（{w} <= {prev}）")
+        prev = w
+        if not str(t.get("note") or "").strip():
+            failures.append(f"{tid} 缺画幅理由")
+        if not str(t.get("prompt") or "").strip():
+            failures.append(f"{tid} 缺等级提示词")
+
+    # 3) 条目携带用途/等级/配属，且提示词真的用上
+    plan = {"scenes": [{"name": "码头", "desc": "d1", "usage": "banner"},
+                       {"name": "沼泽", "desc": "d2", "usage": "tile"}],
+            "characters": [], "pets": [], "weapons": [], "buildings": [],
+            "monsters": [{"name": "沼蛭", "desc": "m1", "tier_id": "elite", "scene": "沼泽"},
+                         {"name": "沼王", "desc": "m2", "tier_id": "worldboss",
+                          "scene": "沼泽"}]}
+    items = build_stage_items(plan)
+    sc = items["scene"][0]
+    if sc.get("usage") != "banner" or sc.get("tileable"):
+        failures.append(f"场景条目用途未落库：{sc}")
+    if asset_size({}, "scene", sc) != (1152, 512):
+        failures.append(f"banner 画幅应为 1152×512，实际 {asset_size({}, 'scene', sc)}")
+    mo = items["monster"][0]
+    if mo.get("tier") != "精英" or mo.get("scene") != "沼泽":
+        failures.append(f"怪物等级/配属未落库：{mo}")
+    s = {"style": "ghibli", "time_preset": "dusk", "desc": "", "prompts": {}}
+    p1 = pipeline.asset_prompt(s, dict(items["scene"][0], kind="scene"))
+    if "panoramic" not in p1:
+        failures.append("横幅场景的构图提示未进提示词")
+    p2 = pipeline.asset_prompt(s, dict(items["monster"][1], kind="monster"))
+    if "colossus" not in p2 or "沼泽" not in p2:
+        failures.append(f"终局怪缺等级词或出没场景：{p2[-160:]}")
+    p3 = pipeline.asset_prompt(s, dict(items["scene"][4], kind="scene")
+                               if len(items["scene"]) > 4 else
+                               {"kind": "scene", "name": "沼泽", "desc": "d",
+                                "usage": "tile"})
+    if "seamless tileable" not in p3:
+        failures.append("可平铺场景缺无缝提示")
+
+    # 4) 老数据兼容：只有 tileable 没有 usage 时按平铺处理
+    if scene_usage({"tileable": True}) != "tile" or scene_usage({}) != "battle":
+        failures.append("老数据用途回退不对")
+    if monster_tier({}) != "minion" or monster_tier({"tier_id": "boss"}) != "boss":
+        failures.append("怪物等级回退不对")
+
+    # 5) 改用途/等级必须触发重置（不能沿用旧成图）
+    again = build_stage_items({**plan, "monsters": [
+        {"name": "沼蛭", "desc": "m1", "tier_id": "minion", "scene": "沼泽"}]},
+        {"monster": [{"id": "itm_x", "key": "0", "name": "沼蛭", "desc": "m1",
+                      "tier_id": "elite", "tier": "精英", "scene": "沼泽",
+                      "status": "done"}]})
+    if again["monster"][0]["status"] != "pending":
+        failures.append("改怪物等级后条目未重置为待生成")
+    again2 = build_stage_items({**plan, "scenes": [
+        {"name": "码头", "desc": "d1", "usage": "portrait"}]},
+        {"scene": [{"id": "itm_s", "key": "0:spring", "name": "码头", "desc": "d1",
+                    "season": "spring", "usage": "banner", "status": "done"}]})
+    if again2["scene"][0]["status"] != "pending":
+        failures.append("改场景用途后条目未重置为待生成")
+
+    if failures:
+        print("FAIL:")
+        for f in failures:
+            print("  -", f)
+        return 1
+    print("V7 ALL PASS")
+    return 0
+
+
 if __name__ == "__main__":
     rc = main()
     rc2 = main_v5()
     rc3 = main_v6()
-    sys.exit(rc or rc2 or rc3)
+    rc4 = main_v7()
+    sys.exit(rc or rc2 or rc3 or rc4)
