@@ -214,6 +214,29 @@
   .gender-chip { font-size: 11px; padding: 1px 7px; border-radius: 12px; }
   .gender-male { background: rgba(59,110,245,.12); color: #2b5ecf; }
   .gender-female { background: rgba(232,90,123,.14); color: #c3386b; }
+
+  /* ===== 仿真测试 ===== */
+  .sim-modal { width: min(1080px, 94vw); }
+  .sim-summary { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  .sim-chip { font-size: 12px; padding: 3px 12px; border-radius: 14px; background: rgba(0,0,0,.06); color: #555; }
+  .sim-chip.good { background: #e6f6ea; color: #1b7a34; }
+  .sim-chip.bad { background: #fdeaea; color: #c0392b; }
+  .sim-chip.warn { background: #fdf0e2; color: #b25e00; }
+  .sim-body { max-height: 64vh; overflow: auto; padding-right: 4px; }
+  .sim-group { border: 1px solid var(--border, #e3e3e3); border-radius: 12px;
+               padding: 10px 12px; margin-bottom: 12px; }
+  .sim-group img { width: 100%; border-radius: 8px; display: block; }
+  .sim-roster { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; font-size: 11.5px; }
+  .sim-note { font-size: 12px; color: #b25e00; margin-top: 6px; }
+  .sim-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px; }
+  .sim-table th { text-align: left; font-size: 11px; color: var(--muted, #888); font-weight: 600;
+                  padding: 5px 8px; border-bottom: 1px solid var(--border, #e3e3e3); }
+  .sim-table td { padding: 5px 8px; border-bottom: 1px solid var(--border, #f0f0f0); }
+  .ck-chip { font-size: 11px; padding: 1px 8px; border-radius: 10px; white-space: nowrap;
+             font-family: ui-monospace, monospace; }
+  .ck-pass { background: #e6f6ea; color: #1b7a34; }
+  .ck-fail { background: #fdeaea; color: #c0392b; }
+  .ck-na { background: rgba(0,0,0,.06); color: #999; }
 </style>
 </head>
 <body>
@@ -293,6 +316,7 @@
         <span class="kind-chip" id="dTime"></span>
         <span class="spacer"></span>
         <button class="btn btn-ghost" id="btnSettings">参数</button>
+        <button class="btn btn-ghost" id="btnSim">仿真测试</button>
         <button class="btn btn-ghost" id="btnExport">导出 ZIP</button>
         <button class="btn btn-ghost" id="btnRunAll">全部生成</button>
         <button class="btn btn-danger" id="btnDelSet">删除</button>
@@ -379,6 +403,20 @@
     <div style="margin-top:14px;text-align:right">
       <button class="btn btn-ghost" onclick="UI.closeSet()">取消</button>
       <button class="btn btn-primary" id="setSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 仿真测试：逐张体检 + 模拟游戏画面 -->
+<div class="modal-mask" id="simMask" onclick="if(event.target===this)UI.closeSim()">
+  <div class="modal sim-modal">
+    <h3>仿真测试</h3>
+    <p class="muted2">逐张体检（文件 / 画幅与设计一致 / 该透明的有 alpha / 色调）＋ 按场景合成模拟游戏画面（怪物按等级定大小、武器进动作栏）。纯本地运算，不占显存。</p>
+    <div class="sim-summary" id="simSummary"></div>
+    <div class="sim-body" id="simBody"></div>
+    <div class="modal-foot" style="margin-top:12px">
+      <button class="btn btn-ghost" id="simRerun">重新仿真</button>
+      <button class="btn btn-ghost" id="simClose">关闭</button>
     </div>
   </div>
 </div>
@@ -1328,6 +1366,64 @@
     } catch (e) { toast(e.message); }
   }
 
+  // ---- 仿真测试：逐张体检 + 模拟游戏画面 ----
+  function ckChip(pass, text) {
+    const cls = pass == null ? 'ck-na' : (pass ? 'ck-pass' : 'ck-fail');
+    return `<span class="ck-chip ${cls}">${text}</span>`;
+  }
+  async function runSim(btn) {
+    if (!state.current) return;
+    try {
+      busy(btn, true, '仿真中…');
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/simulate`, { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      renderSim(d);
+      $('simMask').classList.add('show');
+    } catch (e) { toast(e.message); }
+    finally { busy(btn, false); }
+  }
+  function renderSim(rep) {
+    const su = rep.summary || {};
+    $('simSummary').innerHTML = `
+      <span class="sim-chip">${esc(rep.canvas || '')} 模拟画面 × ${su.groups || 0} 组</span>
+      <span class="sim-chip ${su.fail ? 'bad' : 'good'}">体检 ${su.pass}/${su.total} 通过</span>
+      ${su.warn ? `<span class="sim-chip warn">${su.warn} 组有提示</span>` : ''}`;
+    const rows = (rep.asset_checks || []).map(c => {
+      const sz = c.checks.size || {};
+      const al = c.checks.alpha, tone = c.checks.tone;
+      const tags = [c.gender, c.tier, c.season].filter(Boolean).join(' · ');
+      const szTxt = sz.expect
+        ? (sz.actual ? `${sz.expect[0]}×${sz.expect[1]}→${sz.actual[0]}×${sz.actual[1]}` : `${sz.expect[0]}×${sz.expect[1]}→文件缺失`)
+        : '无设计记录';
+      return `<tr>
+        <td><b>${esc(c.name)}</b> <span class="muted2">${esc(c.kind_label)}${tags ? ' · ' + esc(tags) : ''}</span></td>
+        <td>${ckChip(sz.pass, szTxt)}</td>
+        <td>${al ? ckChip(al.pass, al.pass ? '透明底 ✓' : '缺透明') : ckChip(null, '—')}</td>
+        <td>${tone != null ? ckChip(tone, tone ? '色调 ✓' : '跑色') : ckChip(null, '—')}</td>
+      </tr>`;
+    }).join('');
+    const ROSTER = { characters: '主角', pets: '宠物', monsters: '野怪',
+                     buildings: '建筑', weapons: '武器' };
+    $('simBody').innerHTML =
+      (rep.groups || []).map(g => `
+        <div class="sim-group">
+          <img src="${g.url}" alt="仿真画面" loading="lazy">
+          <div class="sim-roster">
+            ${Object.entries(g.roster || {}).filter(([, v]) => v.length).map(([k, v]) =>
+              `<span class="sim-chip">${ROSTER[k] || k}：${v.map(esc).join('、')}</span>`).join('')}
+          </div>
+          ${(g.notes || []).map(n => `<div class="sim-note">⚠ ${esc(n)}</div>`).join('')}
+        </div>`).join('')
+      + `<table class="sim-table">
+           <tr><th>素材</th><th>画幅（设计→实际）</th><th>透明</th><th>色调</th></tr>${rows}
+         </table>`;
+  }
+  function closeSim() { $('simMask').classList.remove('show'); }
+  $('btnSim').addEventListener('click', () => runSim($('btnSim')));
+  $('simRerun').addEventListener('click', () => runSim($('simRerun')));
+  $('simClose').onclick = closeSim;
+
   // ---- 弹窗开关与键盘 ----
   function closeLb() { $('lbMask').classList.remove('show'); }
   function closeVar() { $('varMask').classList.remove('show'); }
@@ -1345,8 +1441,9 @@
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); savePlan(); }
       return;
     }
-    if ($('varMask').classList.contains('show') || $('setMask').classList.contains('show')) {
-      if (e.key === 'Escape') { closeVar(); closeSet(); }
+    if ($('varMask').classList.contains('show') || $('setMask').classList.contains('show')
+        || $('simMask').classList.contains('show')) {
+      if (e.key === 'Escape') { closeVar(); closeSet(); closeSim(); }
       return;
     }
     if (!$('lbMask').classList.contains('show')) return;
@@ -1371,7 +1468,8 @@
 
   // ================= 对外（onclick 内联用） =================
   window.UI = { openLb, closeLb, openVar, closeVar, commit: commitVariant,
-                rerun, delAsset, rollback, openPlan, closePlan, closeSet, atlas };
+                rerun, delAsset, rollback, openPlan, closePlan, closeSet,
+                closeSim, atlas };
 
   // ================= 工具 =================
   function esc(x) {

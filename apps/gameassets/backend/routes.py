@@ -13,6 +13,7 @@
     PATCH /sets/{sid}/settings          透明底方式 / 画幅 / 阈值 按项目覆盖
     GET  /sets/{sid}/export             一键导出 ZIP（可带引擎导入清单）
     GET  /sets/{sid}/atlas/{kind}       图集拼版（sprite sheet）
+    POST /sets/{sid}/simulate           仿真测试：逐张体检 + 合成模拟游戏画面
 
 异常原则：任何阶段失败都落库并展示（状态 chip + 日志行），前端还有
 alive 标志与服务断线检测——绝不出现"页面还在转但其实已经死了"。
@@ -557,6 +558,26 @@ async def atlas(sid: str, kind: str, cols: int = 4):
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": "EMPTY", "message": str(exc)})
     return {"url": exporter.export_url(png)}
+
+
+@router.post("/sets/{sid}/simulate", summary="仿真测试：逐张体检 + 按场景合成模拟游戏画面（同步，秒级）")
+async def simulate_set(sid: str):
+    import asyncio
+    from . import simulator
+    s = store.get_set(sid)
+    if not s:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    if not s["assets"]:
+        raise HTTPException(status_code=409, detail={"code": "EMPTY", "message": "还没有素材，先跑完某类生成"})
+    try:
+        report = await asyncio.to_thread(simulator.run, s)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail={"code": "SIM_FAIL", "message": str(exc)})
+    n = report["summary"]
+    store.append_log(sid, "info",
+                     f"仿真测试完成：{n['groups']} 组画面，{n['pass']}/{n['total']} 张体检通过"
+                     + (f"，{n['warn']} 组有提示" if n["warn"] else ""))
+    return report
 
 
 @router.delete("/sets/{sid}", summary="删除项目")
