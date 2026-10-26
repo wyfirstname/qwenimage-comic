@@ -94,6 +94,38 @@ SEASON_ORDER = ["spring", "summer", "autumn", "winter"]
 
 
 # ------------------------------------------------------------
+#  性别变体：主角默认男女各一版（同一名字展开成两条）。
+#  性别词进提示词前半段——2.1 对前置主体词最敏感，写在描述后面容易被忽略。
+# ------------------------------------------------------------
+GENDERS: dict[str, dict] = {
+    "male": {"name": "男", "prompt": ("male character, masculine build, "
+                                      "male facial features, male body proportions")},
+    "female": {"name": "女", "prompt": ("female character, feminine build, "
+                                        "female facial features, female body proportions")},
+}
+GENDER_ORDER = ["male", "female"]
+
+
+def entry_genders(entry: dict) -> list[str]:
+    """方案条目 → 要展开的性别列表。
+
+    显式 genders 优先；否则按名字猜：含「女主角」→ 只女；含「主角」→ 男女各一；
+    其余（NPC/导师/商人）默认男，用户可在方案编辑里补勾。
+    """
+    raw = entry.get("genders")
+    if raw:
+        picked = [g for g in GENDER_ORDER if g in raw]
+        return picked or ["male"]
+    name = str(entry.get("name") or "")
+    if "女主" in name:
+        return ["female"]
+    if entry.get("protagonist") or "主角" in name:
+        return ["male", "female"]
+    return ["male"]
+
+
+
+# ------------------------------------------------------------
 #  武器等级：固定四级，等级词直接描述材质与光效（模型可画）。
 # ------------------------------------------------------------
 WEAPON_TIERS: dict[str, dict] = {
@@ -152,6 +184,20 @@ def build_stage_items(plan: dict, existing: dict[str, list[dict]] | None = None
                         "season": season, "tileable": bool(entry.get("tileable")),
                         "status": _inherit(old, entry["name"], entry["desc"], None),
                     })
+            elif kind == "character":
+                gids = entry_genders(entry)
+                for gid in gids:
+                    key = f"{idx}:{gid}"
+                    old = (old_by_key.get(key)
+                           or old_by_key.get(f"{entry['name']}:{gid}")
+                           or (old_by_key.get(entry["name"]) if len(gids) == 1 else None))
+                    items.append({
+                        "id": (old or {}).get("id") or new_id("itm"),
+                        "key": key,
+                        "name": entry["name"], "desc": entry["desc"],
+                        "gender": gid,
+                        "status": _inherit(old, entry["name"], entry["desc"], None),
+                    })
             else:
                 key = str(idx)
                 old = old_by_key.get(key) or old_by_key.get(entry["name"])
@@ -202,3 +248,34 @@ TRANSPARENT_DEFAULT: dict[str, str] = {
 
 def transparent_mode(s: dict, kind: str) -> str:
     return ((s.get("transparent") or {}).get(kind)) or TRANSPARENT_DEFAULT.get(kind, "none")
+
+
+# ------------------------------------------------------------
+#  按类提示词：固定模板（代码里，不可改）+ 项目级补充（可改）。
+#  补充词只追加在这类素材的提示词尾部、负面前部，不影响其它类。
+#  set["prompts"][kind] = {"extra": "...", "negative": "..."}
+# ------------------------------------------------------------
+CLASS_LABELS: dict[str, str] = {
+    "scene": "场景", "character": "角色", "pet": "宠物",
+    "weapon": "武器", "building": "建筑", "monster": "野怪",
+}
+
+# 给 UI 显示的固定模板摘要（真正的拼装在 pipeline.asset_prompt 里）
+CLASS_TEMPLATE_HINT: dict[str, str] = {
+    "scene": "环境概念图 · 大全景 · 无角色无文字 · 可叠加季节 / 可平铺",
+    "character": "全身立绘 · 单角色 · 正面站姿 · 居中 · 先写性别再写外观",
+    "pet": "宠物伙伴设计 · 全身 · 侧前 45° · 居中",
+    "weapon": "武器设计 · 单件 · 四分之三视角 · 居中 · 可叠加等级词",
+    "building": "建筑外观概念图 · 完整结构可见 · 无内部视角",
+    "monster": "怪物设计 · 全身 · 剪影有压迫感 · 居中",
+}
+
+
+def prompt_extra(s: dict, kind: str) -> str:
+    """该类追加的正向提示词（项目级，可空）。"""
+    return str(((s.get("prompts") or {}).get(kind) or {}).get("extra") or "").strip()
+
+
+def prompt_negative(s: dict, kind: str) -> str:
+    """该类追加的负面词（项目级，可空）。"""
+    return str(((s.get("prompts") or {}).get(kind) or {}).get("negative") or "").strip()

@@ -133,6 +133,60 @@
   .edit-row input, .edit-row select { font-size: 13px; padding: 5px 8px; }
   .season-boxes { display: flex; gap: 6px; font-size: 12px; align-items: center; }
   .muted2 { color: var(--muted, #888); font-size: 12px; }
+
+  /* ===== 分类页签 ===== */
+  .ov-strip { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
+  .ov-pill { display: flex; align-items: center; gap: 5px; border: 1px solid var(--border, #e3e3e3);
+             border-radius: 20px; padding: 3px 10px 3px 8px; font-size: 12px; cursor: pointer;
+             background: var(--bg, #fff); color: var(--muted, #777); }
+  .ov-pill:hover { border-color: var(--primary, #3b6ef5); }
+  .ov-pill.active { border-color: var(--primary, #3b6ef5); color: var(--primary, #3b6ef5);
+                    box-shadow: 0 0 0 2px rgba(59,110,245,.12); }
+  .ov-dot { width: 7px; height: 7px; border-radius: 50%; background: #c9ccd4; flex: none; }
+  .ov-dot.queued { background: #e8a33c; } .ov-dot.running { background: #3b6ef5; }
+  .ov-dot.done { background: #35a85b; } .ov-dot.failed { background: #d9534f; }
+  .ov-dot.canceled { background: #a26; }
+
+  .tabs { display: flex; gap: 2px; border-bottom: 1.5px solid var(--border, #e3e3e3);
+          overflow-x: auto; margin-bottom: 12px; }
+  .tab { border: none; background: none; padding: 8px 14px; font-size: 13.5px; cursor: pointer;
+         color: var(--muted, #777); border-bottom: 2.5px solid transparent; white-space: nowrap; }
+  .tab:hover { color: var(--primary, #3b6ef5); }
+  .tab.active { color: var(--primary, #3b6ef5); border-bottom-color: var(--primary, #3b6ef5);
+                font-weight: 600; }
+  .tab .tab-n { font-size: 11px; color: var(--muted, #999); margin-left: 3px; }
+
+  /* 分类页里的阶段控制条 */
+  .stage-card.wide { flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap;
+                     padding: 10px 14px; }
+  .stage-card.wide .stage-bar { flex: 1; min-width: 120px; }
+  .stage-card.wide .stage-btnrow { margin-left: auto; }
+
+  /* 该类提示词面板 */
+  .prompt-panel { border: 1px solid var(--border, #e3e3e3); border-radius: 10px;
+                  padding: 10px 14px; margin: 12px 0; background: rgba(59,110,245,.03); }
+  .prompt-panel summary { cursor: pointer; font-size: 13.5px; font-weight: 600; }
+  .prompt-panel summary span { font-weight: 400; font-size: 12px; color: var(--muted, #888); }
+  .pp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+  .pp-grid label { display: block; font-size: 12px; color: var(--muted, #888); margin-bottom: 4px; }
+  .pp-grid textarea { width: 100%; font-size: 12.5px; padding: 7px 9px; border-radius: 8px;
+                      border: 1.5px solid var(--border, #ddd); resize: vertical; font-family: inherit; }
+  .pp-foot { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+
+  /* 条目表 */
+  .item-list { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; overflow: hidden; }
+  .item-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center;
+              padding: 7px 12px; font-size: 12.5px; border-bottom: 1px solid var(--border, #f0f0f0); }
+  .item-row:last-child { border-bottom: none; }
+  .item-row .it-name { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .item-row .it-desc { color: var(--muted, #999); font-size: 11.5px; margin-top: 2px;
+                       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46vw; }
+  .item-row .it-acts { display: flex; gap: 5px; }
+  .item-row .it-acts button { border: 1px solid var(--border, #ddd); background: none; border-radius: 6px;
+                              padding: 2px 8px; font-size: 11.5px; cursor: pointer; color: var(--primary, #3b6ef5); }
+  .gender-chip { font-size: 11px; padding: 1px 7px; border-radius: 12px; }
+  .gender-male { background: rgba(59,110,245,.12); color: #2b5ecf; }
+  .gender-female { background: rgba(232,90,123,.14); color: #c3386b; }
 </style>
 </head>
 <body>
@@ -217,14 +271,9 @@
         <button class="btn btn-danger" id="btnDelSet">删除</button>
       </div>
 
-      <div class="stage-grid" id="stageGrid"></div>
-
-      <p class="section-title" style="margin-top:14px">操作日志</p>
-      <div class="log-box" id="logBox"><span class="muted">暂无日志</span></div>
-
-      <div id="planArea"></div>
-      <div id="masterArea"></div>
-      <div id="resultArea"></div>
+      <div class="ov-strip" id="ovStrip"></div>
+      <div class="tabs" id="tabBar"></div>
+      <div id="tabBody"></div>
     </div>
   </section>
 </main>
@@ -310,7 +359,8 @@
   const $ = (id) => document.getElementById(id);
   const state = { styles: [], times: [], scales: [], sets: [], current: null,
                   timer: null, failCount: 0, stages: [], detail: null,
-                  lbList: [], lbIdx: 0, varAid: null, planKind: null, aspects: {} };
+                  lbList: [], lbIdx: 0, varAid: null, planKind: null, aspects: {},
+                  tab: 'plan', classTemplates: {}, genders: [] };
 
   const STAGE_TIP = {
     plan: '一句话 → 完整设定（可编辑后局部重跑）',
@@ -333,6 +383,8 @@
     state.stages = pr.stages || [];
     state.aspects = pr.aspects || {};
     state.trDefault = pr.transparent_default || {};
+    state.classTemplates = pr.class_templates || {};
+    state.genders = pr.genders || [];
     state.sets = st.items;
     renderCards($('styleCards'), state.styles);
     renderCards($('timeCards'), state.times, 2);       // 默认黄昏
@@ -490,75 +542,260 @@
     const stages = s.pipeline?.stages || {};
     const anyActive = ST_ORDER.some(k => ['queued', 'running'].includes(stages[k]?.status));
     if (anyActive && !s.alive) {
-      showBanner('⚠ 流水线已中断（服务重启或异常退出）。下面标黄的类别点「生成」即可续做，已完成的不受影响。', true);
+      showBanner('⚠ 流水线已中断（服务重启或异常退出）。标黄阶段点「生成」即可续做，已完成的不受影响。', true);
       ST_ORDER.forEach(k => { if (['queued', 'running'].includes(stages[k]?.status)) {
         stages[k].status = 'failed';
         stages[k].error = stages[k].error || '任务中断';
       }});
     }
-
-    renderStages(s, stages);
-    renderLog(s.pipeline?.log || []);
-    renderPlan(s);
-    renderMaster(s);
-    renderResults(s);
+    // 当前页签失效（例如旧数据没有该阶段）时回落到策划
+    if (!ST_ORDER.includes(state.tab)) state.tab = 'plan';
+    renderOverview(s, stages);
+    renderTabBar(s, stages);
+    // 2 秒轮询重渲染会打断输入/滚动：内容签名没变就不重画；
+    // 正在输入或该页有未保存草稿时也不重画（否则 textarea 会被换掉、焦点丢失）
+    const sig = paneSig(s, stages);
+    if (sig === state.paneSig) return;
+    const ae = document.activeElement;
+    const typing = !!(ae && ae.closest && ae.closest('#tabBody')
+                      && /^(TEXTAREA|INPUT|SELECT)$/.test(ae.tagName));
+    const dirty = !!((state.ppDraft || {})[state.tab]);
+    if (typing || dirty) return;
+    state.paneSig = sig;
+    renderPane(s, stages);
   }
 
-  function renderStages(s, stages) {
-    const grid = $('stageGrid');
-    if (!grid.children.length) grid.innerHTML = ST_ORDER.map(k => `
-      <div class="stage-card" data-k="${k}">
-        <div class="stage-head"><b>${ST_NAME[k]}</b><span class="st-chip st-idle">待生成</span></div>
-        <div class="stage-bar"><b style="width:0%"></b></div>
-        <div class="stage-meta"><span class="cnt"></span><span class="err"></span></div>
-        <div class="stage-meta" style="font-size:11px">${STAGE_TIP[k] || ''}</div>
-        <div class="stage-btnrow">
-          <button class="stage-btn go">生成</button>
-          <button class="stage-btn warn stop" style="display:none">取消</button>
-          <select class="stage-filter" style="display:none">
-            <option value="">筛选…</option>
-            <option value="failed">只跑失败</option>
-            <option value="tone">只跑跑色</option>
-            ${k === 'scene' ? '<option value="season">按季…</option>' : ''}
-          </select>
-        </div>
-      </div>`).join('');
-    ST_ORDER.forEach(k => {
-      const el = grid.querySelector(`[data-k="${k}"]`);
-      const st = stages[k] || { status: 'idle', done: 0, total: 0, error: '' };
-      const [chipText, chipCls] = ST_CHIP[st.status] || ST_CHIP.idle;
-      el.querySelector('.st-chip').textContent = chipText;
-      el.querySelector('.st-chip').className = 'st-chip ' + chipCls;
-      el.classList.toggle('running', st.status === 'running' || st.status === 'queued');
-      el.classList.toggle('failed', st.status === 'failed');
-      el.querySelector('.stage-bar b').style.width =
-        st.total ? (st.done / st.total * 100) + '%' : (st.status === 'done' ? '100%' : '0%');
-      el.querySelector('.cnt').textContent = st.total ? `${st.done}/${st.total}` : '';
-      el.querySelector('.err').textContent = st.error || '';
-      const go = el.querySelector('.go');
-      const stop = el.querySelector('.stop');
-      const filt = el.querySelector('.stage-filter');
-      const active = ['queued', 'running'].includes(st.status);
-      go.disabled = active;
-      go.textContent = active ? '进行中…' : (st.status === 'failed' ? '重试'
-                         : (st.status === 'done' ? '重新生成' : '生成'));
-      go.onclick = () => {
-        const f = filt.value;
-        if (f === 'season') {
-          const season = prompt('输入季节拼音：spring / summer / autumn / winter');
-          if (!season) return;
-          runStage(k, go, { filter: 'season', season });
-        } else if (f) {
-          runStage(k, go, { filter: f });
-        } else {
-          runStage(k, go);
-        }
-      };
-      stop.style.display = active ? '' : 'none';
-      stop.onclick = () => cancelStage(k, stop);
-      filt.style.display = (KINDS6.includes(k) && st.total) ? '' : 'none';
+  function paneSig(s, stages) {
+    return JSON.stringify([
+      state.tab,
+      ST_ORDER.map(k => {
+        const st = stages[k] || {};
+        return [st.status, st.done || 0, st.total || 0, st.error || '', (st.items || []).length];
+      }),
+      (s.assets || []).map(a => a.id + (a.history || []).length).join('|'),
+      (s.pipeline?.log || []).length,
+      JSON.stringify(s.prompts || {}),
+    ]);
+  }
+
+  // ---- 顶部总览：8 个阶段小胶囊（点的同时切到对应页签） ----
+  function renderOverview(s, stages) {
+    $('ovStrip').innerHTML = ST_ORDER.map(k => {
+      const st = stages[k] || {};
+      const total = st.total || 0, done = st.done || 0;
+      const num = total ? `${done}/${total}` : '';
+      return `<div class="ov-pill${state.tab === k ? ' active' : ''}" data-ov="${k}">
+        <i class="ov-dot ${st.status || 'idle'}"></i>${ST_NAME[k]}
+        <span class="muted" style="font-size:11px">${num}</span></div>`;
+    }).join('');
+    $('ovStrip').querySelectorAll('[data-ov]').forEach(el =>
+      el.onclick = () => switchTab(el.dataset.ov));
+  }
+
+  function renderTabBar(s, stages) {
+    const tabs = ST_ORDER.map(k => {
+      const st = stages[k] || {};
+      const num = st.total ? `<span class="tab-n">${st.done || 0}/${st.total}</span>` : '';
+      const dot = st.status === 'running' || st.status === 'queued' ? ' ·' : '';
+      return `<button class="tab${state.tab === k ? ' active' : ''}" data-tab="${k}">${ST_NAME[k]}${num}${dot}</button>`;
     });
+    tabs.push(`<button class="tab${state.tab === 'log' ? ' active' : ''}" data-tab="log">日志</button>`);
+    $('tabBar').innerHTML = tabs.join('');
+    $('tabBar').querySelectorAll('[data-tab]').forEach(el =>
+      el.onclick = () => switchTab(el.dataset.tab));
   }
+
+  function switchTab(k) {
+    state.tab = k;
+    state.paneSig = null;          // 换页签强制重画
+    if (state.detail) renderDetail(state.detail);
+  }
+
+  // ---- 页签内容 ----
+  function renderPane(s, stages) {
+    const box = $('tabBody');
+    const k = state.tab;
+    if (k === 'log') { box.innerHTML = `<p class="section-title">操作日志</p><div class="log-box" id="logBox"></div>`; renderLog(s.pipeline?.log || []); return; }
+    if (k === 'plan') { box.innerHTML = planPane(s); return; }
+    if (k === 'master') { box.innerHTML = masterPane(s, stages.master || {}); wireStage('master', stages.master || {}); return; }
+    box.innerHTML = classPane(s, k, stages[k] || {});
+    wireStage(k, stages[k] || {});
+    wirePrompt(k);
+  }
+
+  // ---- 阶段控制条（两类页签共用）----
+  function stageBar(kind, st) {
+    const [chipText, chipCls] = ST_CHIP[st.status] || ST_CHIP.idle;
+    const pct = st.total ? (st.done / st.total * 100) : (st.status === 'done' ? 100 : 0);
+    const active = ['queued', 'running'].includes(st.status);
+    const isClass = KINDS6.includes(kind);
+    return `<div class="stage-card wide" data-stage="${kind}">
+      <div class="stage-head"><b>${ST_NAME[kind]}生成</b>
+        <span class="st-chip ${chipCls}">${chipText}</span></div>
+      <div class="stage-bar"><b style="width:${pct}%"></b></div>
+      <div class="stage-meta"><span class="cnt">${st.total ? `${st.done || 0}/${st.total}` : ''}</span>
+        <span class="err">${esc(st.error || '')}</span></div>
+      <div class="stage-btnrow">
+        <button class="stage-btn go" ${active ? 'disabled' : ''}>${active ? '进行中…'
+          : st.status === 'failed' ? '重试' : st.status === 'done' ? '重新生成' : '生成'}</button>
+        <button class="stage-btn warn stop" ${active ? '' : 'style="display:none"'}>取消</button>
+        <select class="stage-filter" ${isClass && st.total ? '' : 'style="display:none"'}>
+          <option value="">筛选…</option>
+          <option value="failed">只跑失败</option>
+          <option value="tone">只跑跑色</option>
+          ${kind === 'scene' ? '<option value="season">按季…</option>' : ''}
+          ${kind === 'character' ? '<option value="gender">按性别…</option>' : ''}
+        </select>
+      </div></div>`;
+  }
+
+  function wireStage(kind, st) {
+    const el = $('tabBody').querySelector(`[data-stage="${kind}"]`);
+    if (!el) return;
+    const go = el.querySelector('.go'), stop = el.querySelector('.stop');
+    const filt = el.querySelector('.stage-filter');
+    go.onclick = () => {
+      const f = filt.value;
+      if (f === 'season') {
+        const season = prompt('输入季节拼音：spring / summer / autumn / winter');
+        if (!season) return;
+        runStage(kind, go, { filter: 'season', season });
+      } else if (f === 'gender') {
+        const g = prompt('输入性别：male（男）/ female（女）');
+        if (!g) return;
+        runStage(kind, go, { filter: 'gender', gender: g });
+      } else if (f) runStage(kind, go, { filter: f });
+      else runStage(kind, go);
+    };
+    stop.onclick = () => cancelStage(kind, stop);
+  }
+
+  // ---- 六个分类页 ----
+  function classPane(s, kind, st) {
+    const items = st.items || [];
+    const assets = (s.assets || []).filter(a => a.kind === kind);
+    const sz = state.aspects[kind];
+    const p = (s.prompts || {})[kind] || {};
+    const draft = (state.ppDraft || {})[kind] || {};   // 未保存的输入，别被轮询冲掉
+    const tpl = (state.classTemplates || {})[kind] || '';
+
+    const rows = items.length ? items.map(it => {
+      const a = assets.find(x => x.item_id === it.id || (x.name === it.name
+        && (x.season || null) === (it.season || null)
+        && (x.gender || null) === (it.gender || null)));
+      const chips = [
+        it.gender ? `<span class="gender-chip gender-${it.gender}">${it.gender === 'male' ? '男' : '女'}</span>` : '',
+        it.season ? `<span class="season-chip">${({ spring: '春', summer: '夏', autumn: '秋', winter: '冬' })[it.season] || it.season}</span>` : '',
+        it.tier ? `<span class="tier-chip tier-${it.tier_id}">${it.tier}</span>` : '',
+      ].join('');
+      const [ct, cc] = ST_CHIP[it.status === 'pending' ? 'idle' : it.status] || ST_CHIP.idle;
+      const acts = a
+        ? `<button onclick="UI.rerun('${a.id}')">重跑</button>
+           <button onclick="UI.openVar('${a.id}')">精修</button>
+           <button onclick="UI.openLb('${a.id}')">查看</button>`
+        : '';
+      return `<div class="item-row">
+        <div><div class="it-name"><b>${esc(it.name)}</b>${chips}
+          <span class="st-chip ${cc}">${it.status === 'pending' ? '待生成' : ct}</span></div>
+          <div class="it-desc" title="${esc(it.desc || '')}">${esc(it.desc || '')}</div></div>
+        <span class="muted" style="font-size:11.5px">${it.score != null ? '色距 ' + Math.round(it.score) : ''}</span>
+        <span class="it-acts">${acts}</span></div>`;
+    }).join('') : '<div class="item-row"><span class="muted">该类还没有条目，去「策划」页编辑方案</span></div>';
+
+    return `${stageBar(kind, st)}
+      <div class="prompt-panel">
+        <details open>
+          <summary>这一类单独的提示词 <span>（只影响${KIND_NAME[kind]}，保存后下次生成生效）</span></summary>
+          <p class="muted2" style="margin:6px 0 0">固定模板：${esc(tpl)}</p>
+          <div class="pp-grid">
+            <div><label>追加正向词（会拼在这类提示词末尾）</label>
+              <textarea class="pp-extra" rows="3" placeholder="例：armor with jade inlay, flowing silk ribbons">${esc(draft.extra ?? p.extra ?? '')}</textarea></div>
+            <div><label>追加负面词（拼在负面提示词前部）</label>
+              <textarea class="pp-neg" rows="3" placeholder="例：modern clothing, gun, neon">${esc(draft.negative ?? p.negative ?? '')}</textarea></div>
+          </div>
+          <div class="pp-foot">
+            <button class="btn btn-primary pp-save">保存这类提示词</button>
+            <button class="btn btn-ghost pp-reset">恢复默认（清空）</button>
+            <span class="muted2 pp-hint">英文效果更稳；改动只重跑这一类（点上面的「生成」）</span>
+          </div>
+        </details>
+      </div>
+
+      <p class="section-title">条目 <span class="muted" style="font-weight:400;font-size:12px">${items.length} 条</span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost" onclick="UI.openPlan('${kind}')">编辑条目</button></p>
+      <div class="item-list">${rows}</div>
+
+      <p class="section-title">成图 <span class="muted" style="font-weight:400;font-size:12px">${assets.length} 张${sz ? ` · ${sz[0]}×${sz[1]}` : ''}</span>
+        <span class="spacer"></span>
+        ${assets.length ? `<button class="btn btn-ghost" onclick="UI.atlas('${kind}')">🧩 图集</button>` : ''}</p>
+      ${assets.length ? `<div class="asset-grid">${assets.map(assetCard).join('')}</div>`
+        : '<p class="muted">还没有成图，点上面「生成」</p>'}`;
+  }
+
+  function wirePrompt(kind) {
+    const root = $('tabBody');
+    const save = root.querySelector('.pp-save'), reset = root.querySelector('.pp-reset');
+    const extra = root.querySelector('.pp-extra'), neg = root.querySelector('.pp-neg');
+    if (!save) return;
+    state.ppDraft = state.ppDraft || {};
+    const keep = () => { state.ppDraft[kind] = { extra: extra.value, negative: neg.value }; };
+    extra.oninput = keep; neg.oninput = keep;
+    save.onclick = () => {
+      delete state.ppDraft[kind];
+      savePrompt(kind, extra.value, neg.value);
+    };
+    reset.onclick = () => {
+      extra.value = ''; neg.value = '';
+      delete state.ppDraft[kind];
+      savePrompt(kind, '', '');
+    };
+  }
+
+  function assetCard(a) {
+    const tone = a.tone || {}, q = a.quality || {};
+    const chips = [
+      a.season_name ? `<span class="season-chip">${a.season_name}</span>` : '',
+      a.gender_name ? `<span class="gender-chip gender-${a.gender}">${a.gender_name}</span>` : '',
+      a.tier ? `<span class="tier-chip tier-${a.tier_id}">${a.tier}</span>` : '',
+      a.transparent ? `<span class="tr-chip">透明${a.transparent.method === 'rembg' ? '·AI' : ''}</span>` : '',
+      q.pass === false ? `<span class="q-chip q-fail" title="${esc((q.reasons || []).join('；'))}">⚠ ${(q.reasons || [''])[0]?.split('（')[0] || '质量'}</span>`
+        : q.pass === true ? '<span class="q-chip q-pass">✓守门</span>' : '',
+      (a.history || []).length ? `<span class="q-chip" style="background:rgba(0,0,0,.06);color:#777" title="有历史版本，点图查看">${a.history.length}版</span>` : '',
+    ].join('');
+    return `<div class="asset-card">
+      <img src="${a.url}" loading="lazy" class="${a.transparent ? 'alpha' : ''}"
+           onclick="UI.openLb('${a.id}')">
+      <div class="card-actions">
+        <button title="单张精修（改词/锁seed/多候选）" onclick="UI.openVar('${a.id}')">✎</button>
+        <button title="直接重跑" onclick="UI.rerun('${a.id}')">↻</button>
+        <button title="删除" onclick="UI.delAsset('${a.id}')">🗑</button>
+      </div>
+      <div class="asset-body">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+          <b style="font-size:13px">${esc(a.name)}</b>${chips}
+        </div>
+        <div style="margin-top:4px">
+          <span class="tone-badge ${tone.pass ? 'tone-pass' : 'tone-fail'}">
+            ${tone.pass ? '✓ 色调一致' : '⚠ 色调偏离'} ${Math.round(tone.score)}
+          </span>
+        </div>
+      </div></div>`;
+  }
+
+  async function savePrompt(kind, extra, negative) {
+    try {
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/settings`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompts: { [kind]: { extra, negative } } }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      toast(extra || negative ? `${KIND_NAME[kind]}提示词已保存（下次生成生效）`
+                              : `${KIND_NAME[kind]}已恢复默认提示词`);
+      poll(true);
+    } catch (e) { toast('保存失败：' + e.message); }
+  }
+
 
   async function runStage(kind, btn, opts) {
     btn.disabled = true;
@@ -594,18 +831,48 @@
     box.scrollTop = box.scrollHeight;
   }
 
-  // ================= 方案（只读摘要 + 编辑入口） =================
-  function renderPlan(s) {
-    const box = $('planArea');
+  // ================= 策划页 =================
+  function planPane(s) {
     const plan = s.plan;
-    if (!plan) { box.innerHTML = ''; return; }
-    const counts = [['场景', plan.scenes], ['角色', plan.characters], ['宠物', plan.pets],
-                    ['武器', plan.weapons], ['建筑', plan.buildings], ['野怪', plan.monsters]];
-    box.innerHTML = `<p class="section-title">策划方案 <span class="kind-chip">${plan.planner === 'llm' ? 'LLM 策划' : '规则模板'}</span>
-      <span class="spacer"></span><button class="btn btn-ghost" onclick="UI.openPlan('scene')">编辑方案</button></p>
-      <div class="plan-box"><b>${esc(plan.title)}</b><span class="muted" style="font-size:12px">（${esc(plan.scale_name)}）</span>
-      <div class="muted" style="font-size:12.5px;margin-top:2px">${esc(plan.synopsis)}</div>
-      <div class="muted" style="font-size:12px;margin-top:4px">${counts.map(([n, l]) => `${n}×${l.length}`).join(' · ')}</div></div>`;
+    if (!plan) {
+      return `<p class="section-title">策划</p><p class="muted">还没有策划方案。</p>
+        ${stageBar('plan', s.pipeline?.stages?.plan || {})}`;
+    }
+    const rows = KINDS6.map(k => {
+      const KEY = { scene: 'scenes', character: 'characters', pet: 'pets',
+                    weapon: 'weapons', building: 'buildings', monster: 'monsters' }[k];
+      const list = plan[KEY] || [];
+      const st = s.pipeline?.stages?.[k] || {};
+      const detail = k === 'character'
+        ? list.map(e => `${e.name}（${e.gender_label || (e.genders || []).map(g => g === 'male' ? '男' : '女').join('/') || '男'}）`).join('、')
+        : k === 'weapon'
+          ? list.map(e => `${e.name}·${e.tier || ''}`).join('、')
+          : list.map(e => e.name).join('、');
+      return `<div class="item-row">
+        <div><div class="it-name"><b>${KIND_NAME[k]}</b>
+          <span class="muted" style="font-size:11.5px">${list.length} 条 · 出图 ${st.done || 0}/${st.total || 0}</span></div>
+          <div class="it-desc" title="${esc(detail)}">${esc(detail || '空')}</div></div>
+        <span class="muted" style="font-size:11.5px">${k === 'scene' ? '×四季' : k === 'character' ? '主角分男女' : ''}</span>
+        <span class="it-acts"><button onclick="UI.openPlan('${k}')">编辑</button></span></div>`;
+    }).join('');
+    return `<div class="plan-box"><b>${esc(plan.title)}</b>
+        <span class="muted" style="font-size:12px">（${esc(plan.scale_name)} · ${plan.planner === 'llm' ? 'LLM 策划' : '规则模板'}）</span>
+        <div class="muted" style="font-size:12.5px;margin-top:2px">${esc(plan.synopsis)}</div></div>
+      ${stageBar('plan', s.pipeline?.stages?.plan || {})}
+      <p class="section-title">方案条目 <span class="muted" style="font-weight:400;font-size:12px">改完只重跑受影响条目</span></p>
+      <div class="item-list">${rows}</div>`;
+  }
+
+  // ================= 基准图页 =================
+  function masterPane(s, st) {
+    const m = s.master;
+    return `${stageBar('master', st)}
+      ${m ? `<p class="section-title">基准图 <span class="muted" style="font-weight:400;font-size:12px">全集色调锚点，其余素材都融合它</span></p>
+        <div class="asset-grid"><div class="asset-card master">
+          <img src="${m.url}" loading="lazy">
+          <div class="asset-body"><div class="master-palette">${(m.palette || []).map(c => `<i style="background:${c}"></i>`).join('')}</div></div>
+        </div></div>`
+      : '<p class="muted">还没有基准图。点上面「生成」出第一张锚点图。</p>'}`;
   }
 
   // ---- 方案编辑弹窗 ----
@@ -623,10 +890,15 @@
             `<label><input type="checkbox" class="pe-season" value="${sn}"
               ${(e.seasons || ['spring','summer','autumn','winter']).includes(sn) ? 'checked' : ''}>${{spring:'春',summer:'夏',autumn:'秋',winter:'冬'}[sn]}</label>`).join('')}
             <label><input type="checkbox" class="pe-tile" ${e.tileable ? 'checked' : ''}>可平铺</label></div>`
-        : (kind === 'weapon'
-            ? `<select class="pe-tier">${['common','fine','epic','legendary'].map(t =>
-                `<option value="${t}" ${e.tier_id === t ? 'selected' : ''}>${{common:'普通',fine:'精良',epic:'史诗',legendary:'传说'}[t]}</option>`).join('')}</select>`
-            : '');
+        : kind === 'character'
+          ? `<div class="season-boxes">主角性别：${[['male','男'],['female','女']].map(([g, n]) =>
+              `<label><input type="checkbox" class="pe-gender" value="${g}"
+                ${(e.genders || ['male']).includes(g) ? 'checked' : ''}>${n}</label>`).join('')}
+              <span class="muted2">勾两个 = 男女各出一版</span></div>`
+          : (kind === 'weapon'
+              ? `<select class="pe-tier">${['common','fine','epic','legendary'].map(t =>
+                  `<option value="${t}" ${e.tier_id === t ? 'selected' : ''}>${{common:'普通',fine:'精良',epic:'史诗',legendary:'传说'}[t]}</option>`).join('')}</select>`
+              : '');
       return `<div class="edit-row" data-i="${i}">
         <input class="pe-name" value="${esc(e.name)}" placeholder="名称">
         <input class="pe-desc" value="${esc(e.desc)}" placeholder="外观描述（15-40 字，直接入画）">
@@ -640,7 +912,9 @@
       row.innerHTML = `<input class="pe-name" placeholder="名称">
         <input class="pe-desc" placeholder="外观描述">
         <span>${kind === 'weapon' ? '<select class="pe-tier"><option value="common">普通</option><option value="fine">精良</option><option value="epic">史诗</option><option value="legendary">传说</option></select>'
-              : kind === 'scene' ? '<div class="season-boxes">' + ['spring','summer','autumn','winter'].map(sn => `<label><input type="checkbox" class="pe-season" value="${sn}" checked>${{spring:'春',summer:'夏',autumn:'秋',winter:'冬'}[sn]}</label>`).join('') + '</div>' : ''}
+              : kind === 'scene' ? '<div class="season-boxes">' + ['spring','summer','autumn','winter'].map(sn => `<label><input type="checkbox" class="pe-season" value="${sn}" checked>${{spring:'春',summer:'夏',autumn:'秋',winter:'冬'}[sn]}</label>`).join('') + '</div>'
+              : kind === 'character' ? '<div class="season-boxes"><label><input type="checkbox" class="pe-gender" value="male" checked>男</label><label><input type="checkbox" class="pe-gender" value="female">女</label></div>'
+              : ''}
         <button class="btn btn-danger pe-del" style="padding:3px 8px;font-size:11px">删</button></span>`;
       row.querySelector('.pe-del').onclick = () => row.remove();
       $('planEdRows').appendChild(row);
@@ -658,22 +932,15 @@
     let shift = 0;
     rows.forEach(row => {
       const i = row.dataset.i;
-      if (i === 'new') {
-        ops.push({ action: 'add',
-          name: row.querySelector('.pe-name').value,
-          desc: row.querySelector('.pe-desc').value,
-          tier_id: row.querySelector('.pe-tier')?.value || null,
-          seasons: [...row.querySelectorAll('.pe-season:checked')].map(c => c.value) || null,
-          tileable: row.querySelector('.pe-tile')?.checked || null });
-      } else {
-        const idx = parseInt(i, 10);
-        ops.push({ action: 'update', index: idx,
-          name: row.querySelector('.pe-name').value,
-          desc: row.querySelector('.pe-desc').value,
-          tier_id: row.querySelector('.pe-tier')?.value || null,
-          seasons: [...row.querySelectorAll('.pe-season:checked')].map(c => c.value) || null,
-          tileable: row.querySelector('.pe-tile') ? row.querySelector('.pe-tile').checked : null });
-      }
+      const body = {
+        name: row.querySelector('.pe-name').value,
+        desc: row.querySelector('.pe-desc').value,
+        tier_id: row.querySelector('.pe-tier')?.value || null,
+        seasons: [...row.querySelectorAll('.pe-season:checked')].map(c => c.value) || null,
+        genders: [...row.querySelectorAll('.pe-gender:checked')].map(c => c.value) || null,
+        tileable: row.querySelector('.pe-tile') ? row.querySelector('.pe-tile').checked : null };
+      if (i === 'new') ops.push({ action: 'add', ...body });
+      else ops.push({ action: 'update', index: parseInt(i, 10), ...body });
     });
     // 被删行：原下标收集（DOM 里已移除的行按原顺序补齐）
     const orig = state.detail.plan[{scene:'scenes',character:'characters',pet:'pets',
@@ -694,70 +961,10 @@
     } catch (e) { toast('保存失败：' + e.message); }
   }
 
-  // ================= 基准图 =================
-  function renderMaster(s) {
-    const box = $('masterArea');
-    if (!s.master) { box.innerHTML = ''; return; }
-    box.innerHTML = `<p class="section-title">基准图 <span class="muted" style="font-weight:400;font-size:12px">全集色调锚点</span></p>
-      <div class="asset-grid"><div class="asset-card master">
-        <img src="${s.master.url}" loading="lazy">
-        <div class="asset-body">
-          <div class="master-palette">${(s.master.palette || []).map(c => `<i style="background:${c}"></i>`).join('')}</div>
-        </div>
-      </div></div>`;
-  }
-
-  // ================= 素材墙 =================
+  // ================= 素材墙（单类，供分类页复用） =================
   const KIND_NAME = { scene: '场景', character: '角色', pet: '宠物', weapon: '武器',
                       building: '建筑', monster: '野怪' };
 
-  function renderResults(s) {
-    const box = $('resultArea');
-    const groups = {};
-    (s.assets || []).forEach(a => (groups[a.kind] = groups[a.kind] || []).push(a));
-    let html = '';
-    for (const k of KINDS6) {
-      const list = groups[k];
-      if (!list || !list.length) continue;
-      const sz = state.aspects[k];
-      html += `<p class="section-title">${KIND_NAME[k]}
-        <span class="muted" style="font-weight:400;font-size:12px">${list.length} 张${sz ? ` · ${sz[0]}×${sz[1]}` : ''}</span>
-        <span class="spacer"></span>
-        <button class="btn btn-ghost" onclick="UI.atlas('${k}')">🧩 图集</button></p>
-        <div class="asset-grid">` + list.map(a => {
-        const tone = a.tone || {};
-        const q = a.quality || {};
-        const chips = [
-          a.season_name ? `<span class="season-chip">${a.season_name}</span>` : '',
-          a.tier ? `<span class="tier-chip tier-${a.tier_id}">${a.tier}</span>` : '',
-          a.transparent ? `<span class="tr-chip">透明${a.transparent.method === 'rembg' ? '·AI' : ''}</span>` : '',
-          q.pass === false ? `<span class="q-chip q-fail" title="${esc((q.reasons || []).join('；'))}">⚠ ${(q.reasons || [''])[0]?.split('（')[0] || '质量'}</span>`
-            : q.pass === true ? '<span class="q-chip q-pass">✓守门</span>' : '',
-          (a.history || []).length ? `<span class="q-chip" style="background:rgba(0,0,0,.06);color:#777" title="有历史版本，点图查看">${a.history.length}版</span>` : '',
-        ].join('');
-        return `<div class="asset-card">
-          <img src="${a.url}" loading="lazy" class="${a.transparent ? 'alpha' : ''}"
-               onclick="UI.openLb('${a.id}')">
-          <div class="card-actions">
-            <button title="单张精修（改词/锁seed/多候选）" onclick="UI.openVar('${a.id}')">✎</button>
-            <button title="直接重跑" onclick="UI.rerun('${a.id}')">↻</button>
-            <button title="删除" onclick="UI.delAsset('${a.id}')">🗑</button>
-          </div>
-          <div class="asset-body">
-            <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-              <b style="font-size:13px">${esc(a.name)}</b>${chips}
-            </div>
-            <div style="margin-top:4px">
-              <span class="tone-badge ${tone.pass ? 'tone-pass' : 'tone-fail'}">
-                ${tone.pass ? '✓ 色调一致' : '⚠ 色调偏离'} ${Math.round(tone.score)}
-              </span>
-            </div>
-          </div>
-        </div>`;
-      }).join('') + '</div>';
-    }
-    box.innerHTML = html || '';
-  }
 
   // ---- 放大预览（含基准图对比 / 版本历史 / 键盘翻页） ----
   function openLb(aid) {
@@ -772,7 +979,9 @@
   }
   function renderLb() {
     const a = state.lbList[state.lbIdx];
-    $('lbTitle').textContent = `${KIND_NAME[a.kind]} · ${a.name}`;
+    const tags = [a.season_name, a.gender_name ? a.gender_name + '版' : '', a.tier]
+      .filter(Boolean).join(' · ');
+    $('lbTitle').textContent = `${KIND_NAME[a.kind]} · ${a.name}${tags ? '（' + tags + '）' : ''}`;
     $('lbImg').src = a.url;
     $('lbImg').className = a.transparent ? 'alpha' : '';
     $('lbImg').style.maxHeight = '56vh'; $('lbImg').style.objectFit = 'contain';

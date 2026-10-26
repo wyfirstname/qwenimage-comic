@@ -135,7 +135,77 @@ def main_v5():
     return 0
 
 
+def main_v6():
+    """6.0 自测：主角性别展开 / 按类提示词 / 分类页签数据结构。"""
+    failures = []
+    from apps.gameassets.backend import pipeline
+    from apps.gameassets.backend.presets import (build_stage_items, entry_genders,
+                                                 prompt_extra, prompt_negative)
+
+    # 1) 性别推断：主角男女、女主角只女、NPC 默认男、显式覆盖优先
+    cases = [({"name": "主角·战士"}, ["male", "female"]),
+             ({"name": "女主角·游侠"}, ["female"]),
+             ({"name": "导师·长老"}, ["male"]),
+             ({"name": "商人", "genders": ["female", "male"]}, ["male", "female"]),
+             ({"name": "路人", "genders": []}, ["male"])]
+    for entry, want in cases:
+        got = entry_genders(entry)
+        if got != want:
+            failures.append(f"性别推断 {entry} 期望 {want} 实际 {got}")
+
+    # 2) 条目展开：主角出两条（男女各一），NPC 出一条
+    plan = {"scenes": [], "characters": [
+                {"name": "主角·剑士", "desc": "d1"},
+                {"name": "女主角·术士", "desc": "d2"},
+                {"name": "铁匠", "desc": "d3"}],
+            "pets": [], "weapons": [], "buildings": [], "monsters": []}
+    items = build_stage_items(plan)["character"]
+    if len(items) != 4:
+        failures.append(f"角色条目应为 4 条（2+1+1），实际 {len(items)}")
+    gset = sorted({(it["name"], it.get("gender")) for it in items})
+    if ("主角·剑士", "male") not in gset or ("主角·剑士", "female") not in gset:
+        failures.append(f"主角应展开男女两条：{gset}")
+    if len({it["id"] for it in items}) != len(items):
+        failures.append("条目 id 不唯一")
+
+    # 3) 稳定 id：同一方案重复展开，id 不变（对账靠它）
+    again = build_stage_items(plan, {"character": items})["character"]
+    if [it["id"] for it in again] != [it["id"] for it in items]:
+        failures.append("重复展开 id 不稳定")
+
+    # 4) 提示词：性别词进前置主体位、按类补充词生效
+    s = {"style": "ghibli", "time_preset": "dawn", "desc": "",
+         "prompts": {"character": {"extra": "jade armor inlay", "negative": "modern gun"}}}
+    pm = pipeline.asset_prompt(s, {"kind": "character", "name": "剑士", "desc": "重甲",
+                                   "gender": "female"})
+    if "female character" not in pm:
+        failures.append("女版提示词缺性别词")
+    if "jade armor inlay" not in pm:
+        failures.append("按类正向补充词未拼入")
+    pm2 = pipeline.asset_prompt(s, {"kind": "pet", "name": "灵狐", "desc": "银白"})
+    if "jade armor inlay" in pm2:
+        failures.append("角色补充词串到了宠物类")
+    neg = pipeline.asset_negative(s, "character")
+    if "modern gun" not in neg:
+        failures.append(f"按类负面词未拼入：{neg}")
+    if "modern gun" in pipeline.asset_negative(s, "pet"):
+        failures.append("角色负面词串到了宠物类")
+
+    # 5) 取值助手：空值安全
+    if prompt_extra({}, "pet") != "" or prompt_negative({"prompts": None}, "pet") != "":
+        failures.append("提示词助手空值应返回空串")
+
+    if failures:
+        print("FAIL:")
+        for f in failures:
+            print("  -", f)
+        return 1
+    print("V6 ALL PASS")
+    return 0
+
+
 if __name__ == "__main__":
     rc = main()
     rc2 = main_v5()
-    sys.exit(rc or rc2)
+    rc3 = main_v6()
+    sys.exit(rc or rc2 or rc3)

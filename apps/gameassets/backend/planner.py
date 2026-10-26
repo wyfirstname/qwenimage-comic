@@ -35,7 +35,7 @@ _PLAN_SCHEMA = """{
   "title": "游戏名",
   "synopsis": "两三句世界观",
   "scenes": [{"name": "场景名", "desc": "外观描述，15-40字"}],
-  "characters": [{"name": "角色名", "desc": "外形/服装/气质描述，15-40字"}],
+  "characters": [{"name": "角色名", "gender": "男|女|男女", "desc": "外形/服装/气质描述，15-40字"}],
   "pets": [{"name": "宠物名", "desc": "物种/体型/特征描述，15-40字"}],
   "weapons": [{"name": "武器名", "tier": "普通|精良|史诗|传说", "desc": "形制/材质描述，15-40字"}],
   "buildings": [{"name": "建筑名", "desc": "结构/材质/氛围描述，15-40字"}],
@@ -87,6 +87,8 @@ def _llm_prompt(idea: str, scale: dict) -> str:
         f"宠物 {scale['pets']} 只、武器 {scale['weapons']} 把（等级从「普通」起至少覆盖到"
         f"第 {scale['weapons']} 级，等级只用：普通/精良/史诗/传说）、"
         f"建筑 {scale['buildings']} 座、野怪 {scale['monsters']} 种。\n"
+        "角色里至少一位是「主角」，主角的 gender 必须是「男女」（系统会生成男女两版），"
+        "其余角色按设定填「男」或「女」。\n"
         "名字与描述要贴合用户的游戏题材，不要用示例里的占位词。"
     )
 
@@ -122,10 +124,10 @@ _FALLBACK_TPL = {
         ("最终秘境", "悬浮的古代遗迹群，符文石柱环绕中央祭坛"),
     ],
     "characters": [
-        ("主角·战士", "身披重型铠甲的年轻战士，肩披染风尘的斗篷，手持巨剑"),
-        ("主角·法师", "身穿绣纹长袍的法师，手持木质法杖，腰间挂着卷轴"),
-        ("女主角·游侠", "轻装皮甲的游侠少女，背挎长弓，发间系着红色发带"),
-        ("导师·长老", "白发白须的长老，粗布长袍，手持弯曲木杖，眼神慈祥"),
+        ("主角·战士", "身披重型铠甲的年轻战士，肩披染风尘的斗篷，手持巨剑", "男女"),
+        ("主角·法师", "身穿绣纹长袍的法师，手持木质法杖，腰间挂着卷轴", "男女"),
+        ("女主角·游侠", "轻装皮甲的游侠少女，背挎长弓，发间系着红色发带", "女"),
+        ("导师·长老", "白发白须的长老，粗布长袍，手持弯曲木杖，眼神慈祥", "男"),
     ],
     "pets": [
         ("幼年灵狐", "巴掌大的银白色狐狸，尾巴尖泛着微光，大眼睛"),
@@ -163,11 +165,32 @@ def _rule_plan(idea: str) -> dict:
             if kind == "weapons":          # (name, tier, desc)
                 n, t, d = e
                 items.append({"name": n, "tier": t, "desc": f"{d}（{idea}风格）"})
+            elif kind == "characters":     # (name, desc, gender)
+                n, d, g = e
+                items.append({"name": n, "desc": f"{d}（{idea}风格）", "gender": g})
             else:                          # (name, desc)
                 n, d = e
                 items.append({"name": n, "desc": f"{d}（{idea}风格）"})
         plan[kind] = items
     return plan
+
+
+def _parse_genders(it: dict, name: str) -> list[str]:
+    """模型给的 gender 字段（男/女/男女/英文）→ ['male'] / ['female'] / 两个都有。
+
+    没给就按名字猜（女主 → 女；主角 → 男女；其它 → 男），与 presets.entry_genders 一致。
+    """
+    raw = str(it.get("gender") or it.get("genders") or "").strip().lower()
+    if raw:
+        both = ("男女" in raw or "both" in raw or "all" in raw)
+        if both:
+            return ["male", "female"]
+        if "女" in raw or "female" in raw or raw in ("f", "woman"):
+            return ["female"]
+        if "男" in raw or "male" in raw or raw in ("m", "man"):
+            return ["male"]
+    from .presets import entry_genders
+    return entry_genders({"name": name})
 
 
 # ------------------------------------------------------------
@@ -193,6 +216,10 @@ def _normalize(plan: dict, scale: dict) -> dict:
             if not name:
                 continue
             entry = {"name": name, "desc": desc or name}
+            if kind == "characters":
+                entry["genders"] = _parse_genders(it, name)
+                entry["gender_label"] = "/".join(
+                    {"male": "男", "female": "女"}[g] for g in entry["genders"])
             if kind == "weapons":
                 tier = str(it.get("tier") or "普通")
                 tier_id = {"普通": "common", "精良": "fine",

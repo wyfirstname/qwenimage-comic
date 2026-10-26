@@ -34,7 +34,8 @@ from engine.sdk import engine
 from . import quality, store, tonecheck, transmat
 from .planner import plan_from_idea
 from .presets import (ASPECTS, get_preset, asset_size, transparent_mode,
-                      SEASONS, WEAPON_TIERS, ASSET_KINDS, build_stage_items)
+                      SEASONS, WEAPON_TIERS, ASSET_KINDS, build_stage_items,
+                      GENDERS, prompt_extra, prompt_negative)
 from .styles import get_style
 
 _MASTER_SIZE = (1152, 640)
@@ -102,6 +103,8 @@ def enqueue(sid: str, kind: str, opts: dict | None = None) -> None:
         opts = opts or {}
         if opts.get("filter") == "season" and opts.get("season") not in SEASONS:
             raise ValueError(f"未知季节：{opts.get('season')}")
+        if opts.get("filter") == "gender" and opts.get("gender") not in GENDERS:
+            raise ValueError(f"未知性别：{opts.get('gender')}")
 
     if kind in store.STAGE_IDS:
         def _mark(t: dict) -> None:
@@ -111,9 +114,15 @@ def enqueue(sid: str, kind: str, opts: dict | None = None) -> None:
     label = store.STAGE_LABELS.get(kind, "全部生成")
     suffix = ""
     if opts and opts.get("filter"):
-        suffix = {"failed": "（仅失败条目）", "tone": "（仅跑色条目）",
-                  "season": f"（仅 {SEASONS[opts['season']]['name']}季）"}.get(
-                      opts["filter"], "")
+        f = opts["filter"]
+        if f == "failed":
+            suffix = "（仅失败条目）"
+        elif f == "tone":
+            suffix = "（仅跑色条目）"
+        elif f == "season" and opts.get("season") in SEASONS:
+            suffix = f"（仅 {SEASONS[opts['season']]['name']}季）"
+        elif f == "gender" and opts.get("gender") in GENDERS:
+            suffix = f"（仅 {GENDERS[opts['gender']]['name']}版）"
         if kind in ASSET_KINDS:
             store.append_log(sid, "info", f"「{label}」筛选重跑{suffix}")
     _queue.append((sid, kind, opts or {}))
@@ -280,14 +289,19 @@ def _item_update(sid: str, kind: str, idx: int, *, status: str,
 
 
 def _upsert_asset(sid: str, asset: dict) -> None:
-    """同条目（item_id 优先，兼容旧 kind+name+season）原位替换；
-    被替换的旧图进版本历史（最多 _MAX_HISTORY 版）。"""
+    """同条目（item_id 优先，兼容旧 kind+name+season+gender）原位替换；
+    被替换的旧图进版本历史（最多 _MAX_HISTORY 版）。
+
+    注意：同名角色的男版/女版是两条不同素材，旧式键必须带 gender，
+    否则后出的女版会把男版顶掉（只剩一张）。
+    """
     def _apply(t: dict) -> None:
         kept, old = [], None
         for a in t["assets"]:
             same = ((asset.get("item_id") and a.get("item_id") == asset["item_id"])
                     or (a["kind"] == asset["kind"] and a["name"] == asset["name"]
-                        and a.get("season") == asset.get("season")))
+                        and a.get("season") == asset.get("season")
+                        and a.get("gender") == asset.get("gender")))
             if same and old is None:
                 old = a
             else:
@@ -380,6 +394,16 @@ async def _stage_master(sid: str) -> None:
     raise RuntimeError(f"基准图 {_MAX_ATTEMPTS} 次尝试均失败：{last_err}")
 
 
+def _item_tag(item: dict) -> str:
+    """日志/报错里的条目名：角色带性别，场景带季节。"""
+    tag = item.get("name") or ""
+    if item.get("season"):
+        tag += f"·{SEASONS[item['season']]['name']}"
+    if item.get("gender") in GENDERS:
+        tag += f"·{GENDERS[item['gender']]['name']}版"
+    return tag
+
+
 def _pick_items(s: dict, kind: str, opts: dict) -> list[int]:
     """筛选重跑：返回要执行的条目下标。默认全部。"""
     st = s["pipeline"]["stages"][kind]
@@ -396,6 +420,8 @@ def _pick_items(s: dict, kind: str, opts: dict) -> list[int]:
             if asset and not (asset.get("tone") or {}).get("pass", True):
                 out.append(i)
         elif f == "season" and it.get("season") == opts.get("season"):
+            out.append(i)
+        elif f == "gender" and it.get("gender") == opts.get("gender"):
             out.append(i)
     return out
 
@@ -435,18 +461,19 @@ async def _stage_assets(sid: str, kind: str, opts: dict) -> None:
         if _canceled(sid):
             raise _StageCanceled()
         _item_update(sid, kind, real_i, status="running")
-        name_tag = (f"{item['name']}·{SEASONS[item['season']]['name']}"
-                    if item.get("season") else item["name"])
+        name_tag = _item_tag(item)
         try:
             payload_item = {"kind": kind, "name": item["name"],
                             "desc": _clean(item["desc"]),
-                            "season": item.get("season"), "tier_id": item.get("tier_id")}
+                            "season": item.get("season"), "tier_id": item.get("tier_id"),
+                            "gender": item.get("gender")}
             prompt = asset_prompt(s, payload_item, transparent=tmode != "none",
                                   tileable=bool(item.get("tileable")))
             threshold = base_threshold * (_SEASON_THRESHOLD_FACTOR
                                           if item.get("season") else 1.0)
             asset = await _gen_with_gate(
-                sid=sid, kind=kind, item=item, prompt=prompt, threshold=threshold,
+                sid=sid, kind=kind, item=item, prompt=prompt,
+                negative=asset_negative(s, kind), threshold=threshold,
                 size=(w, h), tmode=tmode, master_path=master_path)
             _upsert_asset(sid, asset)
             _item_update(sid, kind, real_i, status="done",
@@ -467,19 +494,21 @@ async def _stage_assets(sid: str, kind: str, opts: dict) -> None:
 
 async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
                          threshold: float, size: tuple[int, int], tmode: str,
-                         master_path: str, seed: int = -1) -> dict:
+                         master_path: str, seed: int = -1,
+                         negative: str | None = None) -> dict:
     """生成 + 质量守门 + 自动重试 + 透明底后处理，产出素材记录。
 
     守门规则：黑图/无结构/低熵/跑色任一不达标 → 换 seed 重试；
     结构性缺陷（黑图等）重试后仍差 → 失败；仅跑色 → 入库但标记（用户可用筛选重跑）。
     """
     w, h = size
+    neg = negative or _COMMON_NEG
     last_q, last_rec = None, None
     structural_fail = True
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         if _canceled(sid):
             raise _StageCanceled()
-        rec = await _run_job(prompt=prompt, negative=_COMMON_NEG,
+        rec = await _run_job(prompt=prompt, negative=neg,
                              width=w, height=h, seed=seed, refs=[master_path])
         last_rec, seed = rec, -1          # 首次用调用方 seed，后续换新 seed
         last_q = quality.inspect(rec["path"], master_path, threshold=threshold)
@@ -519,6 +548,9 @@ async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
         "name": item["name"], "desc": item["desc"],
         "season": item.get("season"),
         "season_name": SEASONS[item["season"]]["name"] if item.get("season") else None,
+        "gender": item.get("gender"),
+        "gender_name": (GENDERS[item["gender"]]["name"]
+                        if item.get("gender") in GENDERS else None),
         "tier": item.get("tier"), "tier_id": item.get("tier_id"),
         "path": path, "url": url, "seed": last_rec.get("seed"),
         "size": [w, h], "transparent": transparent,
@@ -570,11 +602,16 @@ _TILEABLE_HINT = ("seamless tileable texture, flat top-down perspective, even li
 
 def asset_prompt(s: dict, item: dict, *, transparent: bool = False,
                  tileable: bool = False) -> str:
-    """六类素材 + 四季变体统一组装。item: {kind,name,desc,season?,tier_id?}。"""
+    """六类素材统一组装。item: {kind,name,desc,season?,tier_id?,gender?}。
+
+    结构：参考图锚点 → 该类固定模板 → 季节/等级/性别修饰 → 项目级补充词 → 收尾。
+    性别词放在主体最前面（2.1 对前置主体词最敏感）。
+    """
     kind = item["kind"]
     anchor = ("Using the reference image strictly as style, color palette and lighting "
               f"anchor (time of day: {get_preset(s['time_preset'])['name']}), ")
     bg = _ISOLATED_BG if transparent else "plain light neutral background"
+    gender = GENDERS.get(item.get("gender"), {}).get("prompt", "")
     body = {
         "scene":    (f"game environment concept art: {_clean(item['name'])} - "
                      f"{_clean(item['desc'])}, "
@@ -582,7 +619,8 @@ def asset_prompt(s: dict, item: dict, *, transparent: bool = False,
                         if item.get("season") else "")
                      + ("full detailed environment, " + _TILEABLE_HINT
                         if tileable else "full detailed environment")),
-        "character": (f"full body character design, single character, front view, "
+        "character": (f"full body character design, single character, "
+                      f"{gender + ', ' if gender else ''}front view, "
                       f"standing pose, whole body visible: {_clean(item['name'])} - "
                       f"{_clean(item['desc'])}, {bg}, centered"),
         "pet":      (f"cute game pet companion creature design, full body, side-front view: "
@@ -597,7 +635,19 @@ def asset_prompt(s: dict, item: dict, *, transparent: bool = False,
         "monster":  (f"game monster creature design, full body, menacing silhouette: "
                      f"{_clean(item['name'])} - {_clean(item['desc'])}, {bg}, centered"),
     }[kind]
+    extra = _clean(prompt_extra(s, kind))          # 项目级补充（该类独有）
+    if extra:
+        body = f"{body}, {extra}"
     return f"{anchor}{body}. Keep style, palette and atmosphere identical to the reference"
+
+
+def asset_negative(s: dict, kind: str) -> str:
+    """负面词 = 通用 + 风格 + 时间背景 + 该类项目级补充。"""
+    style, preset = get_style(s["style"]), get_preset(s["time_preset"])
+    parts = [_COMMON_NEG, style["negative"], preset["negative"],
+             prompt_negative(s, kind)]
+    return ", ".join(p for p in parts if p)
+
 
 
 # ============================================================
@@ -725,7 +775,7 @@ async def gen_variants(*, sid: str, aid: str, prompt: str | None = None,
     for i in range(n):
         if _canceled(sid):
             break
-        rec = await _run_job(prompt=final_prompt, negative=_COMMON_NEG,
+        rec = await _run_job(prompt=final_prompt, negative=asset_negative(s, kind),
                              width=w, height=h, seed=seed, refs=refs)
         q = quality.inspect(rec["path"], s["master"]["path"], threshold=threshold)
         v = {"id": new_id("var"), "path": rec["path"], "url": rec["url"],

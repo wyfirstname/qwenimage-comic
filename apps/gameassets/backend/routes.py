@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from . import exporter, pipeline, store, tonecheck
 from .planner import SCALES
 from .presets import (ASSET_KINDS, SEASONS, SEASON_ORDER, TIER_ORDER,
-                      WEAPON_TIERS, TIME_PRESETS)
+                      WEAPON_TIERS, TIME_PRESETS, GENDERS)
 from .styles import STYLE_PRESETS
 
 router = APIRouter(prefix="/gameassets", tags=["gameassets"])
@@ -46,8 +46,9 @@ class GenerateIn(BaseModel):
 
 class RunIn(BaseModel):
     """筛选重跑：只跑命中条目（不传 = 全量重跑该类）。"""
-    filter: str | None = Field(None, description="failed | tone | season")
+    filter: str | None = Field(None, description="failed | tone | season | gender")
     season: str | None = Field(None, description="filter=season 时的季节 id")
+    gender: str | None = Field(None, description="filter=gender 时的性别 id：male | female")
 
 
 class VariantsIn(BaseModel):
@@ -72,6 +73,7 @@ class PlanOp(BaseModel):
     desc: str | None = Field(None, max_length=200)
     tier_id: str | None = Field(None, description="武器等级（仅 weapon）")
     seasons: list[str] | None = Field(None, description="场景季列表（仅 scene，缺省四季）")
+    genders: list[str] | None = Field(None, description="角色性别列表（仅 character：male/female）")
     tileable: bool | None = Field(None, description="场景可平铺纹理（仅 scene）")
 
 
@@ -85,11 +87,14 @@ class SettingsIn(BaseModel):
         None, description="按类抠图方式：none|chroma|rembg")
     sizes: dict[str, list[int]] | None = Field(None, description="按类画幅覆盖 [w,h]")
     threshold: float | None = Field(None, ge=10, le=120)
+    prompts: dict[str, dict] | None = Field(
+        None, description='按类提示词补充：{"character": {"extra": "...", "negative": "..."}}')
 
 
-@router.get("/presets", summary="风格 / 时间背景 / 规模 / 季节 / 武器等级 预设")
+@router.get("/presets", summary="风格 / 时间背景 / 规模 / 季节 / 性别 / 武器等级 预设")
 async def list_presets():
-    from .presets import ASPECTS, TRANSPARENT_DEFAULT
+    from .presets import (ASPECTS, TRANSPARENT_DEFAULT, CLASS_LABELS,
+                          CLASS_TEMPLATE_HINT, GENDERS, GENDER_ORDER)
     return {
         "styles": list(STYLE_PRESETS.values()),
         "times": list(TIME_PRESETS.values()),
@@ -97,7 +102,8 @@ async def list_presets():
                     "scenes": v["scenes"], "characters": v["characters"],
                     "pets": v["pets"], "weapons": v["weapons"],
                     "buildings": v["buildings"], "monsters": v["monsters"],
-                    "images": v["scenes"] * 4 + v["characters"] + v["pets"]
+                    # 主角默认男女各一版，按 +1 张估（不是每个角色都双版）
+                    "images": v["scenes"] * 4 + v["characters"] + 1 + v["pets"]
                               + v["weapons"] + v["buildings"] + v["monsters"] + 1}
                    for k, v in SCALES.items()],
         "seasons": [{"id": k, "name": SEASONS[k]["name"]} for k in SEASON_ORDER],
@@ -105,6 +111,9 @@ async def list_presets():
         "stages": [{"id": k, "name": v} for k, v in store.STAGES],
         "aspects": {k: list(v) for k, v in ASPECTS.items()},
         "transparent_default": TRANSPARENT_DEFAULT,
+        "genders": [{"id": k, "name": GENDERS[k]["name"]} for k in GENDER_ORDER],
+        "class_labels": CLASS_LABELS,
+        "class_templates": CLASS_TEMPLATE_HINT,
     }
 
 
@@ -154,14 +163,19 @@ async def run_stage(sid: str, kind: str, body: RunIn | None = None):
         if kind not in ASSET_KINDS:
             raise HTTPException(status_code=400, detail={
                 "code": "BAD_FILTER", "message": "筛选重跑只对六类素材阶段有效"})
-        if body.filter not in ("failed", "tone", "season"):
+        if body.filter not in ("failed", "tone", "season", "gender"):
             raise HTTPException(status_code=400, detail={
-                "code": "BAD_FILTER", "message": "filter 可选：failed | tone | season"})
+                "code": "BAD_FILTER", "message": "filter 可选：failed | tone | season | gender"})
         if body.filter == "season":
             if body.season not in SEASONS:
                 raise HTTPException(status_code=400, detail={
                     "code": "BAD_SEASON", "message": f"未知季节：{body.season}"})
             opts = {"filter": "season", "season": body.season}
+        elif body.filter == "gender":
+            if body.gender not in GENDERS:
+                raise HTTPException(status_code=400, detail={
+                    "code": "BAD_GENDER", "message": f"未知性别：{body.gender}"})
+            opts = {"filter": "gender", "gender": body.gender}
         else:
             opts = {"filter": body.filter}
     _enqueue_or_409(sid, kind, opts)
@@ -225,13 +239,13 @@ async def rerun_asset(sid: str, aid: str):
     item = {"id": old.get("item_id") or pipeline.new_id("itm"),
             "kind": kind, "name": old["name"], "desc": old["desc"],
             "season": old.get("season"), "tier_id": old.get("tier_id"),
-            "tileable": old.get("tileable")}
+            "gender": old.get("gender"), "tileable": old.get("tileable")}
     threshold = float(s.get("threshold") or tonecheck.DEFAULT_THRESHOLD) * (
         pipeline._SEASON_THRESHOLD_FACTOR if old.get("season") else 1.0)
     try:
         asset = await pipeline._gen_with_gate(
             sid, kind=kind, item=item, prompt=pipeline.asset_prompt(s, item),
-            threshold=threshold,
+            negative=pipeline.asset_negative(s, kind), threshold=threshold,
             size=tuple(old.get("size") or pipeline.asset_size(s, kind)),
             tmode=pipeline.transparent_mode(s, kind), master_path=master["path"])
     except Exception as exc:
@@ -319,7 +333,7 @@ async def edit_plan(sid: str, body: PlanEditIn):
 
 def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
     """改方案条目 + 重建该类条目表。改动/新增的条目重置 pending，未动的原样保留。"""
-    from .presets import PLAN_KEYS, build_stage_items
+    from .presets import PLAN_KEYS, build_stage_items, GENDERS
     from shared.models_util import new_id
     key = PLAN_KEYS[kind]
     entries = list(s["plan"][key])
@@ -337,6 +351,9 @@ def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
                 entry["seasons"] = [x for x in (op.seasons or SEASON_ORDER)
                                     if x in SEASONS] or SEASON_ORDER
                 entry["tileable"] = bool(op.tileable)
+            if kind == "character":
+                g = [x for x in (op.genders or ["male"]) if x in GENDERS]
+                entry["genders"] = g or ["male"]
             entries.append(entry)
             changed["added"] += 1
         elif op.action == "delete":
@@ -362,6 +379,9 @@ def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
                     e["seasons"] = [x for x in op.seasons if x in SEASONS] or SEASON_ORDER
                 if op.tileable is not None:
                     e["tileable"] = op.tileable
+            if kind == "character" and op.genders is not None:
+                g = [x for x in op.genders if x in GENDERS]
+                e["genders"] = g or ["male"]
             entries[op.index] = e
             changed["updated"] += 1
         else:
@@ -379,7 +399,8 @@ def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
         for it in new_items:
             prev = old_items_by_id.get(it.get("id"))
             if prev and prev["name"] == it["name"] and prev["desc"] == it["desc"] \
-                    and prev.get("tier_id") == it.get("tier_id"):
+                    and prev.get("tier_id") == it.get("tier_id") \
+                    and prev.get("gender") == it.get("gender"):
                 it["status"] = prev["status"]
                 it["score"] = prev.get("score")
         removed = old_names - {it["name"] for it in new_items}
@@ -389,12 +410,12 @@ def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
         t["pipeline"]["stages"][kind]["done"] = done
         # 清素材：只保留「条目未动（仍 done/failed）」的旧素材；
         # 被删除/内容改动（置 pending）的条目，其旧素材一并清掉
-        kept = {(it["name"], it.get("season"), it.get("tier_id"))
+        kept = {(it["name"], it.get("season"), it.get("tier_id"), it.get("gender"))
                 for it in new_items if it["status"] in ("done", "failed")}
         t["assets"] = [
             a for a in t["assets"]
             if a["kind"] != kind
-            or (a["name"], a.get("season"), a.get("tier_id")) in kept]
+            or (a["name"], a.get("season"), a.get("tier_id"), a.get("gender")) in kept]
     store.mutate(sid, _apply)
     store.append_log(
         sid, "info",
@@ -403,7 +424,8 @@ def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
     return changed
 
 
-@router.patch("/sets/{sid}/settings", summary="按项目覆盖设置（透明底方式 / 画幅 / 色调阈值）")
+@router.patch("/sets/{sid}/settings",
+              summary="按项目覆盖设置（透明底 / 画幅 / 色调阈值 / 按类提示词）")
 async def edit_settings(sid: str, body: SettingsIn):
     if not store.get_set(sid):
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
@@ -424,6 +446,22 @@ async def edit_settings(sid: str, body: SettingsIn):
             t["sizes"] = {**(t.get("sizes") or {}), **body.sizes}
         if body.threshold is not None:
             t["threshold"] = body.threshold
+        if body.prompts is not None:
+            from .presets import CLASS_LABELS
+            bad = set(body.prompts) - set(ASSET_KINDS)
+            if bad:
+                raise ValueError(f"非法分类提示词：{sorted(bad)}（可选：{sorted(CLASS_LABELS)}）")
+            merged = {**(t.get("prompts") or {})}
+            for k, v in body.prompts.items():
+                if not isinstance(v, dict):
+                    raise ValueError(f"{k} 的提示词必须是 {{extra, negative}} 对象")
+                extra = str(v.get("extra") or "").strip()[:600]
+                negative = str(v.get("negative") or "").strip()[:400]
+                if not extra and not negative:
+                    merged.pop(k, None)          # 清空 = 恢复默认
+                else:
+                    merged[k] = {"extra": extra, "negative": negative}
+            t["prompts"] = merged
     try:
         store.mutate(sid, _apply)
     except ValueError as exc:
