@@ -1,10 +1,18 @@
 # -*- coding: utf-8 -*-
-"""游戏素材工坊接口 4.0 —— 分类独立生成 + 异常透明。
+"""游戏素材工坊接口 5.0 —— 分类独立生成 + 异常透明 + 可控精修 + 导出。
 
     POST /generate                      一句话建项目 + 全量编排（plan→master→六类）
-    POST /sets/{sid}/stages/{kind}/run  单独生成某类（plan/master/scene/…/monster）
+    POST /sets/{sid}/stages/{kind}/run  单独生成某类（支持筛选：failed/tone/season）
+    POST /sets/{sid}/stages/{kind}/cancel  取消运行中/排队的阶段
     GET  /sets/{sid}                    详情：stages 各类状态/进度/错误 + 日志 + alive
-    POST /sets/{sid}/assets/{aid}/rerun 单卡重跑
+    POST /sets/{sid}/assets/{aid}/rerun    单卡重跑（质量守门 + 透明底 + 版本历史）
+    POST /sets/{sid}/assets/{aid}/variants 单张多候选（改提示词/锁 seed/N 张挑选）
+    POST /sets/{sid}/assets/{aid}/commit   候选提交为正式版（旧版进历史）
+    POST /sets/{sid}/assets/{aid}/rollback 版本回滚
+    PATCH /sets/{sid}/plan              方案可视化编辑（增删改条目，只重跑受影响项）
+    PATCH /sets/{sid}/settings          透明底方式 / 画幅 / 阈值 按项目覆盖
+    GET  /sets/{sid}/export             一键导出 ZIP（可带引擎导入清单）
+    GET  /sets/{sid}/atlas/{kind}       图集拼版（sprite sheet）
 
 异常原则：任何阶段失败都落库并展示（状态 chip + 日志行），前端还有
 alive 标志与服务断线检测——绝不出现"页面还在转但其实已经死了"。
@@ -15,9 +23,10 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from . import pipeline, store, tonecheck
+from . import exporter, pipeline, store, tonecheck
 from .planner import SCALES
-from .presets import TIME_PRESETS, SEASONS, SEASON_ORDER, WEAPON_TIERS, TIER_ORDER
+from .presets import (ASSET_KINDS, SEASONS, SEASON_ORDER, TIER_ORDER,
+                      WEAPON_TIERS, TIME_PRESETS)
 from .styles import STYLE_PRESETS
 
 router = APIRouter(prefix="/gameassets", tags=["gameassets"])
@@ -35,8 +44,52 @@ class GenerateIn(BaseModel):
     threshold: float = Field(tonecheck.DEFAULT_THRESHOLD, ge=10, le=120)
 
 
+class RunIn(BaseModel):
+    """筛选重跑：只跑命中条目（不传 = 全量重跑该类）。"""
+    filter: str | None = Field(None, description="failed | tone | season")
+    season: str | None = Field(None, description="filter=season 时的季节 id")
+
+
+class VariantsIn(BaseModel):
+    prompt: str | None = Field(None, max_length=2000, description="改写后的提示词（不传用原词）")
+    seed: int = Field(-1, description="锁定种子（-1 随机）")
+    n: int = Field(1, ge=1, le=4, description="候选张数")
+    use_self_ref: bool = Field(True, description="带自身参考图（多姿态一致性）")
+
+
+class CommitIn(BaseModel):
+    variant: dict = Field(..., description="variants 返回的候选对象")
+
+
+class RollbackIn(BaseModel):
+    index: int = Field(..., ge=0, le=4, description="历史版本下标（0=最近一版）")
+
+
+class PlanOp(BaseModel):
+    action: str = Field(..., description="update | delete | add")
+    index: int | None = Field(None, ge=0, description="方案条目下标（update/delete 必填）")
+    name: str | None = Field(None, max_length=40)
+    desc: str | None = Field(None, max_length=200)
+    tier_id: str | None = Field(None, description="武器等级（仅 weapon）")
+    seasons: list[str] | None = Field(None, description="场景季列表（仅 scene，缺省四季）")
+    tileable: bool | None = Field(None, description="场景可平铺纹理（仅 scene）")
+
+
+class PlanEditIn(BaseModel):
+    kind: str
+    ops: list[PlanOp] = Field(..., min_length=1)
+
+
+class SettingsIn(BaseModel):
+    transparent: dict[str, str] | None = Field(
+        None, description="按类抠图方式：none|chroma|rembg")
+    sizes: dict[str, list[int]] | None = Field(None, description="按类画幅覆盖 [w,h]")
+    threshold: float | None = Field(None, ge=10, le=120)
+
+
 @router.get("/presets", summary="风格 / 时间背景 / 规模 / 季节 / 武器等级 预设")
 async def list_presets():
+    from .presets import ASPECTS, TRANSPARENT_DEFAULT
     return {
         "styles": list(STYLE_PRESETS.values()),
         "times": list(TIME_PRESETS.values()),
@@ -50,6 +103,8 @@ async def list_presets():
         "seasons": [{"id": k, "name": SEASONS[k]["name"]} for k in SEASON_ORDER],
         "tiers": [{"id": k, "name": WEAPON_TIERS[k]["name"]} for k in TIER_ORDER],
         "stages": [{"id": k, "name": v} for k, v in store.STAGES],
+        "aspects": {k: list(v) for k, v in ASPECTS.items()},
+        "transparent_default": TRANSPARENT_DEFAULT,
     }
 
 
@@ -77,9 +132,9 @@ async def generate(req: GenerateIn):
     return s
 
 
-def _enqueue_or_409(sid: str, kind: str) -> None:
+def _enqueue_or_409(sid: str, kind: str, opts: dict | None = None) -> None:
     try:
-        pipeline.enqueue(sid, kind)
+        pipeline.enqueue(sid, kind, opts)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={
             "code": "BUSY" if "已在队列" in str(exc) else "NOT_READY",
@@ -87,15 +142,43 @@ def _enqueue_or_409(sid: str, kind: str) -> None:
 
 
 @router.post("/sets/{sid}/stages/{kind}/run",
-             summary="单独生成/重试一个阶段（plan/master/scene/character/pet/weapon/building/monster/all）")
-async def run_stage(sid: str, kind: str):
+             summary="单独生成/重试一个阶段（body 可选筛选：failed/tone/season）")
+async def run_stage(sid: str, kind: str, body: RunIn | None = None):
     if not store.get_set(sid):
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
     if kind not in _RUNNABLE:
         raise HTTPException(status_code=400, detail={
             "code": "BAD_STAGE", "message": f"未知阶段：{kind}（可选：{', '.join(sorted(_RUNNABLE))}）"})
-    _enqueue_or_409(sid, kind)
+    opts = {}
+    if body and body.filter:
+        if kind not in ASSET_KINDS:
+            raise HTTPException(status_code=400, detail={
+                "code": "BAD_FILTER", "message": "筛选重跑只对六类素材阶段有效"})
+        if body.filter not in ("failed", "tone", "season"):
+            raise HTTPException(status_code=400, detail={
+                "code": "BAD_FILTER", "message": "filter 可选：failed | tone | season"})
+        if body.filter == "season":
+            if body.season not in SEASONS:
+                raise HTTPException(status_code=400, detail={
+                    "code": "BAD_SEASON", "message": f"未知季节：{body.season}"})
+            opts = {"filter": "season", "season": body.season}
+        else:
+            opts = {"filter": body.filter}
+    _enqueue_or_409(sid, kind, opts)
     return {"ok": True}
+
+
+@router.post("/sets/{sid}/stages/{kind}/cancel", summary="取消运行中/排队的阶段")
+async def cancel_stage(sid: str, kind: str):
+    if not store.get_set(sid):
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    if kind != "all" and kind not in store.STAGE_IDS:
+        raise HTTPException(status_code=400, detail={"code": "BAD_STAGE", "message": "未知阶段"})
+    r = pipeline.cancel_stage(sid)
+    if kind == "all":
+        return r
+    # 单类取消：只关心该类
+    return {"ok": True, **r}
 
 
 @router.get("/sets", summary="项目列表")
@@ -123,7 +206,7 @@ async def get_set(sid: str):
     return s
 
 
-@router.post("/sets/{sid}/assets/{aid}/rerun", summary="重跑单张素材（保持锚点不变）")
+@router.post("/sets/{sid}/assets/{aid}/rerun", summary="重跑单张素材（守门 + 透明底 + 旧版进历史）")
 async def rerun_asset(sid: str, aid: str):
     s = store.get_set(sid)
     if not s:
@@ -134,34 +217,247 @@ async def rerun_asset(sid: str, aid: str):
     if not master:
         raise HTTPException(status_code=409, detail={
             "code": "NEED_MASTER", "message": "基准图缺失，请先生成基准图"})
-    idx = next((i for i, a in enumerate(s["assets"]) if a["id"] == aid), None)
-    if idx is None:
+    old = next((a for a in s["assets"] if a["id"] == aid), None)
+    if not old:
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "素材不存在"})
 
-    old = s["assets"][idx]
-    item = {"kind": old["kind"], "name": old["name"], "desc": old["desc"],
-            "season": old.get("season"), "tier_id": old.get("tier_id")}
-    prompt = pipeline.asset_prompt(s, item)
-    base = float(s.get("threshold") or tonecheck.DEFAULT_THRESHOLD)
-    threshold = base * (pipeline._SEASON_THRESHOLD_FACTOR if old.get("season") else 1.0)
+    kind = old["kind"]
+    item = {"id": old.get("item_id") or pipeline.new_id("itm"),
+            "kind": kind, "name": old["name"], "desc": old["desc"],
+            "season": old.get("season"), "tier_id": old.get("tier_id"),
+            "tileable": old.get("tileable")}
+    threshold = float(s.get("threshold") or tonecheck.DEFAULT_THRESHOLD) * (
+        pipeline._SEASON_THRESHOLD_FACTOR if old.get("season") else 1.0)
     try:
-        rec = await pipeline._run_job(prompt=prompt, negative=pipeline._COMMON_NEG,
-                                      width=pipeline._ASSET_W, height=pipeline._ASSET_H,
-                                      seed=-1, ref_path=master["path"])
+        asset = await pipeline._gen_with_gate(
+            sid, kind=kind, item=item, prompt=pipeline.asset_prompt(s, item),
+            threshold=threshold,
+            size=tuple(old.get("size") or pipeline.asset_size(s, kind)),
+            tmode=pipeline.transparent_mode(s, kind), master_path=master["path"])
     except Exception as exc:
         store.append_log(sid, "error", f"重跑「{old['name']}」失败：{exc}")
         raise HTTPException(status_code=500, detail={"code": "GEN_FAILED", "message": str(exc)[:200]})
-    tone = tonecheck.check(rec["path"], master["path"], threshold=threshold)
-    new_asset = {**old,
-                 "path": rec["path"], "url": rec["url"], "seed": rec.get("seed"),
-                 "prompt": prompt, "tone": tone, "created_at": store.now_iso(),
-                 "rerun_of": aid}
+    pipeline._upsert_asset(sid, asset)
+    store.append_log(sid, "info",
+                     f"重跑「{old['name']}」完成 色调{asset['tone']['score']:.0f}（旧版进历史）")
+    return asset
+
+
+@router.post("/sets/{sid}/assets/{aid}/variants",
+             summary="单张多候选：改提示词 / 锁 seed / 出 N 张挑选（不改正式版）")
+async def make_variants(sid: str, aid: str, body: VariantsIn):
+    if not store.get_set(sid):
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    if pipeline.is_busy(sid):
+        raise HTTPException(status_code=409, detail={"code": "BUSY", "message": "项目有任务在队列中，稍后再试"})
+    try:
+        variants = await pipeline.gen_variants(
+            sid=sid, aid=aid, prompt=body.prompt, seed=body.seed,
+            n=body.n, use_self_ref=body.use_self_ref)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "BAD_REQUEST", "message": str(exc)})
+    except Exception as exc:
+        store.append_log(sid, "error", f"候选生成失败：{exc}")
+        raise HTTPException(status_code=500, detail={"code": "GEN_FAILED", "message": str(exc)[:200]})
+    return {"variants": variants}
+
+
+@router.post("/sets/{sid}/assets/{aid}/commit", summary="候选提交为正式版（旧版进历史）")
+async def commit_variant(sid: str, aid: str, body: CommitIn):
+    try:
+        asset = pipeline.commit_variant(sid=sid, aid=aid, variant=body.variant)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "BAD_REQUEST", "message": str(exc)})
+    return asset
+
+
+@router.post("/sets/{sid}/assets/{aid}/rollback", summary="回滚到历史版本")
+async def rollback_asset(sid: str, aid: str, body: RollbackIn):
+    result = {"ok": False}
 
     def _apply(t: dict) -> None:
-        t["assets"][idx] = new_asset
+        idx = next((i for i, a in enumerate(t["assets"]) if a["id"] == aid), None)
+        if idx is None:
+            return
+        a = t["assets"][idx]
+        hist = a.get("history") or []
+        if body.index >= len(hist):
+            return
+        old_ver = hist.pop(body.index)
+        hist.insert(0, {k: a.get(k) for k in
+                        ("path", "url", "seed", "tone", "created_at",
+                         "prompt", "transparent")})
+        del hist[pipeline._MAX_HISTORY:]
+        t["assets"][idx] = {**a, **old_ver, "history": hist}
+        result["ok"] = True
     store.mutate(sid, _apply)
-    store.append_log(sid, "info", f"重跑「{old['name']}」完成 色调{tone['score']:.0f}")
-    return new_asset
+    if not result["ok"]:
+        raise HTTPException(status_code=404, detail={
+            "code": "NOT_FOUND", "message": "素材或历史版本不存在"})
+    store.append_log(sid, "info", "素材已回滚到历史版本")
+    s = store.get_set(sid)
+    return next(a for a in s["assets"] if a["id"] == aid)
+
+
+@router.patch("/sets/{sid}/plan", summary="方案可视化编辑（增删改条目，只重跑受影响项）")
+async def edit_plan(sid: str, body: PlanEditIn):
+    s = store.get_set(sid)
+    if not s:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    if not s.get("plan"):
+        raise HTTPException(status_code=409, detail={"code": "NO_PLAN", "message": "还没有策划方案"})
+    if body.kind not in ASSET_KINDS:
+        raise HTTPException(status_code=400, detail={"code": "BAD_KIND", "message": "未知素材类别"})
+    if pipeline.is_busy(sid):
+        raise HTTPException(status_code=409, detail={"code": "BUSY", "message": "项目有任务在队列中，先取消或等跑完"})
+    try:
+        changed = _apply_plan_edit(sid, s, body.kind, body.ops)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "BAD_OP", "message": str(exc)})
+    return {"ok": True, "changed": changed}
+
+
+def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
+    """改方案条目 + 重建该类条目表。改动/新增的条目重置 pending，未动的原样保留。"""
+    from .presets import PLAN_KEYS, build_stage_items
+    from shared.models_util import new_id
+    key = PLAN_KEYS[kind]
+    entries = list(s["plan"][key])
+    changed = {"updated": 0, "added": 0, "deleted": 0}
+
+    for op in ops:
+        if op.action == "add":
+            entry = {"name": (op.name or "新条目").strip(),
+                     "desc": (op.desc or "").strip()}
+            if kind == "weapon":
+                tier = next((t for t in TIER_ORDER if t == op.tier_id), "common")
+                entry["tier"] = WEAPON_TIERS[tier]["name"]
+                entry["tier_id"] = tier
+            if kind == "scene":
+                entry["seasons"] = [x for x in (op.seasons or SEASON_ORDER)
+                                    if x in SEASONS] or SEASON_ORDER
+                entry["tileable"] = bool(op.tileable)
+            entries.append(entry)
+            changed["added"] += 1
+        elif op.action == "delete":
+            if op.index is None or op.index >= len(entries):
+                raise ValueError(f"删除下标越界：{op.index}")
+            entries.pop(op.index)
+            changed["deleted"] += 1
+        elif op.action == "update":
+            if op.index is None or op.index >= len(entries):
+                raise ValueError(f"更新下标越界：{op.index}")
+            e = dict(entries[op.index])
+            if op.name is not None:
+                e["name"] = op.name.strip()
+            if op.desc is not None:
+                e["desc"] = op.desc.strip()
+            if kind == "weapon" and op.tier_id:
+                if op.tier_id not in TIER_ORDER:
+                    raise ValueError(f"未知武器等级：{op.tier_id}")
+                e["tier"] = WEAPON_TIERS[op.tier_id]["name"]
+                e["tier_id"] = op.tier_id
+            if kind == "scene":
+                if op.seasons is not None:
+                    e["seasons"] = [x for x in op.seasons if x in SEASONS] or SEASON_ORDER
+                if op.tileable is not None:
+                    e["tileable"] = op.tileable
+            entries[op.index] = e
+            changed["updated"] += 1
+        else:
+            raise ValueError(f"未知操作：{op.action}")
+
+    def _apply(t: dict) -> None:
+        old_names = {it["name"] for it in t["pipeline"]["stages"][kind]["items"]}
+        t["plan"][key] = entries
+        blueprint = build_stage_items(
+            t["plan"], {k: t["pipeline"]["stages"][k]["items"] for k in ASSET_KINDS})
+        new_items = blueprint[kind]
+        old_items_by_id = {it.get("id"): it
+                           for it in t["pipeline"]["stages"][kind]["items"]}
+        # 对账：内容没变的条目沿用状态；变了的置 pending 并清掉旧素材
+        for it in new_items:
+            prev = old_items_by_id.get(it.get("id"))
+            if prev and prev["name"] == it["name"] and prev["desc"] == it["desc"] \
+                    and prev.get("tier_id") == it.get("tier_id"):
+                it["status"] = prev["status"]
+                it["score"] = prev.get("score")
+        removed = old_names - {it["name"] for it in new_items}
+        t["pipeline"]["stages"][kind]["items"] = new_items
+        t["pipeline"]["stages"][kind]["total"] = len(new_items)
+        done = sum(1 for it in new_items if it["status"] == "done")
+        t["pipeline"]["stages"][kind]["done"] = done
+        # 清素材：只保留「条目未动（仍 done/failed）」的旧素材；
+        # 被删除/内容改动（置 pending）的条目，其旧素材一并清掉
+        kept = {(it["name"], it.get("season"), it.get("tier_id"))
+                for it in new_items if it["status"] in ("done", "failed")}
+        t["assets"] = [
+            a for a in t["assets"]
+            if a["kind"] != kind
+            or (a["name"], a.get("season"), a.get("tier_id")) in kept]
+    store.mutate(sid, _apply)
+    store.append_log(
+        sid, "info",
+        f"方案已编辑（{store.STAGE_LABELS[kind]}）：改 {changed['updated']} / "
+        f"增 {changed['added']} / 删 {changed['deleted']}，受影响条目待重跑")
+    return changed
+
+
+@router.patch("/sets/{sid}/settings", summary="按项目覆盖设置（透明底方式 / 画幅 / 色调阈值）")
+async def edit_settings(sid: str, body: SettingsIn):
+    if not store.get_set(sid):
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+
+    def _apply(t: dict) -> None:
+        if body.transparent is not None:
+            bad = {k: v for k, v in body.transparent.items()
+                   if k not in ASSET_KINDS or v not in ("none", "chroma", "rembg")}
+            if bad:
+                raise ValueError(f"非法透明底设置：{bad}")
+            t["transparent"] = {**(t.get("transparent") or {}), **body.transparent}
+        if body.sizes is not None:
+            bad = {k: v for k, v in body.sizes.items()
+                   if k not in ASSET_KINDS or len(v) != 2
+                   or not (256 <= v[0] <= 1536 and 256 <= v[1] <= 1536)}
+            if bad:
+                raise ValueError(f"非法画幅设置（宽高 256~1536）：{bad}")
+            t["sizes"] = {**(t.get("sizes") or {}), **body.sizes}
+        if body.threshold is not None:
+            t["threshold"] = body.threshold
+    try:
+        store.mutate(sid, _apply)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "BAD_SETTINGS", "message": str(exc)})
+    return store.get_set(sid)
+
+
+@router.get("/sets/{sid}/export", summary="一键导出 ZIP（engine=unity|godot|phaser 可带导入清单）")
+async def export_set(sid: str, engine: str | None = None):
+    s = store.get_set(sid)
+    if not s:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    if not s["assets"]:
+        raise HTTPException(status_code=409, detail={"code": "EMPTY", "message": "还没有素材可导出"})
+    zip_path = exporter.build_zip(s, engine_tpl=engine)
+    store.append_log(sid, "info",
+                     f"已导出 ZIP（{len(s['assets'])} 张"
+                     + (f"，{engine} 清单" if engine else "") + "）")
+    return {"url": exporter.export_url(zip_path),
+            "filename": zip_path.name, "count": len(s["assets"])}
+
+
+@router.get("/sets/{sid}/atlas/{kind}", summary="图集拼版（sprite sheet，cols 每行列数）")
+async def atlas(sid: str, kind: str, cols: int = 4):
+    s = store.get_set(sid)
+    if not s:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    if kind not in ASSET_KINDS:
+        raise HTTPException(status_code=400, detail={"code": "BAD_KIND", "message": "未知素材类别"})
+    try:
+        png = exporter.build_atlas(s, kind, cols=cols)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"code": "EMPTY", "message": str(exc)})
+    return {"url": exporter.export_url(png)}
 
 
 @router.delete("/sets/{sid}", summary="删除项目")
@@ -198,10 +494,11 @@ def create_app():
 
     from shared.webapp import mount_frontend, mount_media
 
-    application = FastAPI(title="游戏素材工坊", version="4.0.0")
+    application = FastAPI(title="游戏素材工坊", version="5.0.0")
     application.include_router(router, prefix="/api/v1")
 
     store.recover_interrupted()     # 启动时一次性清理上次进程留下的假 running
+    store.ensure_item_ids()         # 条目稳定 id（方案编辑对账锚）
     mount_media(application)
     frontend = _Path(__file__).resolve().parents[1] / "frontend"
     mount_frontend(application, frontend, at="/", name="index")

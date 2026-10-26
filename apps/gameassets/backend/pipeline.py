@@ -1,17 +1,20 @@
 # -*- coding: utf-8 -*-
-"""游戏素材流水线 4.0：分类独立生成 + 异常全程透明。
+"""游戏素材流水线 5.0：分类独立生成 + 异常透明 + 质量守门 + 可控精修。
 
 八个子阶段（store.STAGES）各自独立入队、独立进度、独立失败：
     plan(策划) → master(基准图) → scene / character / pet / weapon / building / monster
 
-所有阶段进同一条 FIFO 串行工作队列（保显存顺序），类与类之间互不拖累：
-某类失败只标红该类并可单独重试，其他类照常。前端轮询 stages 状态 + 日志。
+所有阶段进同一条 FIFO 串行工作队列（保显存顺序），类与类之间互不拖累。
+"all" 是编排入口：按依赖顺序串起来，已完成（done）的跳过 = 续做语义。
 
-"all" 是编排入口：按依赖顺序把 plan→master→六类 串起来跑，中途某类失败
-继续下一类（可事后单独重试失败类）。
-
-一致性机制不变：风格基因（styles.py）+ 时间背景（presets.py）+ 基准图融合；
-季节变体在同一时间背景（色温/光源）下换植被与天气，色调阈值放宽 1.6 倍。
+5.0 新增：
+  - 质量守门（quality.py）：黑图/纯色/低熵/跑色 四重检测，不过关自动换 seed 重试
+  - 透明底（transmat.py）：按类指定 chroma 色键 / rembg，出图后即转 RGBA
+  - 按类画幅（presets.ASPECTS）：场景 16:9、角色 2:3、武器/宠物/野怪 1:1、建筑 4:3
+  - 筛选重跑：enqueue 带 opts（failed / tone / season），只重跑命中的条目
+  - 阶段取消：cancel_stage()，逐张检查取消标志，已出的素材保留
+  - 多候选：gen_variants() 一次出 N 张候选，选优提交（提交时旧图进版本历史）
+  - 多参考图：_run_job 接受 refs 列表（基准图 + 角色当前图），换装/多姿态一致性
 """
 
 from __future__ import annotations
@@ -28,37 +31,42 @@ from shared.config import settings
 from shared.models_util import new_id
 from engine.sdk import engine
 
-from . import store, tonecheck
+from . import quality, store, tonecheck, transmat
 from .planner import plan_from_idea
-from .presets import (get_preset, SEASONS, WEAPON_TIERS, ASSET_KINDS,
-                      build_stage_items)
+from .presets import (ASPECTS, get_preset, asset_size, transparent_mode,
+                      SEASONS, WEAPON_TIERS, ASSET_KINDS, build_stage_items)
 from .styles import get_style
 
-_MASTER_W, _MASTER_H = 1152, 640
-_ASSET_W, _ASSET_H = 768, 768
+_MASTER_SIZE = (1152, 640)
 _PLANNING_TIMEOUT = 300        # LLM 策划硬上限（秒），超时取消并降级规则
 _SEASON_THRESHOLD_FACTOR = 1.6
-_ASSET_KINDS = ("scene", "character", "pet", "weapon", "building", "monster")  # noqa: 保持旧名引用
+_MAX_ATTEMPTS = 3              # 质量守门重试上限（含首次）
+_MAX_CANDIDATES = 4            # 单张多候选上限
+_MAX_HISTORY = 5               # 单张版本历史上限
+_ASSET_KINDS = ASSET_KINDS     # noqa: 兼容旧名引用
 _PLAN_KEYS = {"scene": "scenes", "character": "characters", "pet": "pets",
               "weapon": "weapons", "building": "buildings", "monster": "monsters"}
 _COMMON_NEG = ("text, watermark, signature, ui, frame, border, "
                "low quality, blurry, deformed")
+_ISOLATED_BG = ("isolated on plain pure white background, no environment, "
+                "no ground shadow, product-shot style")
 
 
 # ============================================================
 #  队列：单 worker 串行消费，异常全部落库
 # ============================================================
 
-_queue: deque[tuple[str, str]] = deque()
+_queue: deque[tuple[str, str, dict]] = deque()
 _worker_task: asyncio.Task | None = None
-_current: dict[str, str] = {}      # sid -> 正在跑的 kind
+_current: dict[str, str] = {}          # sid -> 正在跑的 kind
+_cancel_flags: set[str] = set()        # 被请求取消的 sid（当前运行中的）
 
 
 def is_busy(sid: str) -> bool:
     """该集是否有阶段在排队/执行（前端 alive 标志 + 删除守门用）。"""
     if _current.get(sid):
         return True
-    if any(sid == s and k != "all" for s, k in _queue):
+    if any(sid == s and k != "all" for s, k, _ in _queue):
         return True
     s = store.get_set(sid)
     if not s:
@@ -72,8 +80,11 @@ def stage_status(sid: str, kind: str) -> str:
     return s["pipeline"]["stages"][kind]["status"] if s else "idle"
 
 
-def enqueue(sid: str, kind: str) -> None:
-    """把一个阶段（或 all）加入队列。依赖不满足时抛 ValueError。"""
+def enqueue(sid: str, kind: str, opts: dict | None = None) -> None:
+    """把一个阶段（或 all）加入队列。依赖不满足时抛 ValueError。
+
+    opts（仅素材类阶段）：{"filter": "failed"|"tone"|"season", "season": id}
+    """
     s = store.get_set(sid)
     if not s:
         raise ValueError("项目不存在")
@@ -88,15 +99,57 @@ def enqueue(sid: str, kind: str) -> None:
             raise ValueError("还没有策划方案，请先点「自动策划」或「全部生成」")
         if not s.get("master"):
             raise ValueError("基准图还没生成，请先点「基准图」")
+        opts = opts or {}
+        if opts.get("filter") == "season" and opts.get("season") not in SEASONS:
+            raise ValueError(f"未知季节：{opts.get('season')}")
 
     if kind in store.STAGE_IDS:
         def _mark(t: dict) -> None:
             t["pipeline"]["stages"][kind]["status"] = "queued"
             t["pipeline"]["stages"][kind]["error"] = ""
         store.mutate(sid, _mark)
-    store.append_log(sid, "info", f"「{store.STAGE_LABELS.get(kind, '全部生成')}」加入队列")
-    _queue.append((sid, kind))
+    label = store.STAGE_LABELS.get(kind, "全部生成")
+    suffix = ""
+    if opts and opts.get("filter"):
+        suffix = {"failed": "（仅失败条目）", "tone": "（仅跑色条目）",
+                  "season": f"（仅 {SEASONS[opts['season']]['name']}季）"}.get(
+                      opts["filter"], "")
+        if kind in ASSET_KINDS:
+            store.append_log(sid, "info", f"「{label}」筛选重跑{suffix}")
+    _queue.append((sid, kind, opts or {}))
     _ensure_worker()
+
+
+def cancel_stage(sid: str) -> dict:
+    """请求取消：运行中的阶段在下一张图前停下；还在排队的直接摘除。"""
+    result: dict = {"canceled_queue": [], "marked_running": False}
+    if sid in _current:
+        _cancel_flags.add(sid)
+        result["marked_running"] = True
+        store.append_log(sid, "warn", "已请求取消：当前图完成后停止（已出素材保留）")
+    kept: deque = deque()
+    while _queue:
+        item = _queue.popleft()
+        if item[0] == sid and item[1] != "all":
+            result["canceled_queue"].append(item[1])
+
+            def _unmark(t: dict, k=item[1]) -> None:
+                st = t["pipeline"]["stages"][k]
+                if st["status"] == "queued":
+                    st["status"] = "idle"
+            store.mutate(sid, _unmark)
+        else:
+            kept.append(item)
+    _queue.extend(kept)
+    if result["canceled_queue"]:
+        store.append_log(sid, "info",
+                         "已从队列移除：" + "、".join(
+                             store.STAGE_LABELS[k] for k in result["canceled_queue"]))
+    return result
+
+
+def _canceled(sid: str) -> bool:
+    return sid in _cancel_flags
 
 
 def _ensure_worker() -> None:
@@ -108,18 +161,21 @@ def _ensure_worker() -> None:
 async def _worker() -> None:
     try:
         while _queue:
-            sid, kind = _queue.popleft()
+            sid, kind, opts = _queue.popleft()
             _current[sid] = kind
             try:
                 if kind == "all":
                     await _run_all(sid)
                 else:
-                    await _run_stage(sid, kind)
+                    await _run_stage(sid, kind, opts)
             except asyncio.CancelledError:
                 # 服务关闭/重启：把状态落库，别让页面永远"进行中"
                 _mark_stage(sid, kind, status="failed", error="服务停止，任务中断（可重试）")
                 store.append_log(sid, "error", "服务停止，任务中断")
                 raise
+            except _StageCanceled:
+                _mark_stage(sid, kind, status="canceled", error="用户取消（已出素材保留）")
+                store.append_log(sid, "warn", f"「{store.STAGE_LABELS.get(kind, '')}」已取消")
             except Exception as exc:
                 print(f"[gameassets] 阶段 {kind} 异常：{exc}")
                 traceback.print_exc()
@@ -128,9 +184,14 @@ async def _worker() -> None:
                                  f"「{store.STAGE_LABELS.get(kind, '全部生成')}」异常：{exc}")
             finally:
                 _current.pop(sid, None)
+                _cancel_flags.discard(sid)
     finally:
         global _worker_task
         _worker_task = None
+
+
+class _StageCanceled(RuntimeError):
+    """用户取消（区别于失败：已出素材保留，不算错误）。"""
 
 
 async def _run_all(sid: str) -> None:
@@ -142,7 +203,7 @@ async def _run_all(sid: str) -> None:
             skipped.append(store.STAGE_LABELS[kind])
             continue
         try:
-            await _run_stage(sid, kind)
+            await _run_stage(sid, kind, {})
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -163,38 +224,42 @@ def _mark_stage(sid: str, kind: str, *, status: str, error: str = "") -> None:
     store.mutate(sid, _apply)
 
 
-def _reset_items(sid: str, kind: str) -> list[dict]:
-    """把阶段条目重置为 pending，返回条目列表供执行循环用。"""
+def _reset_items(sid: str, kind: str, only_ids: set[str] | None = None) -> list[dict]:
+    """把条目重置为 pending。only_ids 给定时只重置命中的（筛选重跑），返回执行清单。"""
     items: list[dict] = []
 
     def _apply(t: dict) -> None:
         st = t["pipeline"]["stages"][kind]
         for it in st["items"]:
+            if only_ids is not None and it.get("id") not in only_ids:
+                continue
             it["status"] = "pending"
             it["error"] = ""
             it["score"] = None
-        st["done"] = 0
+        st["done"] = sum(1 for it in st["items"] if it["status"] in ("done", "failed"))
         st["status"] = "running"
         st["error"] = ""
-        items.extend(st["items"])
+        items.extend(it for it in st["items"]
+                     if only_ids is None or it.get("id") in only_ids)
     store.mutate(sid, _apply)
     return items
 
 
 def _save_plan_and_items(sid: str, plan: dict) -> None:
     """策划完成：落方案 + 预展开六类条目（前端立刻能看到每类要出几张）。"""
-    blueprint = build_stage_items(plan)
-
     def _apply(t: dict) -> None:
+        old = {k: t["pipeline"]["stages"][k]["items"] for k in ASSET_KINDS}
         t["plan"] = plan
         if plan.get("planner") == "llm":
             t["name"] = plan["title"]
+        blueprint = build_stage_items(plan, old)
         for kind in ASSET_KINDS:
             st = t["pipeline"]["stages"][kind]
             st["items"] = blueprint[kind]
             st["total"] = len(blueprint[kind])
         master_st = t["pipeline"]["stages"]["master"]
-        master_st["items"] = [{"name": plan["scenes"][0]["name"],
+        master_st["items"] = [{"id": "master", "key": "master",
+                               "name": plan["scenes"][0]["name"],
                                "desc": plan["scenes"][0]["desc"], "status": "pending"}]
         master_st["total"] = 1
     store.mutate(sid, _apply)
@@ -215,12 +280,26 @@ def _item_update(sid: str, kind: str, idx: int, *, status: str,
 
 
 def _upsert_asset(sid: str, asset: dict) -> None:
-    """同类同名额（含季节）原位替换，重试不产生重复卡。"""
+    """同条目（item_id 优先，兼容旧 kind+name+season）原位替换；
+    被替换的旧图进版本历史（最多 _MAX_HISTORY 版）。"""
     def _apply(t: dict) -> None:
-        t["assets"] = [a for a in t["assets"]
-                       if not (a["kind"] == asset["kind"] and a["name"] == asset["name"]
-                               and a.get("season") == asset.get("season"))]
-        t["assets"].append(asset)
+        kept, old = [], None
+        for a in t["assets"]:
+            same = ((asset.get("item_id") and a.get("item_id") == asset["item_id"])
+                    or (a["kind"] == asset["kind"] and a["name"] == asset["name"]
+                        and a.get("season") == asset.get("season")))
+            if same and old is None:
+                old = a
+            else:
+                kept.append(a)
+        if old:
+            history = old.get("history") or []
+            history.insert(0, {k: old.get(k) for k in
+                               ("path", "url", "seed", "tone", "created_at",
+                                "prompt", "transparent")})
+            del history[_MAX_HISTORY:]
+            asset["history"] = history
+        t["assets"] = kept + [asset]
     store.mutate(sid, _apply)
 
 
@@ -228,21 +307,22 @@ def _upsert_asset(sid: str, asset: dict) -> None:
 #  各阶段执行体
 # ============================================================
 
-async def _run_stage(sid: str, kind: str) -> None:
+async def _run_stage(sid: str, kind: str, opts: dict | None = None) -> None:
     s = store.get_set(sid)
     if not s:
         return
-    store.append_log(sid, "info", f"开始「{store.STAGE_LABELS[kind]}」")
+    label = store.STAGE_LABELS[kind]
+    store.append_log(sid, "info", f"开始「{label}」")
 
     if kind == "plan":
         await _stage_plan(sid, s)
     elif kind == "master":
         await _stage_master(sid)
     else:
-        await _stage_assets(sid, kind)
+        await _stage_assets(sid, kind, opts or {})
 
     _mark_stage(sid, kind, status="done")
-    store.append_log(sid, "info", f"「{store.STAGE_LABELS[kind]}」完成")
+    store.append_log(sid, "info", f"「{label}」完成")
 
 
 async def _stage_plan(sid: str, s: dict) -> None:
@@ -266,92 +346,204 @@ async def _stage_master(sid: str) -> None:
     items = _reset_items(sid, "master")
     prompt, negative = master_prompt(s)
     _item_update(sid, "master", 0, status="running")
-    try:
-        rec = await _run_job(prompt=prompt, negative=negative,
-                             width=_MASTER_W, height=_MASTER_H, seed=-1, ref_path=None)
-        palette = [c["hex"] for c in tonecheck.extract_palette(rec["path"])]
+    w, h = _MASTER_SIZE
+    last_err = ""
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        if _canceled(s["id"]):
+            raise _StageCanceled()
+        try:
+            rec = await _run_job(prompt=prompt, negative=negative,
+                                 width=w, height=h, seed=-1, refs=None)
+        except Exception as exc:
+            last_err = str(exc)
+            store.append_log(s["id"], "warn", f"基准图第 {attempt} 次生成失败：{exc}")
+            continue
+        q = quality.inspect(rec["path"], None)
+        if q["pass"] or attempt == _MAX_ATTEMPTS:
+            if not q["pass"]:
+                store.append_log(s["id"], "warn",
+                                 f"基准图 {attempt} 次尝试仍未达标：{'；'.join(q['reasons'])}（取最后一次）")
+            palette = [c["hex"] for c in tonecheck.extract_palette(rec["path"])]
 
-        def _save(t: dict, rec=rec, palette=palette) -> None:
-            t["master"] = {"path": rec["path"], "url": rec["url"],
-                           "seed": rec.get("seed"), "desc": items[0]["desc"],
-                           "palette": palette, "prompt": prompt}
-        store.mutate(sid, _save)
-        _item_update(sid, "master", 0, status="done")
-    except Exception as exc:
-        _item_update(sid, "master", 0, status="failed", error=str(exc))
-        raise
+            def _save(t: dict, rec=rec, palette=palette, q=q, prompt=prompt,
+                      items=items) -> None:
+                t["master"] = {"path": rec["path"], "url": rec["url"],
+                               "seed": rec.get("seed"), "desc": items[0]["desc"],
+                               "size": [w, h], "palette": palette,
+                               "quality": q["metrics"], "prompt": prompt}
+            store.mutate(s["id"], _save)
+            _item_update(sid, "master", 0, status="done")
+            return
+        store.append_log(s["id"], "warn",
+                         f"基准图质量未达标（{'；'.join(q['reasons'])}），换 seed 重试 {attempt}/{_MAX_ATTEMPTS - 1}")
+    _item_update(sid, "master", 0, status="failed", error=last_err or "重试仍失败")
+    raise RuntimeError(f"基准图 {_MAX_ATTEMPTS} 次尝试均失败：{last_err}")
 
 
-async def _stage_assets(sid: str, kind: str) -> None:
+def _pick_items(s: dict, kind: str, opts: dict) -> list[int]:
+    """筛选重跑：返回要执行的条目下标。默认全部。"""
+    st = s["pipeline"]["stages"][kind]
+    f = opts.get("filter")
+    if not f:
+        return list(range(len(st["items"])))
+    out = []
+    for i, it in enumerate(st["items"]):
+        if f == "failed" and it.get("status") == "failed":
+            out.append(i)
+        elif f == "tone" and it.get("status") == "done":
+            asset = next((a for a in s["assets"] if a.get("item_id") == it.get("id")),
+                         None)
+            if asset and not (asset.get("tone") or {}).get("pass", True):
+                out.append(i)
+        elif f == "season" and it.get("season") == opts.get("season"):
+            out.append(i)
+    return out
+
+
+async def _stage_assets(sid: str, kind: str, opts: dict) -> None:
     s = store.get_set(sid)
     if not s.get("master"):
         raise RuntimeError("基准图未就绪，请先生成基准图")
     master_path = s["master"]["path"]
     base_threshold = float(s.get("threshold") or tonecheck.DEFAULT_THRESHOLD)
+    tmode = transparent_mode(s, kind)
+    w, h = asset_size(s, kind)
 
     # 条目兜底：有方案但条目表空（历史遗留）→ 现场展开
     if not s["pipeline"]["stages"][kind]["items"]:
         def _fill(t: dict) -> None:
-            items = build_stage_items(s["plan"])[kind]
-            t["pipeline"]["stages"][kind]["items"] = items
-            t["pipeline"]["stages"][kind]["total"] = len(items)
+            items = build_stage_items(
+                t["plan"], {k: t["pipeline"]["stages"][k]["items"]
+                            for k in ASSET_KINDS})
+            t["pipeline"]["stages"][kind]["items"] = items[kind]
+            t["pipeline"]["stages"][kind]["total"] = len(items[kind])
         store.mutate(sid, _fill)
         s = store.get_set(sid)
 
-    items = _reset_items(sid, kind)
+    picked = _pick_items(s, kind, opts)
+    if not picked:
+        store.append_log(sid, "info", f"「{store.STAGE_LABELS[kind]}」筛选条件下无待跑条目")
+        return
+    target_ids = {s["pipeline"]["stages"][kind]["items"][i].get("id") for i in picked}
+    _reset_items(sid, kind, only_ids=target_ids)
+    s = store.get_set(sid)
+    full = s["pipeline"]["stages"][kind]["items"]
+    targets = [(i, it) for i, it in enumerate(full) if it.get("id") in target_ids]
 
     n_fail = 0
-    for i, item in enumerate(items):
-        _item_update(sid, kind, i, status="running")
+    for real_i, item in targets:
+        if _canceled(sid):
+            raise _StageCanceled()
+        _item_update(sid, kind, real_i, status="running")
+        name_tag = (f"{item['name']}·{SEASONS[item['season']]['name']}"
+                    if item.get("season") else item["name"])
         try:
             payload_item = {"kind": kind, "name": item["name"],
                             "desc": _clean(item["desc"]),
                             "season": item.get("season"), "tier_id": item.get("tier_id")}
-            prompt = asset_prompt(s, payload_item)
+            prompt = asset_prompt(s, payload_item, transparent=tmode != "none",
+                                  tileable=bool(item.get("tileable")))
             threshold = base_threshold * (_SEASON_THRESHOLD_FACTOR
                                           if item.get("season") else 1.0)
-            rec = await _run_job(prompt=prompt, negative=_COMMON_NEG,
-                                 width=_ASSET_W, height=_ASSET_H,
-                                 seed=-1, ref_path=master_path)
-            tone = tonecheck.check(rec["path"], master_path, threshold=threshold)
-            asset = {
-                "id": new_id("ast"),
-                "kind": kind, "kind_label": store.STAGE_LABELS[kind],
-                "name": item["name"], "desc": item["desc"],
-                "season": item.get("season"),
-                "season_name": SEASONS[item["season"]]["name"] if item.get("season") else None,
-                "tier": item.get("tier"), "tier_id": item.get("tier_id"),
-                "path": rec["path"], "url": rec["url"], "seed": rec.get("seed"),
-                "prompt": prompt, "tone": tone, "created_at": store.now_iso(),
-            }
+            asset = await _gen_with_gate(
+                sid=sid, kind=kind, item=item, prompt=prompt, threshold=threshold,
+                size=(w, h), tmode=tmode, master_path=master_path)
             _upsert_asset(sid, asset)
-            _item_update(sid, kind, i, status="done", score=tone["score"])
-            verdict = "✓" if tone["pass"] else "✗跑色"
+            _item_update(sid, kind, real_i, status="done",
+                         score=asset["tone"]["score"])
+            verdict = "✓" if asset["quality"]["pass"] else "✗" + "；".join(
+                r.split("（")[0] for r in asset["quality"]["reasons"])
             store.append_log(sid, "info",
-                             f"{store.STAGE_LABELS[kind]}「{item['name']}"
-                             f"{'·' + SEASONS[item['season']]['name'] if item.get('season') else ''}」"
-                             f"完成 色调{tone['score']:.0f} {verdict}")
+                             f"{store.STAGE_LABELS[kind]}「{name_tag}」完成 "
+                             f"色调{asset['tone']['score']:.0f} {verdict}")
         except Exception as exc:
             n_fail += 1
-            _item_update(sid, kind, i, status="failed", error=str(exc))
+            _item_update(sid, kind, real_i, status="failed", error=str(exc))
             store.append_log(sid, "error",
-                             f"{store.STAGE_LABELS[kind]}「{item['name']}」失败：{exc}")
+                             f"{store.STAGE_LABELS[kind]}「{name_tag}」失败：{exc}")
     if n_fail:
-        raise RuntimeError(f"{n_fail}/{len(items)} 张失败（可单独重试本类）")
+        raise RuntimeError(f"{n_fail}/{len(targets)} 张失败（可筛选重跑仅失败条目）")
+
+
+async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
+                         threshold: float, size: tuple[int, int], tmode: str,
+                         master_path: str, seed: int = -1) -> dict:
+    """生成 + 质量守门 + 自动重试 + 透明底后处理，产出素材记录。
+
+    守门规则：黑图/无结构/低熵/跑色任一不达标 → 换 seed 重试；
+    结构性缺陷（黑图等）重试后仍差 → 失败；仅跑色 → 入库但标记（用户可用筛选重跑）。
+    """
+    w, h = size
+    last_q, last_rec = None, None
+    structural_fail = True
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        if _canceled(sid):
+            raise _StageCanceled()
+        rec = await _run_job(prompt=prompt, negative=_COMMON_NEG,
+                             width=w, height=h, seed=seed, refs=[master_path])
+        last_rec, seed = rec, -1          # 首次用调用方 seed，后续换新 seed
+        last_q = quality.inspect(rec["path"], master_path, threshold=threshold)
+        structural = [r for r in last_q["reasons"] if not r.startswith("跑色")]
+        if not structural:
+            structural_fail = False
+            if last_q["pass"]:
+                break
+            # 仅跑色：不再烧显存重试跑色（重跑大概率还是跑色，交给筛选重跑换措辞）
+            break
+        if attempt < _MAX_ATTEMPTS:
+            store.append_log(sid, "warn",
+                             f"「{item['name']}」质量未达标（{'；'.join(structural)}），"
+                             f"换 seed 重试 {attempt}/{_MAX_ATTEMPTS - 1}")
+    if last_rec is None:
+        raise RuntimeError("生成失败（无有效返回）")
+
+    path, transparent = last_rec["path"], None
+    if tmode != "none":
+        try:
+            out = Path(path).with_name(Path(path).stem + "_alpha.png")
+            rep = transmat.make_transparent(path, out, method=tmode)
+            path, transparent = str(out), rep
+        except Exception as exc:
+            store.append_log(sid, "warn",
+                             f"「{item['name']}」透明底处理失败（{exc}），保留原图")
+    p = Path(path).resolve()
+    try:
+        rel = p.relative_to(settings.data_dir_path.resolve())
+        url = f"/data/{rel.as_posix()}"
+    except ValueError:
+        url = f"/data/{p.name}"
+    return {
+        "id": new_id("ast"),
+        "item_id": item.get("id"),
+        "kind": kind, "kind_label": store.STAGE_LABELS[kind],
+        "name": item["name"], "desc": item["desc"],
+        "season": item.get("season"),
+        "season_name": SEASONS[item["season"]]["name"] if item.get("season") else None,
+        "tier": item.get("tier"), "tier_id": item.get("tier_id"),
+        "path": path, "url": url, "seed": last_rec.get("seed"),
+        "size": [w, h], "transparent": transparent,
+        "tileable": bool(item.get("tileable")),
+        "prompt": prompt,
+        "quality": {"pass": last_q["pass"], "reasons": last_q["reasons"],
+                    "metrics": last_q["metrics"], "attempts": attempt},
+        "tone": last_q["tone"],
+        "structural_fail": structural_fail,
+        "created_at": store.now_iso(),
+    }
 
 
 # ============================================================
-#  提示词组装（与 3.0 相同：风格基因 + 时间背景不缺勤）
+#  提示词组装（风格基因 + 时间背景 + 透明底/可平铺修饰）
 # ============================================================
 
 import re as _re
 
 _PAREN_RE = _re.compile(r"[（(][^）)]*[）)]")
 
+
 def _clean(text: str) -> str:
-    """剥掉方案文案里的中文括号注记（如「（XX风格）」）。
-    Qwen-Image 2.1 是文字渲染强模型，括号内的中文会被当成「要画到图上的
-    文字」整排渲染出来（实测 2026-10-25），提示词里必须去掉。"""
+    """剥掉方案文案里的中文括号注记（如「（XX风格）」）——
+    2.1 是文字渲染强模型，括号里的中文会被当成「要画到图上的字」整排画出来。"""
     return _PAREN_RE.sub("", str(text or "")).strip().strip("，,、 ")
 
 
@@ -367,35 +559,43 @@ def master_prompt(s: dict) -> tuple[str, str]:
     style, preset = get_style(s["style"]), get_preset(s["time_preset"])
     scene = (s["plan"]["scenes"] or [{"name": "主场景", "desc": s["idea"]}])[0]
     prompt = (f"game concept art, environment establishing shot, "
-              f"{scene['name']} - {_clean(scene['desc'])}, {_style_block(s)}, "
+              f"{_clean(scene['name'])} - {_clean(scene['desc'])}, {_style_block(s)}, "
               "rich details, no characters, no text")
     return prompt, f"{_COMMON_NEG}, {style['negative']}, {preset['negative']}"
 
 
-def asset_prompt(s: dict, item: dict) -> str:
+_TILEABLE_HINT = ("seamless tileable texture, flat top-down perspective, even lighting, "
+                  "no vignette, edges must align for infinite tiling")
+
+
+def asset_prompt(s: dict, item: dict, *, transparent: bool = False,
+                 tileable: bool = False) -> str:
     """六类素材 + 四季变体统一组装。item: {kind,name,desc,season?,tier_id?}。"""
     kind = item["kind"]
     anchor = ("Using the reference image strictly as style, color palette and lighting "
               f"anchor (time of day: {get_preset(s['time_preset'])['name']}), ")
+    bg = _ISOLATED_BG if transparent else "plain light neutral background"
     body = {
-        "scene":    (f"game environment concept art: {item['name']} - {item['desc']}, "
+        "scene":    (f"game environment concept art: {_clean(item['name'])} - "
+                     f"{_clean(item['desc'])}, "
                      + (f"{SEASONS[item['season']]['prompt']} season, "
                         if item.get("season") else "")
-                     + "full detailed environment"),
+                     + ("full detailed environment, " + _TILEABLE_HINT
+                        if tileable else "full detailed environment")),
         "character": (f"full body character design, single character, front view, "
-                      f"standing pose, whole body visible: {item['name']} - {item['desc']}, "
-                      "plain light neutral background, centered"),
+                      f"standing pose, whole body visible: {_clean(item['name'])} - "
+                      f"{_clean(item['desc'])}, {bg}, centered"),
         "pet":      (f"cute game pet companion creature design, full body, side-front view: "
-                     f"{item['name']} - {item['desc']}, plain light neutral background, centered"),
+                     f"{_clean(item['name'])} - {_clean(item['desc'])}, {bg}, centered"),
         "weapon":   (f"game weapon design, single weapon, centered, three-quarter view: "
-                     f"{item['name']} - {item['desc']}, "
+                     f"{_clean(item['name'])} - {_clean(item['desc'])}, "
                      + (f"{WEAPON_TIERS[item['tier_id']]['prompt']} quality tier, "
                         if item.get("tier_id") else "")
-                     + "plain light neutral background"),
+                     + bg),
         "building": (f"game architecture concept art, exterior view: "
-                     f"{item['name']} - {item['desc']}, full structure visible"),
+                     f"{_clean(item['name'])} - {_clean(item['desc'])}, full structure visible"),
         "monster":  (f"game monster creature design, full body, menacing silhouette: "
-                     f"{item['name']} - {item['desc']}, plain light neutral background, centered"),
+                     f"{_clean(item['name'])} - {_clean(item['desc'])}, {bg}, centered"),
     }[kind]
     return f"{anchor}{body}. Keep style, palette and atmosphere identical to the reference"
 
@@ -435,11 +635,11 @@ def _rule_direct(idea: str, scale_id: str) -> dict:
 
 
 # ============================================================
-#  引擎调用（与 imagegen 同款：先入库再同步生成）
+#  引擎调用（refs 支持多参考图；先入库再同步生成）
 # ============================================================
 
 async def _run_job(*, prompt: str, negative: str, width: int, height: int,
-                   seed: int, ref_path: str | None) -> dict:
+                   seed: int, refs: list[str] | None = None) -> dict:
     payload = {
         "job_id": new_id("job"),
         "prompt": prompt,
@@ -455,22 +655,24 @@ async def _run_job(*, prompt: str, negative: str, width: int, height: int,
         "mode": "txt2img",
         "gameassets": {"kind": "pipeline"},
     }
-    if ref_path:
-        p = Path(ref_path)
+    use_refs = []
+    for rp in (refs or []):
+        p = Path(rp)
         if not p.is_absolute():
             p = Path(".") / p
-        data_url = f"data:image/png;base64,{base64.b64encode(p.read_bytes()).decode()}"
+        use_refs.append(f"data:image/png;base64,{base64.b64encode(p.read_bytes()).decode()}")
+    if use_refs:
         payload.update({
             "mode": "img2img",
             "fusion": True,
-            "ref_images": [data_url],
+            "ref_images": use_refs,
             "negative_prompt": "",
             "guidance_scale": 1.0,
             "strength": 1.0,
         })
     repo.create_job(job_id=payload["job_id"], prompt=prompt, negative=negative,
                     params=payload, seed=seed, count=1,
-                    mode="img2img" if ref_path else "txt2img")
+                    mode="img2img" if use_refs else "txt2img")
     if settings.engine_mode == "local":
         engine.vram_guard(1.0)
     job = await asyncio.wait_for(
@@ -490,6 +692,104 @@ async def _run_job(*, prompt: str, negative: str, width: int, height: int,
     except ValueError:
         rec["url"] = f"/data/{p.name}"
     return rec
+
+
+# ============================================================
+#  多候选（单张精修）：生成 N 张候选（不提交），选优后 commit
+# ============================================================
+
+async def gen_variants(*, sid: str, aid: str, prompt: str | None = None,
+                       seed: int = -1, n: int = 1,
+                       use_self_ref: bool = True) -> list[dict]:
+    """为已有素材生成候选图（不替换正式版）。角色/宠物等默认带自身参考图，
+    保持同一角色多姿态一致。候选经质量检测，但由用户挑。"""
+    s = store.get_set(sid)
+    if not s:
+        raise ValueError("项目不存在")
+    if not s.get("master"):
+        raise ValueError("基准图缺失")
+    asset = next((a for a in s["assets"] if a["id"] == aid), None)
+    if not asset:
+        raise ValueError("素材不存在")
+    n = max(1, min(_MAX_CANDIDATES, int(n)))
+    kind = asset["kind"]
+    tmode = transparent_mode(s, kind)
+    w, h = tuple(asset.get("size") or asset_size(s, kind))
+    threshold = float(s.get("threshold") or tonecheck.DEFAULT_THRESHOLD) * (
+        _SEASON_THRESHOLD_FACTOR if asset.get("season") else 1.0)
+    final_prompt = prompt or asset["prompt"]
+    refs = [s["master"]["path"]]
+    if use_self_ref and asset.get("path"):
+        refs.append(asset["path"])
+    variants = []
+    for i in range(n):
+        if _canceled(sid):
+            break
+        rec = await _run_job(prompt=final_prompt, negative=_COMMON_NEG,
+                             width=w, height=h, seed=seed, refs=refs)
+        q = quality.inspect(rec["path"], s["master"]["path"], threshold=threshold)
+        v = {"id": new_id("var"), "path": rec["path"], "url": rec["url"],
+             "seed": rec.get("seed"), "quality": q, "prompt": final_prompt,
+             "created_at": store.now_iso()}
+        variants.append(v)
+        store.append_log(sid, "info",
+                         f"候选 {i + 1}/{n}（{asset['name']}）完成 "
+                         f"色调{q['tone']['score']:.0f} "
+                         f"{'✓' if q['pass'] else '✗' + '；'.join(r.split('（')[0] for r in q['reasons'])}")
+        seed = -1
+    return variants
+
+
+def commit_variant(*, sid: str, aid: str, variant: dict,
+                   transparent: bool | None = None) -> dict:
+    """把候选图提交为正式版：旧正式版进版本历史；候选图转透明底（按类）。"""
+    s = store.get_set(sid)
+    if not s:
+        raise ValueError("项目不存在")
+    idx = next((i for i, a in enumerate(s["assets"]) if a["id"] == aid), None)
+    if idx is None:
+        raise ValueError("素材不存在")
+    old = s["assets"][idx]
+    kind = old["kind"]
+    tmode = transparent_mode(s, kind) if transparent is None else (
+        "none" if not transparent else "chroma")
+    path, transparent = variant["path"], None
+    if tmode != "none":
+        try:
+            out = Path(path).with_name(Path(path).stem + "_alpha.png")
+            rep = transmat.make_transparent(path, out, method=tmode)
+            path, transparent = str(out), rep
+        except Exception as exc:
+            store.append_log(sid, "warn",
+                             f"「{old['name']}」透明底处理失败（{exc}），保留原图")
+    p = Path(path).resolve()
+    try:
+        rel = p.relative_to(settings.data_dir_path.resolve())
+        url = f"/data/{rel.as_posix()}"
+    except ValueError:
+        url = f"/data/{p.name}"
+    history = old.get("history") or []
+    history.insert(0, {k: old.get(k) for k in
+                       ("path", "url", "seed", "tone", "created_at",
+                        "prompt", "transparent")})
+    del history[_MAX_HISTORY:]
+    new_asset = {**old,
+                 "path": path, "url": url, "seed": variant.get("seed"),
+                 "prompt": variant.get("prompt", old.get("prompt")),
+                 "transparent": transparent,
+                 "quality": {"pass": variant["quality"]["pass"],
+                             "reasons": variant["quality"]["reasons"],
+                             "metrics": variant["quality"]["metrics"],
+                             "attempts": 1},
+                 "tone": variant["quality"]["tone"],
+                 "history": history, "rerun_of": aid,
+                 "created_at": store.now_iso()}
+
+    def _apply(t: dict) -> None:
+        t["assets"][idx] = new_asset
+    store.mutate(sid, _apply)
+    store.append_log(sid, "info", f"「{old['name']}」已更新（候选提交，旧版进历史）")
+    return new_asset
 
 
 def overall_status(s: dict) -> str:

@@ -88,7 +88,8 @@ def _normalize(data: dict) -> dict:
                 st.setdefault("status", "idle")
             # 条目表为空但有方案 → 补展开（历史遗留数据）
             if s.get("plan"):
-                items = build_stage_items(s["plan"])
+                items = build_stage_items(
+                    s["plan"], {k: p["stages"][k]["items"] for k in ASSET_KINDS})
                 for kind in ASSET_KINDS:
                     st = p["stages"][kind]
                     if not st["items"]:
@@ -98,6 +99,36 @@ def _normalize(data: dict) -> dict:
             # "服务被杀留下假 running" 的清理只在启动时做一次，见 recover_interrupted()。
         p.setdefault("log", [])
     return data
+
+
+def ensure_item_ids() -> None:
+    """仅服务启动时调用：给缺 id 的条目补稳定 id 并落盘。
+
+    条目 id 是方案编辑对账的锚——不能每次读盘重生成（内存态不落盘，
+    并发读会各得一套 id），所以这里用 mutate 真正写下去。
+    """
+    from .presets import ASSET_KINDS, build_stage_items
+    for s in list_sets():
+        need = any(not it.get("id")
+                   for kind in ASSET_KINDS
+                   for it in s["pipeline"]["stages"][kind]["items"])
+        if s.get("plan") and need:
+            def _apply(t: dict, _s=s) -> None:
+                items = build_stage_items(
+                    _s["plan"], {k: t["pipeline"]["stages"][k]["items"]
+                                 for k in ASSET_KINDS})
+                for kind in ASSET_KINDS:
+                    t["pipeline"]["stages"][kind]["items"] = items[kind]
+                    t["pipeline"]["stages"][kind]["total"] = len(items[kind])
+            mutate(s["id"], _apply)
+            print(f"[gameassets] 条目 id 已补齐：{s['id']}")
+        elif need:  # 没有方案的旧集：只补 id 字段，不动结构
+            def _patch(t: dict) -> None:
+                from shared.models_util import new_id as _nid
+                for kind in ASSET_KINDS:
+                    for it in t["pipeline"]["stages"][kind]["items"]:
+                        it.setdefault("id", _nid("itm"))
+            mutate(s["id"], _patch)
 
 
 def recover_interrupted() -> None:

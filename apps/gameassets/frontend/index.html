@@ -50,16 +50,21 @@
   .stage-bar b { display: block; height: 100%; background: linear-gradient(90deg,#3b6ef5,#43c59e); transition: width .5s; }
   .stage-meta { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted, #888); }
   .stage-meta .err { color: #c0392b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-  .stage-btn { align-self: flex-start; border: 1px solid var(--border, #ccc); background: none; border-radius: 7px;
+  .stage-btnrow { display: flex; gap: 4px; align-self: flex-start; }
+  .stage-btn { border: 1px solid var(--border, #ccc); background: none; border-radius: 7px;
                padding: 2px 10px; font-size: 12px; cursor: pointer; color: var(--primary, #3b6ef5); }
   .stage-btn:hover { background: rgba(59,110,245,.07); }
   .stage-btn:disabled { opacity: .45; cursor: default; }
+  .stage-btn.warn { color: #b25e00; }
+  .stage-filter { border: 1px solid var(--border, #ddd); border-radius: 7px; font-size: 11.5px;
+                  padding: 2px 4px; color: var(--muted, #777); background: none; max-width: 86px; }
   .st-chip { font-size: 10.5px; padding: 1px 7px; border-radius: 10px; }
   .st-idle { background: rgba(0,0,0,.06); color: #888; }
   .st-queued { background: rgba(230,162,60,.15); color: #b26a00; }
   .st-running { background: rgba(59,110,245,.12); color: #3b6ef5; }
   .st-done { background: #e6f6ea; color: #1b7a34; }
   .st-failed { background: #fdeaea; color: #c0392b; }
+  .st-canceled { background: rgba(0,0,0,.06); color: #a26; }
 
   .status-chip { font-size: 11px; padding: 2px 10px; border-radius: 12px; }
   .status-running, .status-planning { background: rgba(59,110,245,.12); color: #3b6ef5; }
@@ -82,8 +87,10 @@
   .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
   .asset-card { border: 1px solid var(--border, #e3e3e3); border-radius: 10px; overflow: hidden;
                 background: var(--bg, #fff); position: relative; }
-  .asset-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #f4f4f4; }
-  .asset-card.master img { aspect-ratio: 16/9; }
+  .asset-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #f4f4f4; cursor: zoom-in; }
+  .asset-card.master img { aspect-ratio: 16/9; cursor: default; }
+  .asset-card img.alpha { background:
+      repeating-conic-gradient(#e9e9ee 0% 25%, #ffffff 0% 50%) 50% / 16px 16px; }
   .asset-body { padding: 8px 10px 10px; }
   .tone-badge { display: inline-flex; font-size: 12px; padding: 2px 8px; border-radius: 20px; }
   .tone-pass { background: #e6f6ea; color: #1b7a34; }
@@ -93,11 +100,39 @@
   .tier-common { background: #909399; } .tier-fine { background: #4a90d9; }
   .tier-epic { background: #8e44ad; } .tier-legendary { background: #e67e22; }
   .season-chip { font-size: 11px; padding: 1px 7px; border-radius: 12px; background: rgba(67,197,158,.15); color: #1b7a5a; }
+  .q-chip { font-size: 10.5px; padding: 1px 7px; border-radius: 12px; }
+  .q-pass { background: #e6f6ea; color: #1b7a34; }
+  .q-fail { background: #fdeaea; color: #c0392b; }
+  .tr-chip { font-size: 10.5px; padding: 1px 7px; border-radius: 12px; background: rgba(142,68,173,.12); color: #8e44ad; }
   .master-palette { display: flex; gap: 4px; }
   .master-palette i { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(0,0,0,.15); }
-  .card-actions { position: absolute; top: 6px; right: 6px; }
+  .card-actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; }
   .card-actions button { border: none; border-radius: 6px; padding: 3px 8px; font-size: 11.5px; cursor: pointer;
                          background: rgba(255,255,255,.92); box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+
+  /* ===== 弹窗（放大 / 候选 / 方案编辑 / 设置） ===== */
+  .modal-mask { display: none; position: fixed; inset: 0; background: rgba(15,20,30,.62);
+                z-index: 50; align-items: center; justify-content: center; }
+  .modal-mask.show { display: flex; }
+  .modal { background: var(--bg, #fff); border-radius: 14px; padding: 18px 20px; max-width: 960px;
+           width: min(94vw, 960px); max-height: 90vh; overflow: auto; }
+  .modal h3 { margin: 0 0 10px; font-size: 16px; }
+  .lb-imgs { display: flex; gap: 12px; align-items: flex-start; }
+  .lb-imgs figure { margin: 0; flex: 1; min-width: 0; }
+  .lb-imgs img { width: 100%; border-radius: 10px; display: block; }
+  .lb-imgs figcaption { text-align: center; font-size: 12px; color: var(--muted, #888); margin-top: 4px; }
+  .lb-info { font-size: 12.5px; color: var(--muted, #777); margin-top: 10px; word-break: break-all; }
+  .lb-nav { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+  .hist-row { display: flex; gap: 8px; overflow-x: auto; margin-top: 10px; }
+  .hist-row img { height: 76px; border-radius: 8px; border: 1px solid var(--border, #ddd); cursor: pointer; }
+  .var-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 12px; }
+  .var-card { border: 1.5px solid var(--border, #ddd); border-radius: 10px; overflow: hidden; cursor: pointer; position: relative; }
+  .var-card:hover { border-color: var(--primary, #3b6ef5); }
+  .var-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+  .edit-row { display: grid; grid-template-columns: 110px 1fr auto; gap: 6px; margin-bottom: 6px; align-items: center; }
+  .edit-row input, .edit-row select { font-size: 13px; padding: 5px 8px; }
+  .season-boxes { display: flex; gap: 6px; font-size: 12px; align-items: center; }
+  .muted2 { color: var(--muted, #888); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -106,7 +141,7 @@
     <span class="logo">🎮</span>
     <div>
       <h1>游戏素材工坊</h1>
-      <p class="sub">一句话 → 自动策划 → 分类生成整套素材（每类独立出图、独立重试）</p>
+      <p class="sub">一句话 → 自动策划 → 分类生成整套素材（守门重试 · 透明底 · 可编辑 · 一键导出）</p>
     </div>
   </div>
   <nav class="mainnav">
@@ -148,7 +183,7 @@
           <button id="btnGen" class="btn btn-primary" style="width:100%">生成素材包</button></div>
       </div>
       <p class="scale-info" id="scaleInfo"></p>
-      <p class="hint">系统自动策划角色/宠物/武器（分等级）/建筑/野怪；场景自动出春夏秋冬四季。每类素材独立生成、独立重试，一类失败不影响其他类。</p>
+      <p class="hint">系统自动策划角色/宠物/武器（分等级）/建筑/野怪；场景自动出春夏秋冬四季。每类独立生成、独立重试；废图自动换 seed 重试；角色/武器等自动抠透明底。</p>
     </section>
 
     <section class="field">
@@ -176,6 +211,8 @@
         <span class="kind-chip" id="dStyle"></span>
         <span class="kind-chip" id="dTime"></span>
         <span class="spacer"></span>
+        <button class="btn btn-ghost" id="btnSettings">参数</button>
+        <button class="btn btn-ghost" id="btnExport">导出 ZIP</button>
         <button class="btn btn-ghost" id="btnRunAll">全部生成</button>
         <button class="btn btn-danger" id="btnDelSet">删除</button>
       </div>
@@ -192,23 +229,98 @@
   </section>
 </main>
 
+<!-- ==================== 放大预览弹窗 ==================== -->
+<div class="modal-mask" id="lbMask" onclick="if(event.target===this)UI.closeLb()">
+  <div class="modal">
+    <h3 id="lbTitle"></h3>
+    <div class="lb-imgs">
+      <figure><img id="lbImg"><figcaption>素材</figcaption></figure>
+      <figure id="lbMasterFig" style="display:none"><img id="lbMaster"><figcaption>基准图（色调锚点）</figcaption></figure>
+    </div>
+    <div class="lb-info" id="lbInfo"></div>
+    <div class="hist-row" id="lbHist"></div>
+    <div class="lb-nav">
+      <button class="btn btn-ghost" id="lbPrev">← 上一张</button>
+      <button class="btn btn-ghost" id="lbNext">下一张 →</button>
+      <label style="font-size:12.5px"><input type="checkbox" id="lbCompare"> 与基准图对比</label>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost" id="lbClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 单张精修弹窗 ==================== -->
+<div class="modal-mask" id="varMask" onclick="if(event.target===this)UI.closeVar()">
+  <div class="modal">
+    <h3 id="varTitle">单张精修</h3>
+    <p class="muted2">改提示词 / 锁 seed → 出候选（不改正式版）→ 点选一张「设为正式版」。角色/宠物默认带自身参考，保持同一角色一致。</p>
+    <textarea id="varPrompt" rows="3" style="width:100%;font-size:13px;padding:8px;border-radius:8px;border:1.5px solid var(--border,#ccc)"></textarea>
+    <div class="opt-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
+      <div class="opt"><label>候选张数</label>
+        <select id="varN"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
+      <div class="opt"><label>Seed（-1 随机）</label>
+        <input id="varSeed" type="number" value="-1"></div>
+      <div class="opt"><label>自身参考</label>
+        <select id="varSelf"><option value="1">开（一致性）</option><option value="0">关</option></select></div>
+      <div class="opt"><label>&nbsp;</label>
+        <button id="varGo" class="btn btn-primary" style="width:100%">生成候选</button></div>
+    </div>
+    <div id="varHint" class="muted2"></div>
+    <div class="var-grid" id="varGrid"></div>
+    <div style="margin-top:12px;text-align:right"><button class="btn btn-ghost" onclick="UI.closeVar()">关闭</button></div>
+  </div>
+</div>
+
+<!-- ==================== 方案编辑弹窗 ==================== -->
+<div class="modal-mask" id="planMask" onclick="if(event.target===this)UI.closePlan()">
+  <div class="modal" style="max-width:760px">
+    <h3 id="planEdTitle">编辑方案</h3>
+    <p class="muted2">改名 / 改描述 / 增删条目；保存后只重跑受影响的条目（没动过的素材保留）。</p>
+    <div id="planEdRows"></div>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button class="btn btn-ghost" id="planAddRow">＋ 加一条</button>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost" onclick="UI.closePlan()">取消</button>
+      <button class="btn btn-primary" id="planSave">保存并重跑受影响条目</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 项目参数弹窗 ==================== -->
+<div class="modal-mask" id="setMask" onclick="if(event.target===this)UI.closeSet()">
+  <div class="modal" style="max-width:520px">
+    <h3>项目参数</h3>
+    <p class="muted2">透明底：chroma=白底色键（快，轮廓硬）；rembg=AI 抠图（毛发自然，首次用要下 ~176MB 模型）。</p>
+    <div id="setTrRows"></div>
+    <div style="margin-top:10px">
+      <label class="muted2">色调阈值（色距，越大越宽容）</label>
+      <input id="setThreshold" type="number" min="10" max="120" style="width:100px">
+    </div>
+    <div style="margin-top:14px;text-align:right">
+      <button class="btn btn-ghost" onclick="UI.closeSet()">取消</button>
+      <button class="btn btn-primary" id="setSave">保存</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
 
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
   const state = { styles: [], times: [], scales: [], sets: [], current: null,
-                  timer: null, failCount: 0, stages: [] };
+                  timer: null, failCount: 0, stages: [], detail: null,
+                  lbList: [], lbIdx: 0, varAid: null, planKind: null, aspects: {} };
 
   const STAGE_TIP = {
-    plan: '一句话 → 完整设定（各类数量与描述）',
+    plan: '一句话 → 完整设定（可编辑后局部重跑）',
     master: '全集色调锚点，其他素材都融合它',
     scene: '每个场景自动出春夏秋冬',
-    character: '全身立绘 · 干净底色可抠图',
-    pet: '宠物伙伴设计',
+    character: '全身立绘 · 自动抠透明底',
+    pet: '宠物伙伴设计 · 自动抠透明底',
     weapon: '按 普通/精良/史诗/传说 分级',
     building: '建筑外观设定',
-    monster: '野怪设计',
+    monster: '野怪设计 · 自动抠透明底',
   };
 
   // ================= 启动 =================
@@ -219,6 +331,8 @@
     ]);
     state.styles = pr.styles; state.times = pr.times; state.scales = pr.scales;
     state.stages = pr.stages || [];
+    state.aspects = pr.aspects || {};
+    state.trDefault = pr.transparent_default || {};
     state.sets = st.items;
     renderCards($('styleCards'), state.styles);
     renderCards($('timeCards'), state.times, 2);       // 默认黄昏
@@ -335,6 +449,7 @@
       const s = await r.json();
       state.failCount = 0;
       hideBanner();
+      state.detail = s;
       renderDetail(s);
     } catch (e) {
       state.failCount++;
@@ -363,7 +478,8 @@
                     pet: '宠物', weapon: '武器', building: '建筑', monster: '野怪' };
   const ST_CHIP = { idle: ['待生成', 'st-idle'], queued: ['排队中', 'st-queued'],
                     running: ['执行中', 'st-running'], done: ['完成', 'st-done'],
-                    failed: ['失败', 'st-failed'] };
+                    failed: ['失败', 'st-failed'], canceled: ['已取消', 'st-canceled'] };
+  const KINDS6 = ['scene', 'character', 'pet', 'weapon', 'building', 'monster'];
 
   function renderDetail(s) {
     $('dName').textContent = s.name;
@@ -396,7 +512,16 @@
         <div class="stage-bar"><b style="width:0%"></b></div>
         <div class="stage-meta"><span class="cnt"></span><span class="err"></span></div>
         <div class="stage-meta" style="font-size:11px">${STAGE_TIP[k] || ''}</div>
-        <button class="stage-btn">生成</button>
+        <div class="stage-btnrow">
+          <button class="stage-btn go">生成</button>
+          <button class="stage-btn warn stop" style="display:none">取消</button>
+          <select class="stage-filter" style="display:none">
+            <option value="">筛选…</option>
+            <option value="failed">只跑失败</option>
+            <option value="tone">只跑跑色</option>
+            ${k === 'scene' ? '<option value="season">按季…</option>' : ''}
+          </select>
+        </div>
       </div>`).join('');
     ST_ORDER.forEach(k => {
       const el = grid.querySelector(`[data-k="${k}"]`);
@@ -410,24 +535,54 @@
         st.total ? (st.done / st.total * 100) + '%' : (st.status === 'done' ? '100%' : '0%');
       el.querySelector('.cnt').textContent = st.total ? `${st.done}/${st.total}` : '';
       el.querySelector('.err').textContent = st.error || '';
-      const btn = el.querySelector('.stage-btn');
+      const go = el.querySelector('.go');
+      const stop = el.querySelector('.stop');
+      const filt = el.querySelector('.stage-filter');
       const active = ['queued', 'running'].includes(st.status);
-      btn.disabled = active;
-      btn.textContent = active ? '进行中…' : (st.status === 'failed' ? '重试'
+      go.disabled = active;
+      go.textContent = active ? '进行中…' : (st.status === 'failed' ? '重试'
                          : (st.status === 'done' ? '重新生成' : '生成'));
-      btn.onclick = () => runStage(k, btn);
+      go.onclick = () => {
+        const f = filt.value;
+        if (f === 'season') {
+          const season = prompt('输入季节拼音：spring / summer / autumn / winter');
+          if (!season) return;
+          runStage(k, go, { filter: 'season', season });
+        } else if (f) {
+          runStage(k, go, { filter: f });
+        } else {
+          runStage(k, go);
+        }
+      };
+      stop.style.display = active ? '' : 'none';
+      stop.onclick = () => cancelStage(k, stop);
+      filt.style.display = (KINDS6.includes(k) && st.total) ? '' : 'none';
     });
   }
 
-  async function runStage(kind, btn) {
+  async function runStage(kind, btn, opts) {
     btn.disabled = true;
     try {
-      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/stages/${kind}/run`, { method: 'POST' });
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/stages/${kind}/run`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(opts || {}),
+      });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
-      toast(kind === 'all' ? '已加入队列：策划 → 基准图 → 各类素材' : `「${ST_NAME[kind]}」已加入队列`);
+      const tag = opts?.filter === 'season' ? `（仅${{spring:'春',summer:'夏',autumn:'秋',winter:'冬'}[opts.season] || ''}季）`
+                : opts?.filter === 'failed' ? '（仅失败）' : opts?.filter === 'tone' ? '（仅跑色）' : '';
+      toast(`「${ST_NAME[kind] || '全部'}」已加入队列${tag}`);
       poll(true);
     } catch (e) { toast(e.message); btn.disabled = false; }
+  }
+
+  async function cancelStage(kind, btn) {
+    btn.disabled = true;
+    try {
+      await fetch(`/api/v1/gameassets/sets/${state.current}/stages/${kind}/cancel`, { method: 'POST' });
+      toast('已请求取消：当前图完成后停止');
+    } catch (e) { toast(e.message); }
+    finally { btn.disabled = false; }
   }
   $('btnRunAll').addEventListener('click', (e) => runStage('all', e.target));
 
@@ -439,18 +594,107 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  // ================= 方案（只读摘要 + 编辑入口） =================
   function renderPlan(s) {
     const box = $('planArea');
     const plan = s.plan;
     if (!plan) { box.innerHTML = ''; return; }
     const counts = [['场景', plan.scenes], ['角色', plan.characters], ['宠物', plan.pets],
                     ['武器', plan.weapons], ['建筑', plan.buildings], ['野怪', plan.monsters]];
-    box.innerHTML = `<p class="section-title">策划方案 <span class="kind-chip">${plan.planner === 'llm' ? 'LLM 策划' : '规则模板'}</span></p>
+    box.innerHTML = `<p class="section-title">策划方案 <span class="kind-chip">${plan.planner === 'llm' ? 'LLM 策划' : '规则模板'}</span>
+      <span class="spacer"></span><button class="btn btn-ghost" onclick="UI.openPlan('scene')">编辑方案</button></p>
       <div class="plan-box"><b>${esc(plan.title)}</b><span class="muted" style="font-size:12px">（${esc(plan.scale_name)}）</span>
       <div class="muted" style="font-size:12.5px;margin-top:2px">${esc(plan.synopsis)}</div>
       <div class="muted" style="font-size:12px;margin-top:4px">${counts.map(([n, l]) => `${n}×${l.length}`).join(' · ')}</div></div>`;
   }
 
+  // ---- 方案编辑弹窗 ----
+  function openPlan(kind) {
+    const s = state.detail;
+    if (!s?.plan) return toast('还没有策划方案');
+    state.planKind = kind;
+    const KEY = { scene: 'scenes', character: 'characters', pet: 'pets',
+                  weapon: 'weapons', building: 'buildings', monster: 'monsters' };
+    const entries = s.plan[KEY[kind]] || [];
+    $('planEdTitle').textContent = `编辑方案 · ${ST_NAME[kind]}`;
+    $('planEdRows').innerHTML = entries.map((e, i) => {
+      const seasonBox = kind === 'scene'
+        ? `<div class="season-boxes">${['spring','summer','autumn','winter'].map(sn =>
+            `<label><input type="checkbox" class="pe-season" value="${sn}"
+              ${(e.seasons || ['spring','summer','autumn','winter']).includes(sn) ? 'checked' : ''}>${{spring:'春',summer:'夏',autumn:'秋',winter:'冬'}[sn]}</label>`).join('')}
+            <label><input type="checkbox" class="pe-tile" ${e.tileable ? 'checked' : ''}>可平铺</label></div>`
+        : (kind === 'weapon'
+            ? `<select class="pe-tier">${['common','fine','epic','legendary'].map(t =>
+                `<option value="${t}" ${e.tier_id === t ? 'selected' : ''}>${{common:'普通',fine:'精良',epic:'史诗',legendary:'传说'}[t]}</option>`).join('')}</select>`
+            : '');
+      return `<div class="edit-row" data-i="${i}">
+        <input class="pe-name" value="${esc(e.name)}" placeholder="名称">
+        <input class="pe-desc" value="${esc(e.desc)}" placeholder="外观描述（15-40 字，直接入画）">
+        <span>${seasonBox}<button class="btn btn-danger pe-del" style="padding:3px 8px;font-size:11px">删</button></span>
+      </div>`;
+    }).join('') || '<p class="muted">空方案，点「加一条」</p>';
+    $('planAddRow').onclick = () => {
+      const row = document.createElement('div');
+      row.className = 'edit-row';
+      row.dataset.i = 'new';
+      row.innerHTML = `<input class="pe-name" placeholder="名称">
+        <input class="pe-desc" placeholder="外观描述">
+        <span>${kind === 'weapon' ? '<select class="pe-tier"><option value="common">普通</option><option value="fine">精良</option><option value="epic">史诗</option><option value="legendary">传说</option></select>'
+              : kind === 'scene' ? '<div class="season-boxes">' + ['spring','summer','autumn','winter'].map(sn => `<label><input type="checkbox" class="pe-season" value="${sn}" checked>${{spring:'春',summer:'夏',autumn:'秋',winter:'冬'}[sn]}</label>`).join('') + '</div>' : ''}
+        <button class="btn btn-danger pe-del" style="padding:3px 8px;font-size:11px">删</button></span>`;
+      row.querySelector('.pe-del').onclick = () => row.remove();
+      $('planEdRows').appendChild(row);
+    };
+    $('planEdRows').querySelectorAll('.pe-del').forEach(b =>
+      b.onclick = () => b.closest('.edit-row').remove());
+    $('planSave').onclick = savePlan;
+    $('planMask').classList.add('show');
+  }
+
+  async function savePlan() {
+    const kind = state.planKind;
+    const rows = [...$('planEdRows').querySelectorAll('.edit-row')];
+    const ops = [];
+    let shift = 0;
+    rows.forEach(row => {
+      const i = row.dataset.i;
+      if (i === 'new') {
+        ops.push({ action: 'add',
+          name: row.querySelector('.pe-name').value,
+          desc: row.querySelector('.pe-desc').value,
+          tier_id: row.querySelector('.pe-tier')?.value || null,
+          seasons: [...row.querySelectorAll('.pe-season:checked')].map(c => c.value) || null,
+          tileable: row.querySelector('.pe-tile')?.checked || null });
+      } else {
+        const idx = parseInt(i, 10);
+        ops.push({ action: 'update', index: idx,
+          name: row.querySelector('.pe-name').value,
+          desc: row.querySelector('.pe-desc').value,
+          tier_id: row.querySelector('.pe-tier')?.value || null,
+          seasons: [...row.querySelectorAll('.pe-season:checked')].map(c => c.value) || null,
+          tileable: row.querySelector('.pe-tile') ? row.querySelector('.pe-tile').checked : null });
+      }
+    });
+    // 被删行：原下标收集（DOM 里已移除的行按原顺序补齐）
+    const orig = state.detail.plan[{scene:'scenes',character:'characters',pet:'pets',
+      weapon:'weapons',building:'buildings',monster:'monsters'}[kind]] || [];
+    const remainIdx = new Set(rows.filter(r => r.dataset.i !== 'new').map(r => parseInt(r.dataset.i, 10)));
+    for (let i = 0; i < orig.length; i++) {
+      if (!remainIdx.has(i)) ops.push({ action: 'delete', index: i });
+    }
+    try {
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/plan`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, ops }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      closePlan();
+      toast('方案已保存，受影响条目待重跑（点对应类的「生成」）');
+      poll(true);
+    } catch (e) { toast('保存失败：' + e.message); }
+  }
+
+  // ================= 基准图 =================
   function renderMaster(s) {
     const box = $('masterArea');
     if (!s.master) { box.innerHTML = ''; return; }
@@ -463,35 +707,51 @@
       </div></div>`;
   }
 
+  // ================= 素材墙 =================
+  const KIND_NAME = { scene: '场景', character: '角色', pet: '宠物', weapon: '武器',
+                      building: '建筑', monster: '野怪' };
+
   function renderResults(s) {
     const box = $('resultArea');
     const groups = {};
     (s.assets || []).forEach(a => (groups[a.kind] = groups[a.kind] || []).push(a));
-    const order = ['scene', 'character', 'pet', 'weapon', 'building', 'monster'];
-    const names = { scene: '场景', character: '角色', pet: '宠物', weapon: '武器',
-                    building: '建筑', monster: '野怪' };
     let html = '';
-    for (const k of order) {
+    for (const k of KINDS6) {
       const list = groups[k];
       if (!list || !list.length) continue;
-      html += `<p class="section-title">${names[k]} <span class="muted" style="font-weight:400;font-size:12px">${list.length} 张 · 可单卡重跑</span></p>
+      const sz = state.aspects[k];
+      html += `<p class="section-title">${KIND_NAME[k]}
+        <span class="muted" style="font-weight:400;font-size:12px">${list.length} 张${sz ? ` · ${sz[0]}×${sz[1]}` : ''}</span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost" onclick="UI.atlas('${k}')">🧩 图集</button></p>
         <div class="asset-grid">` + list.map(a => {
         const tone = a.tone || {};
+        const q = a.quality || {};
+        const chips = [
+          a.season_name ? `<span class="season-chip">${a.season_name}</span>` : '',
+          a.tier ? `<span class="tier-chip tier-${a.tier_id}">${a.tier}</span>` : '',
+          a.transparent ? `<span class="tr-chip">透明${a.transparent.method === 'rembg' ? '·AI' : ''}</span>` : '',
+          q.pass === false ? `<span class="q-chip q-fail" title="${esc((q.reasons || []).join('；'))}">⚠ ${(q.reasons || [''])[0]?.split('（')[0] || '质量'}</span>`
+            : q.pass === true ? '<span class="q-chip q-pass">✓守门</span>' : '',
+          (a.history || []).length ? `<span class="q-chip" style="background:rgba(0,0,0,.06);color:#777" title="有历史版本，点图查看">${a.history.length}版</span>` : '',
+        ].join('');
         return `<div class="asset-card">
-          <img src="${a.url}" loading="lazy">
-          <div class="card-actions"><button onclick="window.__rerun('${a.id}')">↻</button></div>
+          <img src="${a.url}" loading="lazy" class="${a.transparent ? 'alpha' : ''}"
+               onclick="UI.openLb('${a.id}')">
+          <div class="card-actions">
+            <button title="单张精修（改词/锁seed/多候选）" onclick="UI.openVar('${a.id}')">✎</button>
+            <button title="直接重跑" onclick="UI.rerun('${a.id}')">↻</button>
+            <button title="删除" onclick="UI.delAsset('${a.id}')">🗑</button>
+          </div>
           <div class="asset-body">
             <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-              <b style="font-size:13px">${esc(a.name)}</b>
-              ${a.season_name ? `<span class="season-chip">${a.season_name}</span>` : ''}
-              ${a.tier ? `<span class="tier-chip tier-${a.tier_id}">${a.tier}</span>` : ''}
+              <b style="font-size:13px">${esc(a.name)}</b>${chips}
             </div>
             <div style="margin-top:4px">
               <span class="tone-badge ${tone.pass ? 'tone-pass' : 'tone-fail'}">
                 ${tone.pass ? '✓ 色调一致' : '⚠ 色调偏离'} ${Math.round(tone.score)}
               </span>
             </div>
-            <div class="tone-swatches">${(tone.palette || []).map(c => `<i style="background:${c}"></i>`).join('')}</div>
           </div>
         </div>`;
       }).join('') + '</div>';
@@ -499,15 +759,209 @@
     box.innerHTML = html || '';
   }
 
-  window.__rerun = async (aid) => {
+  // ---- 放大预览（含基准图对比 / 版本历史 / 键盘翻页） ----
+  function openLb(aid) {
+    const s = state.detail;
+    const all = [];
+    for (const k of KINDS6) (s.assets || []).filter(a => a.kind === k).forEach(a => all.push(a));
+    const idx = all.findIndex(a => a.id === aid);
+    if (idx < 0) return;
+    state.lbList = all; state.lbIdx = idx;
+    renderLb();
+    $('lbMask').classList.add('show');
+  }
+  function renderLb() {
+    const a = state.lbList[state.lbIdx];
+    $('lbTitle').textContent = `${KIND_NAME[a.kind]} · ${a.name}`;
+    $('lbImg').src = a.url;
+    $('lbImg').className = a.transparent ? 'alpha' : '';
+    $('lbImg').style.maxHeight = '56vh'; $('lbImg').style.objectFit = 'contain';
+    $('lbMaster').src = state.detail.master?.url || '';
+    $('lbMasterFig').style.display = $('lbCompare').checked ? '' : 'none';
+    const q = a.quality || {};
+    $('lbInfo').innerHTML =
+      `<b>${esc(a.desc || '')}</b><br>
+       seed ${a.seed ?? '-'} · ${a.size ? a.size[0] + '×' + a.size[1] : ''} · 色距 ${(a.tone || {}).score ?? '-'}
+       ${q.pass === false ? ` · ⚠ ${esc((q.reasons || []).join('；'))}` : ' · ✓ 守门通过'}
+       ${q.attempts > 1 ? ` · 守门重试 ${q.attempts} 次` : ''}<br>
+       <span style="color:#99a">提示词：${esc(a.prompt || '')}</span>`;
+    const hist = a.history || [];
+    $('lbHist').innerHTML = hist.length
+      ? '历史版本（点图回滚）：<br>' + hist.map((h, i) =>
+          `<img src="${h.url}" title="回滚到这一版（${h.seed ?? '-'}）" onclick="UI.rollback('${a.id}',${i})">`).join('')
+      : '';
+    $('lbPrev').disabled = state.lbIdx <= 0;
+    $('lbNext').disabled = state.lbIdx >= state.lbList.length - 1;
+  }
+  function lbStep(d) { state.lbIdx = Math.max(0, Math.min(state.lbList.length - 1, state.lbIdx + d)); renderLb(); }
+
+  async function rollback(aid, index) {
+    if (!confirm('回滚到这一版？当前版会进历史。')) return;
     try {
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/assets/${aid}/rollback`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      toast('已回滚'); closeLb(); poll(true);
+    } catch (e) { toast(e.message); }
+  }
+
+  // ---- 单张精修（候选） ----
+  function openVar(aid) {
+    const a = (state.detail.assets || []).find(x => x.id === aid);
+    if (!a) return;
+    state.varAid = aid;
+    $('varTitle').textContent = `单张精修 · ${KIND_NAME[a.kind]} · ${a.name}`;
+    $('varPrompt').value = a.prompt || '';
+    $('varSeed').value = -1;
+    $('varGrid').innerHTML = '';
+    $('varHint').textContent = '';
+    $('varMask').classList.add('show');
+  }
+
+  async function genVariants() {
+    const aid = state.varAid;
+    busy($('varGo'), true, '生成中…（每张 2-9 分钟）');
+    $('varHint').textContent = '候选生成中，完成后自动展示…';
+    try {
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/assets/${aid}/variants`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: $('varPrompt').value.trim() || null,
+                               seed: parseInt($('varSeed').value, 10) || -1,
+                               n: parseInt($('varN').value, 10),
+                               use_self_ref: $('varSelf').value === '1' }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      state.variants = d.variants;
+      $('varHint').textContent = `已出 ${d.variants.length} 张候选，点一张「设为正式版」：`;
+      $('varGrid').innerHTML = d.variants.map(v => {
+        const q = v.quality || {};
+        return `<div class="var-card" onclick="UI.commit('${aid}','${v.id}')">
+          <img src="${v.url}">
+          <div style="padding:6px 8px;font-size:11.5px">
+            seed ${v.seed} · 色距 ${Math.round(q.tone?.score ?? 0)}
+            ${q.pass ? '<span class="q-chip q-pass">✓</span>' : `<span class="q-chip q-fail" title="${esc((q.reasons||[]).join('；'))}">⚠</span>`}
+            <div class="muted2">点击设为正式版</div>
+          </div></div>`;
+      }).join('');
+    } catch (e) { $('varHint').textContent = ''; toast('候选失败：' + e.message); }
+    finally { busy($('varGo'), false); }
+  }
+
+  async function commitVariant(aid, vid) {
+    const hint = $('varHint').textContent;
+    const m = hint.match(/已出 (\d) 张/);
+    toast('提交中…');
+    // 候选数据在生成时返回过一次，弹窗里只存了 DOM——重新要一份太重，
+    // 直接把候选数据缓存在 state：genVariants 时保存。
+    const v = (state.variants || []).find(x => x.id === vid);
+    if (!v) return toast('候选数据已失效，请重新生成');
+    try {
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/assets/${aid}/commit`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ variant: v }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      toast('已设为正式版（旧版进历史）');
+      closeVar(); poll(true);
+    } catch (e) { toast(e.message); }
+  }
+
+  async function rerun(aid) {
+    try {
+      busy2(true);
       const r = await fetch(`/api/v1/gameassets/sets/${state.current}/assets/${aid}/rerun`, { method: 'POST' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
-      toast('重跑完成');
+      toast('重跑完成（旧版进历史）');
       poll(true);
     } catch (e) { toast('重跑失败：' + e.message); }
-  };
+    finally { busy2(false); }
+  }
+  function busy2(on) { document.querySelectorAll('.card-actions button').forEach(b => b.disabled = on); }
+
+  async function delAsset(aid) {
+    if (!confirm('删除这张素材？')) return;
+    try {
+      await fetch(`/api/v1/gameassets/sets/${state.current}/assets/${aid}`, { method: 'DELETE' });
+      poll(true);
+    } catch (e) { toast(e.message); }
+  }
+
+  // ---- 导出 / 图集 / 参数 ----
+  $('btnExport').addEventListener('click', async () => {
+    const engine = prompt('引擎导入清单（可选）：unity / godot / phaser，留空跳过', '');
+    if (engine === null) return;
+    try {
+      busy($('btnExport'), true, '打包中…');
+      const url = `/api/v1/gameassets/sets/${state.current}/export` + (engine ? `?engine=${engine}` : '');
+      const r = await fetch(url);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      const a = document.createElement('a');
+      a.href = d.url; a.download = d.filename; a.click();
+      toast(`已导出 ${d.count} 张素材`);
+    } catch (e) { toast(e.message); }
+    finally { busy($('btnExport'), false); }
+  });
+
+  async function atlas(kind) {
+    try {
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/atlas/${kind}?cols=4`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      window.open(d.url, '_blank');
+    } catch (e) { toast(e.message); }
+  }
+
+  $('btnSettings').addEventListener('click', () => {
+    const s = state.detail;
+    if (!s) return;
+    $('setTrRows').innerHTML = KINDS6.map(k => {
+      const cur = (s.transparent || {})[k] || state.trDefault[k] || 'none';
+      return `<div class="edit-row" style="grid-template-columns:80px 1fr">
+        <span style="font-size:13px">${KIND_NAME[k]}</span>
+        <select class="set-tr" data-k="${k}">
+          <option value="none" ${cur === 'none' ? 'selected' : ''}>不抠图</option>
+          <option value="chroma" ${cur === 'chroma' ? 'selected' : ''}>白底色键（chroma）</option>
+          <option value="rembg" ${cur === 'rembg' ? 'selected' : ''}>AI 抠图（rembg）</option>
+        </select></div>`;
+    }).join('');
+    $('setThreshold').value = s.threshold ?? 48;
+    $('setMask').classList.add('show');
+  });
+
+  async function saveSettings() {
+    const transparent = {};
+    document.querySelectorAll('.set-tr').forEach(sel => { transparent[sel.dataset.k] = sel.value; });
+    try {
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/settings`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transparent, threshold: parseFloat($('setThreshold').value) }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      closeSet(); toast('参数已保存（下一次生成生效）'); poll(true);
+    } catch (e) { toast(e.message); }
+  }
+
+  // ---- 弹窗开关与键盘 ----
+  function closeLb() { $('lbMask').classList.remove('show'); }
+  function closeVar() { $('varMask').classList.remove('show'); }
+  function closePlan() { $('planMask').classList.remove('show'); }
+  function closeSet() { $('setMask').classList.remove('show'); }
+  $('lbClose').onclick = closeLb;
+  $('lbPrev').onclick = () => lbStep(-1);
+  $('lbNext').onclick = () => lbStep(1);
+  $('lbCompare').onchange = renderLb;
+  $('varGo').onclick = genVariants;
+  $('setSave').onclick = saveSettings;
+  document.addEventListener('keydown', (e) => {
+    if (!$('lbMask').classList.contains('show')) return;
+    if (e.key === 'Escape') closeLb();
+    if (e.key === 'ArrowLeft') lbStep(-1);
+    if (e.key === 'ArrowRight') lbStep(1);
+  });
 
   $('btnDelSet').addEventListener('click', async () => {
     if (!confirm('删除这个项目和它的全部素材？')) return;
@@ -522,6 +976,10 @@
       refreshSets();
     } catch (e) { toast(e.message); }
   });
+
+  // ================= 对外（onclick 内联用） =================
+  window.UI = { openLb, closeLb, openVar, closeVar, commit: commitVariant,
+                rerun, delAsset, rollback, openPlan, closePlan, closeSet, atlas };
 
   // ================= 工具 =================
   function esc(x) {

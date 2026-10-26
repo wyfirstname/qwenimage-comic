@@ -111,24 +111,94 @@ TIER_ORDER = ["common", "fine", "epic", "legendary"]
 
 # ------------------------------------------------------------
 #  方案 → 阶段条目表（store 归一化与 pipeline 执行共用；场景全部 ×4 季）
+#  条目带稳定 id（itm_*）：方案编辑后靠 id 对账，没改动的条目不重跑。
 # ------------------------------------------------------------
 PLAN_KEYS = {"scene": "scenes", "character": "characters", "pet": "pets",
              "weapon": "weapons", "building": "buildings", "monster": "monsters"}
 ASSET_KINDS = ("scene", "character", "pet", "weapon", "building", "monster")
 
 
-def build_stage_items(plan: dict) -> dict[str, list[dict]]:
+def build_stage_items(plan: dict, existing: dict[str, list[dict]] | None = None
+                      ) -> dict[str, list[dict]]:
+    """方案展开为条目表。existing 提供旧条目（按 key 对账沿用 id/状态）。
+
+    条目 key：非场景 = 方案条目在 PLAN_KEYS 里的下标；场景 = 下标+季节。
+    """
+    from shared.models_util import new_id
+    existing = existing or {}
     out: dict[str, list[dict]] = {}
     for kind in ASSET_KINDS:
+        old_items = existing.get(kind, [])
+        old_by_key = {}
+        for it in old_items:
+            old_by_key.setdefault(it.get("key") or it.get("id"), it)
         items: list[dict] = []
-        for entry in plan[PLAN_KEYS[kind]]:
+        for idx, entry in enumerate(plan[PLAN_KEYS[kind]]):
+            def _inherit(old, name, desc, tier):
+                """旧条目内容没变才沿用状态；变了的回到 pending（触发重跑）。"""
+                if old and old.get("name") == name and old.get("desc") == desc \
+                        and old.get("tier_id", "") == (tier or ""):
+                    return old.get("status", "pending")
+                return "pending"
             if kind == "scene":
-                for season in SEASON_ORDER:
-                    items.append({"name": entry["name"], "desc": entry["desc"],
-                                  "season": season, "status": "pending"})
+                seasons = entry.get("seasons") or SEASON_ORDER
+                for season in seasons:
+                    key = f"{idx}:{season}"
+                    old = old_by_key.get(key) or old_by_key.get(f"{entry['name']}:{season}")
+                    items.append({
+                        "id": (old or {}).get("id") or new_id("itm"),
+                        "key": key,
+                        "name": entry["name"], "desc": entry["desc"],
+                        "season": season, "tileable": bool(entry.get("tileable")),
+                        "status": _inherit(old, entry["name"], entry["desc"], None),
+                    })
             else:
-                items.append({"name": entry["name"], "desc": entry["desc"],
-                              "tier": entry.get("tier"), "tier_id": entry.get("tier_id"),
-                              "status": "pending"})
+                key = str(idx)
+                old = old_by_key.get(key) or old_by_key.get(entry["name"])
+                items.append({
+                    "id": (old or {}).get("id") or new_id("itm"),
+                    "key": key,
+                    "name": entry["name"], "desc": entry["desc"],
+                    "tier": entry.get("tier"), "tier_id": entry.get("tier_id"),
+                    "status": _inherit(old, entry["name"], entry["desc"],
+                                       entry.get("tier_id")),
+                })
         out[kind] = items
     return out
+
+
+# ------------------------------------------------------------
+#  按类画幅：640~1152 长边、64 对齐（ComfyUI latent 对齐要求）。
+#  set["sizes"][kind] = [w, h] 可按项目覆盖。
+# ------------------------------------------------------------
+ASPECTS: dict[str, tuple[int, int]] = {
+    "scene":     (1152, 640),   # 16:9 横幅概念图
+    "character": (512, 768),    # 2:3 立绘
+    "pet":       (768, 768),    # 1:1
+    "weapon":    (768, 768),    # 1:1 图标
+    "building":  (896, 672),    # 4:3
+    "monster":   (768, 768),    # 1:1
+}
+_MASTER_SIZE = (1152, 640)
+
+
+def asset_size(s: dict, kind: str) -> tuple[int, int]:
+    """项目级覆盖 > 按类默认。"""
+    size = ((s.get("sizes") or {}).get(kind)) or ASPECTS.get(kind, (768, 768))
+    w, h = int(size[0]), int(size[1])
+    return max(256, w - w % 64), max(256, h - h % 64)
+
+
+# ------------------------------------------------------------
+#  透明底：按类指定抠图方式。none=不抠（场景/建筑默认）；
+#  chroma=白底色键；rembg=AI 抠图（需装 rembg）。set["transparent"] 覆盖。
+# ------------------------------------------------------------
+TRANSPARENT_DEFAULT: dict[str, str] = {
+    "scene": "none", "building": "none",
+    "character": "chroma", "pet": "chroma",
+    "weapon": "chroma", "monster": "chroma",
+}
+
+
+def transparent_mode(s: dict, kind: str) -> str:
+    return ((s.get("transparent") or {}).get(kind)) or TRANSPARENT_DEFAULT.get(kind, "none")
