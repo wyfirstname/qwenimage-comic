@@ -347,12 +347,14 @@ def asset_size(s: dict, kind: str, item: dict | None = None) -> tuple[int, int]:
 
 # ------------------------------------------------------------
 #  透明底：按类指定抠图方式。none=不抠（场景/建筑默认）；
-#  chroma=白底色键；rembg=AI 抠图（需装 rembg）。set["transparent"] 覆盖。
+#  rembg=AI 抠图（U2Net，白袍白底这类色键必败的图也能抠，默认）；
+#  chroma=白底色键（快，但主体本身接近白色时会抠穿/抠不动）。
+#  set["transparent"] 覆盖。
 # ------------------------------------------------------------
 TRANSPARENT_DEFAULT: dict[str, str] = {
     "scene": "none", "building": "none",
-    "character": "chroma", "pet": "chroma",
-    "weapon": "chroma", "monster": "chroma",
+    "character": "rembg", "pet": "rembg",
+    "weapon": "rembg", "monster": "rembg",
 }
 
 

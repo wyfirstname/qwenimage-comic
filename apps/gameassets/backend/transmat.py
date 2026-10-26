@@ -58,6 +58,32 @@ def make_transparent(src: str | Path, dst: str | Path, method: str = "chroma") -
     raise ValueError(f"未知抠图方式：{method}（可选 chroma | rembg）")
 
 
+def matte(src: str | Path, dst: str | Path, method: str = "rembg") -> dict:
+    """真抠图优先：rembg → 结果退化/不可用 → 自动回落色键。
+
+    「退化」判定（任一命中即回落）：
+      - 透明占比 <0.02（主体被抠没了）或 >0.97（几乎没抠动，说明 rembg 没认出主体）
+    回落时返回的 report 里 fallback=True，并保留 rembg_error，便于排查。
+    """
+    if method != "rembg":
+        return make_transparent(src, dst, method)
+    try:
+        rep = _via_rembg(src, dst)
+    except Exception as exc:                       # 依赖/模型缺失 → 色键兜底
+        rep = _via_chroma(src, dst)
+        rep.update({"fallback": True, "rembg_error": str(exc)[:160]})
+        return rep
+    ratio = rep.get("alpha_ratio", 0)
+    if 0.02 <= ratio <= 0.97:
+        rep["fallback"] = False
+        return rep
+    fb = _via_chroma(src, dst)
+    fb.update({"fallback": True,
+               "rembg_alpha_ratio": ratio,
+               "rembg_error": f"rembg 结果退化（透明占比 {ratio}）"})
+    return fb
+
+
 def _via_chroma(src, dst) -> dict:
     im = Image.open(src).convert("RGB")
     try:
@@ -142,8 +168,22 @@ def _despill(im: Image.Image) -> None:
 
 
 def _report(im: Image.Image, method: str) -> dict:
+    """抠图报告：透明占比 + 边缘白晕（半透明边缘比主体更亮 = 白边没去干净）。"""
     a = im.getchannel("A")
     hist = a.histogram()
     transparent = sum(hist[:250])
+    halo = None
+    try:
+        import numpy as np
+        arr = np.asarray(im).astype("float32")
+        al = arr[..., 3]
+        lum = arr[..., :3].mean(axis=2)
+        edge = (al > 8) & (al < 248)                 # 边缘半透明带
+        solid = al >= 248
+        if edge.sum() > 50 and solid.sum() > 50:
+            halo = round(float(lum[edge].mean() - lum[solid].mean()), 1)
+    except Exception:
+        pass
     return {"method": method, "w": im.width, "h": im.height,
-            "alpha_ratio": round(1 - transparent / (im.width * im.height), 3)}
+            "alpha_ratio": round(1 - transparent / (im.width * im.height), 3),
+            "halo": halo}

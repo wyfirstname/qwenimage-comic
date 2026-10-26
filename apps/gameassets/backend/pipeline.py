@@ -550,8 +550,11 @@ async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
     if tmode != "none":
         try:
             out = Path(path).with_name(Path(path).stem + "_alpha.png")
-            rep = transmat.make_transparent(path, out, method=tmode)
+            rep = transmat.matte(path, out, method=tmode)   # rembg 优先，退化自动回落
             path, transparent = str(out), rep
+            if rep.get("fallback"):
+                store.append_log(sid, "warn",
+                                 f"「{item['name']}」AI 抠图回落色键：{rep.get('rembg_error', '')}")
         except Exception as exc:
             store.append_log(sid, "warn",
                              f"「{item['name']}」透明底处理失败（{exc}），保留原图")
@@ -887,6 +890,54 @@ def commit_variant(*, sid: str, aid: str, variant: dict,
     store.mutate(sid, _apply)
     store.append_log(sid, "info", f"「{old['name']}」已更新（候选提交，旧版进历史）")
     return new_asset
+
+
+def _url_of(p: Path) -> str:
+    """本地路径 → 前端可访问的 /data/... URL。"""
+    try:
+        rel = p.resolve().relative_to(settings.data_dir_path.resolve())
+        return f"/data/{rel.as_posix()}"
+    except ValueError:
+        return f"/data/{p.name}"
+
+
+def recut_asset(s: dict, asset: dict) -> dict:
+    """重抠一张素材的透明底（rembg 优先，退化自动回落色键），旧图进版本历史。
+
+    原始底图从当前记录反推：本工具产出的透明图都叫 <原名>_alpha*.png，
+    去掉这段后缀就是模型原图；已经是原图则直接用。
+    """
+    cur = Path(asset["path"])
+    base = cur
+    if "_alpha" in cur.stem:
+        stem = cur.stem.split("_alpha")[0]
+        cand = cur.with_name(stem + cur.suffix)
+        if cand.is_file():
+            base = cand
+    if not base.is_file():
+        raise RuntimeError(f"找不到原始底图：{base.name}")
+
+    mtime = int(base.stat().st_mtime)
+    out = base.with_name(f"{base.stem}_alpha{mtime % 100000}.png")
+    method = transparent_mode(s, asset["kind"])
+    rep = transmat.matte(base, out, method=method)
+
+    def _apply(t: dict) -> None:
+        for i, a in enumerate(t["assets"]):
+            if a["id"] != asset["id"]:
+                continue
+            history = a.get("history") or []
+            history.insert(0, {k: a.get(k) for k in
+                               ("path", "url", "seed", "tone", "created_at",
+                                "prompt", "transparent")})
+            del history[_MAX_HISTORY:]
+            t["assets"][i] = {**a, "path": str(out), "url": _url_of(out),
+                              "transparent": rep, "history": history}
+            break
+    store.mutate(s["id"], _apply)
+    updated = next(a for a in store.get_set(s["id"])["assets"]
+                   if a["id"] == asset["id"])
+    return updated
 
 
 def overall_status(s: dict) -> str:

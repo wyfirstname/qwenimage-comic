@@ -22,7 +22,7 @@ from PIL.ImageFont import FreeTypeFont
 
 from shared.config import settings
 
-from . import store, transmat
+from . import scene_analysis, store, transmat
 from .presets import (ASPECTS, MONSTER_TIER_ORDER, MONSTER_TIERS,
                       SEASONS, SCENE_USAGES, transparent_mode)
 
@@ -149,21 +149,22 @@ def _load(path: Path) -> Image.Image | None:
 
 
 def _cutout(path: Path, cache_dir: Path) -> Image.Image | None:
-    """白底素材现场色键抠图（结果缓存）；抠不动返回 None，调用方退回软边罩。
+    """素材现场 AI 抠图（rembg 优先，结果缓存）；抠不动返回 None，调用方退回软边罩。
 
     只对「本来就该透明底」的类启用（角色/宠物/武器/野怪）；
-    alpha_ratio 异常（接近 0 = 抠没了，接近 1 = 根本不是白底）视为失败。
+    alpha_ratio 异常（接近 0 = 抠没了，接近 1 = 没认出主体）视为失败。
+    缓存键带 'r' 标记——早期版本用色键，换个前缀防止吃到旧缓存。
     """
     try:
         st = path.stat()
     except OSError:
         return None
     cache_dir.mkdir(parents=True, exist_ok=True)
-    dst = cache_dir / f"{path.stem}_{st.st_mtime_ns % 10**12}.png"
+    dst = cache_dir / f"r_{path.stem}_{st.st_mtime_ns % 10**12}.png"
     if not dst.is_file():
         try:
-            rep = transmat.make_transparent(path, dst, "chroma")
-            if not 0.02 < rep.get("alpha_ratio", 0) < 0.985:
+            rep = transmat.matte(path, dst, "rembg")
+            if not 0.02 < rep.get("alpha_ratio", 0) < 0.97:
                 dst.unlink(missing_ok=True)
                 return None
         except Exception:
@@ -351,6 +352,25 @@ def run(s: dict) -> dict:
 
     asset_checks = [check_asset(s, a) for a in assets]
 
+    def _walk_of(sc: dict) -> dict | None:
+        """场景可通行区域分析（带缓存），结果同时落到素材记录。"""
+        try:
+            rep = scene_analysis.analyze_asset(sc)
+        except Exception:
+            return None
+        slim = {k: rep[k] for k in
+                ("mask_url", "overlay_url", "mask_size", "mode", "horizon",
+                 "walk_ratio", "combat_band", "spawns", "obstacles")
+                if k in rep}
+
+        def _apply(t: dict) -> None:
+            for a in t["assets"]:
+                if a["id"] == sc["id"]:
+                    a["walk"] = slim
+                    break
+        store.mutate(s["id"], _apply)
+        return slim
+
     out_dir = settings.data_dir_path / "outputs" / "gameassets" / "sim" / s["id"]
     scenes = sorted(by["scene"], key=lambda a: (a.get("season") or ""))
     # 没配属场景的怪归入第一组（并在 notes 里说明），别让它们凭空消失
@@ -371,6 +391,13 @@ def run(s: dict) -> dict:
                           out_path=out_dir /
                           f"sim_{i}_{sc['name']}_{sc.get('season') or 'na'}.png")
         g["notes"] = (notes + g["notes"])[:6]
+        walk = _walk_of(sc)
+        if walk:
+            g["walk"] = walk
+            if walk.get("walk_ratio", 0) < 0.08:
+                g["notes"].append("可行走区域占比过低——路面识别可能失准，建议看叠加预览")
+        else:
+            g["notes"].append("场景可通行区域分析失败（图缺失或格式异常）")
         groups.append(g)
 
     n_fail = sum(1 for c in asset_checks if not c["ok"])

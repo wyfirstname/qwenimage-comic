@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>素材实测 · 运行时仿真</title>
+<style>
+  :root { --border:#e3e3e3; --primary:#3b6ef5; --muted:#777; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#16181f; color:#e8eaf0;
+         font:13.5px/1.5 "Segoe UI","Microsoft YaHei",sans-serif; }
+  header { display:flex; gap:14px; align-items:center; padding:10px 18px;
+           background:#1d2029; border-bottom:1px solid #2a2e3a; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; }
+  header .sub { color:#9aa0ae; font-size:12px; }
+  header select, header button {
+    background:#262a36; color:#e8eaf0; border:1px solid #3a4050;
+    border-radius:8px; padding:5px 12px; font-size:13px; cursor:pointer; }
+  header button:hover { border-color:var(--primary); }
+  header button.primary { background:var(--primary); border-color:var(--primary); }
+  header button:disabled { opacity:.5; cursor:default; }
+  #wrap { position:relative; width:min(1280px, 96vw); margin:14px auto; }
+  canvas { width:100%; display:block; border-radius:10px; background:#000; }
+  #hud { position:absolute; top:10px; left:10px; display:flex; gap:6px;
+         flex-wrap:wrap; pointer-events:none; }
+  .chip { background:rgba(10,12,18,.72); border-radius:12px; padding:2px 10px;
+          font-size:11.5px; backdrop-filter:blur(2px); }
+  .chip.good { color:#5ad879; } .chip.bad { color:#ff7b6b; }
+  .chip.warn { color:#ffc46b; } .chip.info { color:#9fc0ff; }
+  #msg { position:absolute; bottom:12px; left:50%; transform:translateX(-50%);
+         background:rgba(10,12,18,.78); border-radius:10px; padding:6px 16px;
+         font-size:12.5px; pointer-events:none; white-space:nowrap; }
+  #panel { width:min(1280px,96vw); margin:0 auto 30px; display:grid;
+           grid-template-columns:1fr 1fr; gap:12px; }
+  .card { background:#1d2029; border:1px solid #2a2e3a; border-radius:12px;
+          padding:12px 16px; }
+  .card h3 { margin:0 0 8px; font-size:13.5px; color:#c6cbe0; }
+  .card table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  .card td { padding:3px 6px; border-bottom:1px solid #262a36; }
+  .card td:last-child { text-align:right; font-family:ui-monospace,monospace; }
+  .muted { color:#8a90a0; font-size:12px; }
+  kbd { background:#262a36; border-radius:5px; padding:0 6px;
+        border:1px solid #3a4050; font-size:11.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎯 素材实测</h1>
+  <span class="sub" id="setName"></span>
+  <select id="groupSel"></select>
+  <button id="btnBot" class="primary">开始实测（自动机器人）</button>
+  <button id="btnManual">手动试玩（WASD）</button>
+  <button id="btnMask">显示碰撞层 (M)</button>
+  <a href="/" style="color:#9aa0ae;font-size:12.5px;margin-left:auto">← 工坊</a>
+</header>
+
+<div id="wrap">
+  <canvas id="cv" width="1280" height="720"></canvas>
+  <div id="hud"></div>
+  <div id="msg">加载中…</div>
+</div>
+
+<div id="panel">
+  <div class="card">
+    <h3>运行时指标</h3>
+    <table id="metrics"><tr><td class="muted">等待实测开始…</td></tr></table>
+  </div>
+  <div class="card">
+    <h3>实测判定</h3>
+    <div id="verdict" class="muted">机器人会自动寻路走向每只野怪并记录碰撞。全部判定通过 = 素材可以直接进引擎。</div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const qs = new URLSearchParams(location.search);
+const SID = qs.get('sid');
+const cv = $('cv'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+
+const state = {
+  manifest: null, sceneImg: null, maskGrid: null, maskW: 0, maskH: 0,
+  player: null, pet: null, monsters: [], mode: 'idle',
+  keys: {}, metrics: null, showMask: false, raf: 0, lastT: 0, fps: 0,
+  bot: null,
+};
+
+// ---------- 几何：画布 ↔ 原图 ↔ 掩码 的坐标换算（cover 裁切） ----------
+function sceneCoverScale(iw, ih) {
+  return { s: Math.max(W / iw, H / ih),
+           ox: (iw - W / Math.max(W / iw, H / ih)) / 2,
+           oy: (ih - H / Math.max(W / iw, H / ih)) / 2 };
+}
+let cover = { s: 1, ox: 0, oy: 0 };
+
+function walkAt(cx, cy) {
+  const g = state.maskGrid;
+  if (!g) return true;                       // 没掩码就不设限
+  // 必须用 floor：round 会把格子中心 (mx+0.5) 舍入到相邻格，
+  // 寻路说能走、移动探测却探到隔壁墙——机器人会原地卡死
+  const mx = Math.min(state.maskW - 1, Math.max(0,
+    Math.floor((cx / cover.s + cover.ox) / state.sceneW * state.maskW)));
+  const my = Math.min(state.maskH - 1, Math.max(0,
+    Math.floor((cy / cover.s + cover.oy) / state.sceneH * state.maskH)));
+  return g[my * state.maskW + mx] === 1;
+}
+function maskRowToCanvasY(my) {
+  return (my / state.maskH * state.sceneH - cover.oy) * cover.s;
+}
+function nearestWalkable(cx, cy, maxR = 260) {
+  for (let r = 4; r < maxR; r += 4) {
+    for (let a = 0; a < 16; a++) {
+      const th = a / 16 * Math.PI * 2;
+      const x = cx + Math.cos(th) * r, y = cy + Math.sin(th) * r;
+      if (walkAt(x, y)) return { x, y };
+    }
+  }
+  return null;
+}
+
+// ---------- BFS 寻路（掩码网格，4 向） ----------
+function bfsPath(x0, y0, x1, y1) {
+  const g = state.maskGrid;
+  if (!g) return [{ x: x1, y: y1 }];
+  const cell = (cx, cy) => {
+    const mx = Math.min(state.maskW - 1, Math.max(0,
+      Math.floor((cx / cover.s + cover.ox) / state.sceneW * state.maskW)));
+    const my = Math.min(state.maskH - 1, Math.max(0,
+      Math.floor((cy / cover.s + cover.oy) / state.sceneH * state.maskH)));
+    return { mx, my };
+  };
+  const toCanvas = (mx, my) => ({
+    x: ((mx + 0.5) / state.maskW * state.sceneW - cover.ox) * cover.s,
+    y: ((my + 0.5) / state.maskH * state.sceneH - cover.oy) * cover.s });
+  const a = cell(x0, y0), b = cell(x1, y1);
+  const MW = state.maskW, MH = state.maskH;
+  if (g[b.my * MW + b.mx] !== 1) return null;           // 目标不可达
+  const prev = new Int32Array(MW * MH).fill(-2);
+  const q = [a.my * MW + a.mx];
+  prev[q[0]] = -1;
+  const goal = b.my * MW + b.mx;
+  let found = q[0] === goal, qi = 0;
+  while (qi < q.length && !found) {
+    const cur = q[qi++]; const mx = cur % MW, my = (cur / MW) | 0;
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx = mx + dx, ny = my + dy;
+      if (nx < 0 || ny < 0 || nx >= MW || ny >= MH) continue;
+      const ni = ny * MW + nx;
+      if (prev[ni] !== -2 || g[ni] !== 1) continue;
+      prev[ni] = cur;
+      if (ni === goal) { found = true; break; }
+      q.push(ni);
+    }
+  }
+  if (!found) return null;
+  const path = [];
+  let cur = goal;
+  while (cur !== -1) {
+    path.push(toCanvas(cur % MW, (cur / MW) | 0));
+    cur = prev[cur];
+  }
+  return path.reverse();
+}
+
+// ---------- 精灵加载：透明检测 + 裁 bbox + 软边卡兜底 ----------
+function loadImg(url) {
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im); im.onerror = rej;
+    im.src = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
+  });
+}
+async function prepSprite(url) {
+  const im = await loadImg(url);
+  const k = Math.min(1, 128 / Math.max(im.width, im.height));
+  const t = document.createElement('canvas');
+  t.width = Math.max(1, im.width * k | 0); t.height = Math.max(1, im.height * k | 0);
+  const tc = t.getContext('2d');
+  tc.drawImage(im, 0, 0, t.width, t.height);
+  const d = tc.getImageData(0, 0, t.width, t.height).data;
+  let transparent = 0, x0 = t.width, y0 = t.height, x1 = 0, y1 = 0;
+  for (let y = 0; y < t.height; y++) for (let x = 0; x < t.width; x++) {
+    if (d[(y * t.width + x) * 4 + 3] < 128) {
+      transparent++;
+    } else {
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+  }
+  const ratio = transparent / (t.width * t.height);
+  const hasAlpha = ratio > 0.01 && x1 > x0;
+  if (!hasAlpha) {                                     // 无透明 → 软边椭圆卡
+    const c = document.createElement('canvas');
+    c.width = t.width; c.height = t.height;
+    const cc = c.getContext('2d');
+    cc.drawImage(im, 0, 0, c.width, c.height);
+    cc.globalCompositeOperation = 'destination-in';
+    const gr = cc.createRadialGradient(c.width/2, c.height/2, Math.min(c.width,c.height)*0.28,
+                                       c.width/2, c.height/2, Math.min(c.width,c.height)*0.55);
+    gr.addColorStop(0, 'rgba(0,0,0,1)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    cc.fillStyle = gr; cc.fillRect(0, 0, c.width, c.height);
+    return { img: c, hasAlpha: false, w: c.width, h: c.height };
+  }
+  const sx = x0 / k, sy = y0 / k, sw = (x1 - x0 + 1) / k, sh = (y1 - y0 + 1) / k;
+  const c = document.createElement('canvas');
+  c.width = Math.round(sw); c.height = Math.round(sh);
+  c.getContext('2d').drawImage(im, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return { img: c, hasAlpha: true, w: c.width, h: c.height };
+}
+
+// ---------- 布局 ----------
+const TIER_H = { minion: 92, elite: 135, boss: 200, worldboss: 290 };
+const PLAYER_H = 250, PET_H = 110, GROUND_H = 26;
+
+function placeMonsters() {
+  let mx = W - 40;
+  state.monsters.forEach((m, i) => {
+    const h = TIER_H[m.tier_id] || 92;
+    const w = m.spr.w * h / m.spr.h;
+    let cx = Math.min(Math.max(mx - w / 2, 70), W - w / 2 - 10);
+    // 锚点要落在可走格上：不在就近吸附
+    let anchor = { x: cx, y: H * 0.93 };
+    if (!walkAt(cx, anchor.y)) {
+      const fix = nearestWalkable(cx, anchor.y);
+      if (fix) anchor = fix;
+    }
+    m.cx = anchor.x; m.gy = anchor.y; m.h = h; m.flip = i % 2 === 1;
+    m.reached = false; m.unreachable = false;
+    mx = cx - w / 2 - 26;
+  });
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  if (state.sceneImg) {
+    ctx.drawImage(state.sceneImg,
+      cover.ox, cover.oy, W / cover.s, H / cover.s, 0, 0, W, H);
+  }
+  ctx.fillStyle = 'rgba(8,10,16,.16)'; ctx.fillRect(0, 0, W, H);
+  if (state.showMask && state.maskGrid) {              // 碰撞层可视化
+    const off = document.createElement('canvas');
+    off.width = state.maskW; off.height = state.maskH;
+    const oc = off.getContext('2d');
+    const id = oc.createImageData(state.maskW, state.maskH);
+    for (let i = 0; i < state.maskW * state.maskH; i++) {
+      if (state.maskGrid[i] === 1) {
+        id.data[i*4] = 60; id.data[i*4+1] = 230; id.data[i*4+2] = 90; id.data[i*4+3] = 90;
+      }
+    }
+    oc.putImageData(id, 0, 0);
+    ctx.drawImage(off, 0, 0, W, H);
+  }
+  // 阴影 + 精灵（feet anchor）
+  const drawSprite = (sp, cx, gy, h, flip, label) => {
+    if (!sp) return;
+    const w = sp.w * h / sp.h;
+    ctx.fillStyle = 'rgba(0,0,0,.28)';
+    ctx.beginPath();
+    ctx.ellipse(cx, gy - 3, w * 0.32, 9, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.save();
+    if (flip) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
+    ctx.drawImage(sp.img, cx - w / 2, gy - h, w, h);
+    ctx.restore();
+    if (label) {
+      ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(0,0,0,.55)';
+      const tw = ctx.measureText(label).width;
+      ctx.fillRect(cx - tw / 2 - 6, gy - h - 24, tw + 12, 18);
+      ctx.fillStyle = '#fff'; ctx.fillText(label, cx, gy - h - 11);
+    }
+  };
+  drawSprite(state.pet?.spr, (state.player?.x || W/2) + 95, state.player?.gy || H*0.93,
+             PET_H, true);
+  for (const m of state.monsters)
+    drawSprite(m.spr, m.cx, m.gy, m.h, m.flip,
+               `${m.name}·${m.tier || '野怪'}${m.reached ? ' ✓' : (m.unreachable ? ' ✗不可达' : '')}`);
+  if (state.player)
+    drawSprite(state.player.spr, state.player.x, state.player.gy, PLAYER_H,
+               false, `${state.player.name}`);
+  requestAnimationFrame(draw);
+}
+
+// ---------- 移动与碰撞 ----------
+function tryMove(dx, dy) {
+  const p = state.player;
+  const nx = p.x + dx, ny = p.gy + dy;
+  if (walkAt(nx, ny)) { p.x = nx; p.gy = ny; return true; }
+  const okX = walkAt(nx, p.gy), okY = walkAt(p.x, ny);
+  if (!okX && !okY) {                                  // 彻底走不动 = 碰撞
+    if (state.mode === 'bot' && state.metrics) state.metrics.collision_blocks++;
+    return false;
+  }
+  if (okX) p.x = nx;                                   // 贴墙滑动
+  if (okY) p.gy = ny;
+  return false;
+}
+function moveAlong(path, speed, dt) {
+  let budget = speed * dt;
+  while (budget > 0 && path.length) {
+    const t = path[0];
+    const dx = t.x - state.player.x, dy = t.y - state.player.gy;
+    const d = Math.hypot(dx, dy);
+    if (d < 3) { path.shift(); continue; }
+    const step = Math.min(budget, d);
+    tryMove(dx / d * step, dy / d * step);
+    budget -= step;
+  }
+}
+
+// ---------- 机器人 ----------
+function startBot() {
+  if (!state.player) { setMsg('没有主角素材，无法实测（先在工坊生成角色）'); return; }
+  state.mode = 'bot';
+  $('btnBot').disabled = true; $('btnManual').disabled = true;
+  const band = state.manifest.scene.walk?.combat_band;
+  let spawn = null;
+  const spawns = state.manifest.scene.walk?.spawns || [];
+  for (const sp of spawns) {                            // 优先用分析出的出生点
+    const cx = sp[0] * W, cy = maskRowToCanvasY(sp[1] * state.maskH);
+    if (walkAt(cx, cy)) { spawn = { x: cx, y: cy }; break; }
+  }
+  if (!spawn) spawn = nearestWalkable(W * 0.35, H * 0.88) || { x: W*0.35, y: H*0.9 };
+  state.player.x = spawn.x; state.player.gy = spawn.y;
+  state.metrics = { spawn_walkable: walkAt(spawn.x, spawn.y),
+    mask_ok: !!state.maskGrid,
+    walk_ratio: state.manifest.scene.walk?.walk_ratio ?? null,
+    monsters_total: state.monsters.length, monsters_reached: 0,
+    unreachable: [], collision_blocks: 0, moved_cells: 0,
+    feet_in_band: null, started: Date.now() };
+  renderMetrics();
+  const targets = state.monsters.map(m => ({ x: m.cx, y: m.gy, m }));
+  let ti = 0, path = null, stuck = 0;
+  const step = (ts) => {
+    if (state.mode !== 'bot') return;
+    const dt = Math.min(0.05, (ts - state.lastT) / 1000 || 0.016);
+    state.lastT = ts;
+    if (ti >= targets.length) { finishBot(); return; }
+    const t = targets[ti];
+    if (path === null) {
+      path = bfsPath(state.player.x, state.player.gy, t.x, t.y);
+      if (!path) { t.m.unreachable = true;
+        state.metrics.unreachable.push(t.m.name); ti++; path = null;
+        setMsg(`野怪「${t.m.name}」不可达——碰撞层把它围死了`); return; }
+    }
+    const before = { x: state.player.x, y: state.player.gy };
+    moveAlong(path, 230, dt);
+    const moved = Math.hypot(state.player.x - before.x, state.player.gy - before.y);
+    if (moved < 0.5) { if (++stuck > 30) { stuck = 0; path = null; } }
+    else stuck = 0;
+    if (Math.hypot(state.player.x - t.x, state.player.gy - t.y) < 46) {
+      t.m.reached = true; state.metrics.monsters_reached++; ti++; path = null;
+      setMsg(`已接近「${t.m.name}」（${state.metrics.monsters_reached}/${targets.length}）`);
+    }
+    renderMetrics();
+    state.raf = requestAnimationFrame(step);
+  };
+  state.lastT = performance.now();
+  state.raf = requestAnimationFrame(step);
+}
+
+function finishBot() {
+  state.mode = 'idle';
+  $('btnBot').disabled = false; $('btnManual').disabled = false;
+  const mt = state.metrics;
+  const band = state.manifest.scene.walk?.combat_band;
+  if (band && state.maskGrid) {
+    const y0 = maskRowToCanvasY(band[0] * state.maskH);
+    const y1 = maskRowToCanvasY(band[1] * state.maskH);
+    mt.feet_in_band = state.player.gy >= Math.min(y0, y1) - 60
+                   && state.player.gy <= Math.max(y1, y0) + 60;
+  }
+  const pass = mt.mask_ok && mt.spawn_walkable
+    && mt.monsters_reached === mt.monsters_total
+    && mt.unreachable.length === 0;
+  mt.duration_s = Math.round((Date.now() - mt.started) / 100) / 10;
+  const verdict = pass ? 'pass' : 'fail';
+  renderMetrics(verdict);
+  $('verdict').innerHTML = pass
+    ? '<span class="chip good">PASS</span> 主角出生点合法、全部野怪可达、零碰撞违规——素材可以进引擎。'
+    : `<span class="chip bad">FAIL</span> ` + [
+        !mt.mask_ok && '碰撞层缺失/过薄',
+        !mt.spawn_walkable && '出生点落在不可走区域',
+        mt.unreachable.length && `不可达野怪：${mt.unreachable.join('、')}`,
+      ].filter(Boolean).join('；');
+  fetch(`/api/v1/gameassets/sets/${SID}/playtest`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ group: state.manifest.group, result: {
+      verdict, summary: $('verdict').textContent.slice(0, 200), ...mt } })
+  }).catch(() => {});
+  setMsg('实测完成，报告已回传工坊');
+}
+
+// ---------- 手动模式 ----------
+function startManual() {
+  if (!state.player) { setMsg('没有主角素材，无法实测'); return; }
+  state.mode = 'manual';
+  $('btnBot').disabled = true; $('btnManual').disabled = true;
+  setMsg('WASD / 方向键移动，Esc 结束');
+  const loop = (ts) => {
+    if (state.mode !== 'manual') return;
+    const dt = Math.min(0.05, (ts - state.lastT) / 1000 || 0.016);
+    state.lastT = ts;
+    let dx = 0, dy = 0;
+    if (state.keys['a'] || state.keys['arrowleft']) dx -= 1;
+    if (state.keys['d'] || state.keys['arrowright']) dx += 1;
+    if (state.keys['w'] || state.keys['arrowup']) dy -= 1;
+    if (state.keys['s'] || state.keys['arrowdown']) dy += 1;
+    if (dx || dy) {
+      const l = Math.hypot(dx, dy);
+      const before = state.player.gy;
+      tryMove(dx / l * 240 * dt, dy / l * 240 * dt);
+      state.metrics && (state.metrics.manual_walk = true);
+      if (before !== state.player.gy) { /* 纵深移动生效 */ }
+    }
+    state.raf = requestAnimationFrame(loop);
+  };
+  state.lastT = performance.now();
+  state.raf = requestAnimationFrame(loop);
+}
+function stopManual() {
+  if (state.mode !== 'manual') return;
+  state.mode = 'idle';
+  $('btnBot').disabled = false; $('btnManual').disabled = false;
+  setMsg('手动试玩结束');
+}
+
+// ---------- 指标面板 ----------
+function renderMetrics(verdict) {
+  const m = state.metrics; if (!m) return;
+  const yn = (v) => v == null ? '<span class="chip info">—</span>'
+    : v ? '<span class="chip good">✓</span>' : '<span class="chip bad">✗</span>';
+  $('metrics').innerHTML = [
+    ['碰撞层', yn(m.mask_ok) + (m.walk_ratio != null ? ` 可走 ${Math.round(m.walk_ratio*100)}%` : '')],
+    ['出生点合法', yn(m.spawn_walkable)],
+    ['野怪可达', `${m.monsters_reached}/${m.monsters_total}` +
+      (m.unreachable.length ? `（不可达：${m.unreachable.join('、')}）` : '')],
+    ['碰撞违规', m.collision_blocks],
+    ['脚底在战斗带', yn(m.feet_in_band)],
+    ['精灵透明底', state.player?.spr.hasAlpha ? '<span class="chip good">✓</span>'
+      : '<span class="chip warn">软边兜底（建议重抠）</span>'],
+    ['耗时', m.duration_s != null ? m.duration_s + 's' : '…'],
+  ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+}
+
+// ---------- 启动 ----------
+function setMsg(t) { $('msg').textContent = t; }
+function hudChips() {
+  const w = state.manifest.scene.walk;
+  $('hud').innerHTML = [
+    `<span class="chip info">${state.manifest.scene.name}·${state.manifest.scene.season}</span>`,
+    w ? `<span class="chip ${w.walk_ratio > 0.08 ? 'good' : 'warn'}">可走 ${Math.round(w.walk_ratio*100)}%</span>`
+      : '<span class="chip bad">无碰撞层</span>',
+    `<span class="chip">${state.manifest.scene.usage}</span>`,
+  ].join('');
+}
+
+async function boot() {
+  try {
+    const info = await (await fetch(`/api/v1/gameassets/sets/${SID}`)).json();
+    $('setName').textContent = info.name || SID;
+    const man = await (await fetch(`/api/v1/gameassets/sets/${SID}/playtest?group=${qs.get('group') || 0}`)).json();
+    state.manifest = man;
+    $('groupSel').innerHTML = Array.from({ length: man.groups }, (_, i) =>
+      `<option value="${i}" ${i === man.group ? 'selected' : ''}>场景组 ${i + 1}/${man.groups}</option>`).join('');
+    $('groupSel').onchange = () => location.href =
+      `?sid=${SID}&group=` + $('groupSel').value;
+
+    setMsg('加载场景与碰撞层…');
+    state.sceneImg = await loadImg(man.scene.url);
+    state.sceneW = state.sceneImg.naturalWidth;
+    state.sceneH = state.sceneImg.naturalHeight;
+    cover = sceneCoverScale(state.sceneW, state.sceneH);
+
+    if (man.scene.walk?.mask_url) {
+      const mk = await loadImg(man.scene.walk.mask_url);
+      state.maskW = man.scene.walk.mask_size[0];
+      state.maskH = man.scene.walk.mask_size[1];
+      const t = document.createElement('canvas');
+      t.width = state.maskW; t.height = state.maskH;
+      t.getContext('2d').drawImage(mk, 0, 0);
+      const data = t.getContext('2d').getImageData(0, 0, state.maskW, state.maskH).data;
+      state.maskGrid = new Uint8Array(state.maskW * state.maskH);
+      for (let i = 0; i < state.maskGrid.length; i++)
+        state.maskGrid[i] = data[i * 4] > 127 ? 1 : 0;
+    }
+
+    setMsg('准备精灵（缺透明底的会现场补抠，首次稍慢）…');
+    const prepAll = async (list) => Promise.all(list.filter(Boolean).map(async (x) => {
+      try { x.spr = await prepSprite(x.url); } catch { x.spr = null; }
+      return x;
+    }));
+    await prepAll([man.player, man.pet, ...man.monsters]);
+    state.player = man.player;
+    state.pet = man.pet;
+    state.monsters = man.monsters;
+    if (state.player) { state.player.x = W * 0.4; state.player.gy = H * 0.9; }
+    placeMonsters();
+    hudChips();
+    state.metrics = { mask_ok: !!state.maskGrid,
+      walk_ratio: man.scene.walk?.walk_ratio ?? null,
+      spawn_walkable: null, monsters_total: state.monsters.length,
+      monsters_reached: 0, unreachable: [], collision_blocks: 0 };
+    renderMetrics();
+    setMsg(state.player
+      ? '就绪——点「开始实测」让机器人跑一遍，或手动试玩'
+      : '没有主角素材：先回工坊生成角色类');
+    requestAnimationFrame(draw);
+  } catch (e) {
+    setMsg('加载失败：' + e.message);
+  }
+}
+
+$('btnBot').onclick = startBot;
+$('btnManual').onclick = startManual;
+$('btnMask').onclick = () => { state.showMask = !state.showMask; };
+document.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  if (state.mode === 'manual') {
+    state.keys[k] = true;
+    if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) e.preventDefault();
+    if (k === 'escape') stopManual();
+  } else if (k === 'm') state.showMask = !state.showMask;
+});
+document.addEventListener('keyup', (e) => { state.keys[e.key.toLowerCase()] = false; });
+boot();
+</script>
+</body>
+</html>

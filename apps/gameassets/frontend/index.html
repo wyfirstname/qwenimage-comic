@@ -317,6 +317,7 @@
         <span class="spacer"></span>
         <button class="btn btn-ghost" id="btnSettings">参数</button>
         <button class="btn btn-ghost" id="btnSim">仿真测试</button>
+        <button class="btn btn-ghost" id="btnPlay">进场景实测</button>
         <button class="btn btn-ghost" id="btnExport">导出 ZIP</button>
         <button class="btn btn-ghost" id="btnRunAll">全部生成</button>
         <button class="btn btn-danger" id="btnDelSet">删除</button>
@@ -1423,6 +1424,9 @@
   $('btnSim').addEventListener('click', () => runSim($('btnSim')));
   $('simRerun').addEventListener('click', () => runSim($('simRerun')));
   $('simClose').onclick = closeSim;
+  $('btnPlay').addEventListener('click', () => {
+    if (state.current) window.open(`/playtest.html?sid=${state.current}`, '_blank');
+  });
 
   // ---- 弹窗开关与键盘 ----
   function closeLb() { $('lbMask').classList.remove('show'); }

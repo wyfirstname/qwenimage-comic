@@ -21,6 +21,9 @@ alive 标志与服务断线检测——绝不出现"页面还在转但其实已�
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -29,7 +32,7 @@ from .planner import SCALES
 from .presets import (ASSET_KINDS, SEASONS, SEASON_ORDER, TIER_ORDER,
                       WEAPON_TIERS, TIME_PRESETS, GENDERS,
                       MONSTER_TIERS, MONSTER_TIER_ORDER,
-                      SCENE_USAGES, SCENE_USAGE_ORDER)
+                      SCENE_USAGES, SCENE_USAGE_ORDER, transparent_mode)
 from .styles import STYLE_PRESETS
 
 router = APIRouter(prefix="/gameassets", tags=["gameassets"])
@@ -562,7 +565,6 @@ async def atlas(sid: str, kind: str, cols: int = 4):
 
 @router.post("/sets/{sid}/simulate", summary="仿真测试：逐张体检 + 按场景合成模拟游戏画面（同步，秒级）")
 async def simulate_set(sid: str):
-    import asyncio
     from . import simulator
     s = store.get_set(sid)
     if not s:
@@ -578,6 +580,160 @@ async def simulate_set(sid: str):
                      f"仿真测试完成：{n['groups']} 组画面，{n['pass']}/{n['total']} 张体检通过"
                      + (f"，{n['warn']} 组有提示" if n["warn"] else ""))
     return report
+
+
+@router.post("/sets/{sid}/assets/{aid}/recut", summary="重抠透明底（rembg 优先，旧图进历史）")
+async def recut_asset(sid: str, aid: str):
+    s = store.get_set(sid)
+    if not s:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    asset = next((a for a in s["assets"] if a["id"] == aid), None)
+    if not asset:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "素材不存在"})
+    if transparent_mode(s, asset["kind"]) == "none":
+        raise HTTPException(status_code=409, detail={
+            "code": "NO_CUT", "message": "该类素材不做透明底（场景/建筑）"})
+    try:
+        updated = await asyncio.to_thread(pipeline.recut_asset, s, asset)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail={"code": "CUT_FAIL", "message": str(exc)})
+    rep = updated.get("transparent") or {}
+    store.append_log(sid, "info",
+                     f"重抠「{updated['name']}」：{rep.get('method')} "
+                     f"透明{rep.get('alpha_ratio')}"
+                     + ("（回落色键）" if rep.get("fallback") else ""))
+    return updated
+
+
+class RecutIn(BaseModel):
+    kinds: list[str] | None = Field(None, description="只重抠这些类（缺省=全部该透明的类）")
+
+
+@router.post("/sets/{sid}/recut", summary="批量重抠透明底（存量素材一次性救回来）")
+async def recut_set(sid: str, body: RecutIn | None = None):
+    s = store.get_set(sid)
+    if not s:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    kinds = (body.kinds if body and body.kinds else
+             [k for k in ASSET_KINDS if transparent_mode(s, k) != "none"])
+    targets = [a for a in s["assets"] if a["kind"] in kinds]
+    if not targets:
+        raise HTTPException(status_code=409, detail={"code": "EMPTY", "message": "没有可重抠的素材"})
+    done, failed, fell_back = 0, 0, 0
+    for a in targets:
+        try:
+            cur = store.get_set(sid)
+            asset = next((x for x in cur["assets"] if x["id"] == a["id"]), None)
+            if not asset:
+                continue
+            updated = await asyncio.to_thread(pipeline.recut_asset, cur, asset)
+            done += 1
+            rep = updated.get("transparent") or {}
+            fell_back += 1 if rep.get("fallback") else 0
+        except Exception as exc:
+            failed += 1
+            store.append_log(sid, "error", f"重抠「{a['name']}」失败：{exc}")
+    store.append_log(sid, "info",
+                     f"批量重抠完成：{done}/{len(targets)} 张"
+                     + (f"，{fell_back} 张回落色键" if fell_back else "")
+                     + (f"，{failed} 张失败" if failed else ""))
+    return {"total": len(targets), "done": done, "failed": failed,
+            "fallback": fell_back}
+
+
+class PlaytestReportIn(BaseModel):
+    group: int = Field(0, ge=0)
+    result: dict = Field(..., description="运行时实测指标（前端机器人跑完回传）")
+
+
+@router.get("/sets/{sid}/playtest", summary="实测运行时清单：场景+walk 掩码+精灵（缺透明底自动补抠）")
+async def playtest_manifest(sid: str, group: int = 0):
+    s = store.get_set(sid)
+    if not s:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    scenes = sorted([a for a in s["assets"] if a["kind"] == "scene"],
+                    key=lambda a: a.get("season") or "")
+    if not scenes:
+        raise HTTPException(status_code=409, detail={"code": "NO_SCENE", "message": "还没有场景素材"})
+    group = max(0, min(group, len(scenes) - 1))
+    sc = scenes[group]
+
+    # 场景可通行区域（带缓存），同步落记录
+    from . import scene_analysis
+    walk = None
+    try:
+        rep = scene_analysis.analyze_asset(sc)
+        walk = {k: rep[k] for k in
+                ("mask_url", "overlay_url", "mask_size", "mode", "horizon",
+                 "walk_ratio", "combat_band", "spawns", "obstacles") if k in rep}
+
+        def _apply(t: dict) -> None:
+            for a in t["assets"]:
+                if a["id"] == sc["id"]:
+                    a["walk"] = walk
+                    break
+        store.mutate(sid, _apply)
+    except Exception:
+        walk = None
+
+    async def sprite(a: dict) -> dict:
+        """精灵：该透明的类没有透明版就现场补抠（rembg），失败退回原图。"""
+        out = {"id": a["id"], "name": a["name"], "url": a["url"],
+               "gender": a.get("gender_name"), "tier": a.get("tier"),
+               "tier_id": a.get("tier_id"), "alpha": False}
+        if transparent_mode(s, a["kind"]) == "none":
+            return out
+        if "_alpha" not in Path(a["path"]).stem:
+            try:
+                cur = store.get_set(sid)
+                cur_a = next(x for x in cur["assets"] if x["id"] == a["id"])
+                a = await asyncio.to_thread(pipeline.recut_asset, cur, cur_a)
+            except Exception:
+                pass
+        out["url"] = a["url"]
+        out["alpha"] = "_alpha" in Path(a["path"]).stem
+        return out
+
+    chars = [a for a in s["assets"] if a["kind"] == "character"]
+    pets = [a for a in s["assets"] if a["kind"] == "pet"]
+    weapons = [a for a in s["assets"] if a["kind"] == "weapon"]
+    monsters = ([m for m in s["assets"] if m["kind"] == "monster"
+                 and m.get("scene") == sc["name"]]
+                + ([m for m in s["assets"] if m["kind"] == "monster"
+                    and not m.get("scene")] if group == 0 else []))
+
+    return {
+        "sid": sid, "group": group, "groups": len(scenes),
+        "scene": {"name": sc["name"],
+                  "season": sc.get("season_name") or "",
+                  "usage": sc.get("usage_name") or "",
+                  "url": sc["url"], "walk": walk},
+        "player": await sprite(chars[0]) if chars else None,
+        "pet": await sprite(pets[0]) if pets else None,
+        "weapons": [await sprite(w) for w in weapons],
+        "monsters": [await sprite(m) for m in monsters],
+    }
+
+
+@router.post("/sets/{sid}/playtest", summary="回传运行时实测报告（落库 + 日志）")
+async def playtest_report(sid: str, body: PlaytestReportIn):
+    s = store.get_set(sid)
+    if not s:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    report = {"created_at": store.now_iso(), "group": body.group, **body.result}
+
+    def _apply(t: dict) -> None:
+        pt = t.setdefault("playtest", {})
+        pt.update(report)
+        log = t["pipeline"]["log"]
+        verdict = report.get("verdict", "?")
+        log.append({"ts": store.now_iso().split("T")[1], "level":
+                    "info" if verdict == "pass" else "warn",
+                    "msg": f"实测完成（第{body.group + 1}组）：{verdict}——"
+                           f"{report.get('summary', '')}"[:300]})
+        del log[:-200]
+    store.mutate(sid, _apply)
+    return {"ok": True}
 
 
 @router.delete("/sets/{sid}", summary="删除项目")
