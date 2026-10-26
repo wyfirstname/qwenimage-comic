@@ -15,14 +15,38 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PIL import Image
+
+# transmat.py → backend → gameassets → apps → 仓库根
+_ROOT = Path(__file__).resolve().parents[3]
 
 # 色键参数：与纯白的距离（0-441 欧氏）
 _CHROMA_NEAR = 40      # 完全透明
 _CHROMA_FAR = 110      # 完全不保留
 _FEATHER = 1           # alpha 边缘羽化半径（px）
+
+# rembg 会话（首次调用时按需加载；模型缺失时由 rembg 自己下载）
+_SESSION = None
+
+
+def rembg_home() -> Path:
+    """rembg 模型缓存目录。
+
+    默认落在仓库/便携包自己的 models/rembg 下，而不是用户主目录的
+    ~/.rembg —— 便携包要「整个文件夹拷走就能用」，模型不能留在 C 盘。
+    可用环境变量 REMBG_HOME 覆盖。
+    """
+    p = Path(os.environ.get("REMBG_HOME") or (_ROOT / "models" / "rembg"))
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def rembg_model() -> str:
+    """抠图模型名。默认 u2net（约 176MB、CPU 秒级）。"""
+    return os.environ.get("REMBG_MODEL") or "u2net"
 
 
 def make_transparent(src: str | Path, dst: str | Path, method: str = "chroma") -> dict:
@@ -72,10 +96,20 @@ def _via_rembg(src, dst) -> dict:
             "rembg 未安装（pip install rembg onnxruntime），"
             "或改用 chroma 色键方案") from exc
     im = Image.open(src).convert("RGBA")
-    out = remove(im)
+    out = remove(im, session=_session())
     _despill(out)
     out.save(dst, "PNG")
     return _report(out, "rembg")
+
+
+def _session():
+    """复用同一个 onnxruntime 会话（模型只加载一次，约 1-2 秒）。"""
+    global _SESSION
+    if _SESSION is None:
+        os.environ.setdefault("REMBG_HOME", str(rembg_home()))
+        from rembg import new_session
+        _SESSION = new_session(rembg_model())
+    return _SESSION
 
 
 def _feather_filter():
@@ -84,16 +118,27 @@ def _feather_filter():
 
 
 def _despill(im: Image.Image) -> None:
-    """半透明像素的 RGB 收敛到前景（消除白边）：alpha 越低，越靠近最近的实心像素色。"""
-    px = im.load()
+    """半透明像素的 RGB 收敛到前景（消除白边）：按覆盖率压暗，去白晕。
+
+    1024×1024 是百万像素级，纯 Python 逐点循环要 1-2 秒，这里走 numpy 向量化；
+    没有 numpy 时退回循环实现。
+    """
     w, h = im.size
-    for y in range(h):
-        for x in range(w):
-            r, g, b, a = px[x, y]
-            if 0 < a < 255:
-                # 简单去白：往「白距离最远」的方向压（等价于乘以覆盖率）
-                k = a / 255.0
-                px[x, y] = (int(r * k), int(g * k), int(b * k), a)
+    try:
+        import numpy as np
+    except ImportError:                                 # 兜底：无 numpy 环境
+        px = im.load()
+        for y in range(h):
+            for x in range(w):
+                r, g, b, a = px[x, y]
+                if 0 < a < 255:
+                    k = a / 255.0
+                    px[x, y] = (int(r * k), int(g * k), int(b * k), a)
+        return
+    arr = np.asarray(im).astype("float32")
+    alpha = arr[..., 3:4]
+    arr[..., :3] = arr[..., :3] * (alpha / 255.0)       # 全不透明像素不变
+    im.paste(Image.fromarray(arr.clip(0, 255).astype("uint8"), "RGBA"))
 
 
 def _report(im: Image.Image, method: str) -> dict:

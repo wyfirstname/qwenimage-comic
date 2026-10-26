@@ -13,3 +13,9 @@ aiofiles>=24.1.0
 # 旁白：edge-tts 零模型、不占显存，装完即可出声（走微软在线接口，需联网）。
 # 想完全离线再装 IndexTTS-2（install_tts.bat，5.5GB，独立 venv）。
 edge-tts>=7.0.0
+
+# 可选：游戏素材工坊的 AI 抠图（透明底）。不装也能跑——色键方案是默认值，
+# 只有把某一类素材的抠图方式切成 rembg 时才需要这两个包。
+# 首次调用会下载 u2net 模型（约 176MB）到 models/rembg/models/u2net/。
+rembg>=2.0.60
+onnxruntime>=1.18.0

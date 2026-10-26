@@ -311,7 +311,7 @@ def write_scripts() -> None:
         "rem Run ONE app standalone (no portal, engine in that process)\r\n"
         "set APPID=%~1\r\n"
         "if \"%APPID%\"==\"\" (\r\n"
-        "  echo Usage: run_app.bat ^<imagegen^|comic^|portrait^|dango^|storyboard^>\r\n"
+        "  echo Usage: run_app.bat ^<imagegen^|comic^|portrait^|dango^|storyboard^|perler^|gameassets^>\r\n"
         "  pause\r\n"
         "  exit /b 1\r\n"
         ")\r\n"
@@ -331,6 +331,8 @@ def write_scripts() -> None:
         "if /i \"%APPID%\"==\"portrait\"   set PORT=8103\r\n"
         "if /i \"%APPID%\"==\"dango\"      set PORT=8104\r\n"
         "if /i \"%APPID%\"==\"storyboard\" set PORT=8105\r\n"
+        "if /i \"%APPID%\"==\"perler\"     set PORT=8106\r\n"
+        "if /i \"%APPID%\"==\"gameassets\" set PORT=8107\r\n"
         "\r\n"
         "echo [app:%APPID%] open http://127.0.0.1:%PORT%\r\n"
         "\"runtime\\python\\python.exe\" -m uvicorn apps.%APPID%.backend.routes:create_app --factory --host 127.0.0.1 --port %PORT%\r\n"
@@ -625,6 +627,7 @@ def write_scripts() -> None:
   runtime/python/   内置 Python 3.13 + torch(CUDA) + 全部依赖，请勿单独搬运
   runtime/ffmpeg/   自带 ffmpeg（成片渲染用），无需安装
   models/           模型权重（由 download_models.bat 填充）
+  models/rembg/     AI 抠图模型（u2net，已随包附带），游戏素材工坊切 rembg 时用
   data/             生成的图片与数据库（你的数据，可整目录备份）
   .env              配置文件（首次启动自动从 .env.example 生成）
 
@@ -635,6 +638,8 @@ def write_scripts() -> None:
                       portrait   人像 / 换装
                       dango      团子衣橱（Q 版捏人 + 衣柜 + 试衣间）
                       storyboard 团子小剧场（一句话 → 分镜 → 旁白 → 竖屏成片）
+                      perler     拼豆工作台（像素画工坊，纯 CPU、不占显存）
+                      gameassets 游戏素材工坊（一句话 → 策划案 → 定妆图 → 分类素材 → 导出）
   engine/           模型能力层：ComfyUI 通道、任务调度、卡死恢复、显存槽位
   tools/            旁白服务（tts_worker）；index-tts 由 install_tts.bat 按需拉取
 
