@@ -1424,8 +1424,17 @@
   $('btnSim').addEventListener('click', () => runSim($('btnSim')));
   $('simRerun').addEventListener('click', () => runSim($('simRerun')));
   $('simClose').onclick = closeSim;
+  // 本页所在的静态目录：独立跑是 "/"，门户托管是 "/apps/<id>/"。
+  // 页面可能以 "/apps/gameassets"（无尾斜杠）打开，所以不能简单砍掉最后一段。
+  function siteDir() {
+    const p = location.pathname;
+    if (p.endsWith('/')) return p;
+    if (/\/apps\/[^/]+$/.test(p)) return p + '/';
+    return p.replace(/[^/]*$/, '');
+  }
   $('btnPlay').addEventListener('click', () => {
-    if (state.current) window.open(`/playtest.html?sid=${state.current}`, '_blank');
+    if (!state.current) return;
+    window.open(`${siteDir()}playtest.html?sid=${state.current}`, '_blank');
   });
 
   // ---- 弹窗开关与键盘 ----
