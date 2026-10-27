@@ -181,6 +181,7 @@ def make_set(*, name: str, idea: str, style: str, style_name: str, time_preset: 
         "desc": desc,
         "threshold": threshold,
         "scale": scale,
+        "anim": {"anim_level": "lite"},   # 角色/宠物动画档位（2.5D 45° 帧集）
         "plan": None,            # 策划方案（plan 阶段产出）
         "master": None,          # 场景基准图 {path,url,seed,palette:[hex]}
         "assets": [],

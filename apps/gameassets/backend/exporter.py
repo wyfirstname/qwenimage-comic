@@ -59,6 +59,13 @@ def _manifest(s: dict) -> dict:
             "quality": {k: (a.get("quality") or {}).get(k)
                         for k in ("pass", "reasons", "attempts")},
             "prompt": a.get("prompt"),
+            "anim": ({"level": (a["anim"] or {}).get("level"),
+                      "cell": (a["anim"] or {}).get("cell"),
+                      "anchor": (a["anim"] or {}).get("anchor"),
+                      "dirs": (a["anim"] or {}).get("dirs"),
+                      "clips": (a["anim"] or {}).get("clips"),
+                      "frames_total": (a["anim"] or {}).get("frames_total")}
+                     if a.get("anim") else None),
         } for a in s["assets"]],
     }
 
@@ -128,6 +135,34 @@ def build_zip(s: dict, engine_tpl: str | None = None) -> Path:
                 p = Path(".") / p
             if p.exists():
                 zf.write(p, f"{root}/{a['kind']}/{asset_filename(a)}")
+        # 动画图集（角色/宠物）：每方向一张 PNG + anim.json 帧表
+        anim_index = []
+        for a in s["assets"]:
+            am = a.get("anim")
+            if not am:
+                continue
+            banks = {}
+            for d, b in (am.get("banks") or {}).items():
+                bp = Path(b.get("path") or "")
+                if not bp.is_absolute():
+                    bp = Path(".") / bp
+                name = f"anim/{_safe(a['name'])}_{_safe(a.get('gender') or '')}_{d}.png"
+                if bp.exists():
+                    zf.write(bp, f"{root}/{name}")
+                banks[d] = {"file": name, "cols": b.get("cols"),
+                            "rows": {k: v.get("row") for k, v in
+                                     (b.get("clips") or {}).items()}}
+            anim_index.append({
+                "kind": a["kind"], "name": a["name"], "gender": a.get("gender"),
+                "level": am.get("level"), "level_name": am.get("level_name"),
+                "cell": am.get("cell"), "anchor": am.get("anchor"),
+                "dirs": am.get("dirs"), "mirror": am.get("mirror"),
+                "clips": am.get("clips"), "frames_total": am.get("frames_total"),
+                "banks": banks})
+        if anim_index:
+            zf.writestr(f"{root}/anim/anim.json",
+                        json.dumps({"view": "2.5D 45°", "items": anim_index},
+                                   ensure_ascii=False, indent=1))
         # 基准图
         if s.get("master"):
             mp = Path(s["master"]["path"])

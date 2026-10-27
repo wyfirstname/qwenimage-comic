@@ -33,13 +33,15 @@ from shared.config import settings
 from shared.models_util import new_id
 from engine.sdk import engine
 
-from . import quality, store, tonecheck, transmat
+from . import anim, quality, store, tonecheck, transmat
 from .planner import plan_from_idea
 from .presets import (ASPECTS, get_preset, asset_size, transparent_mode,
                       SEASONS, WEAPON_TIERS, ASSET_KINDS, build_stage_items,
                       GENDERS, prompt_extra, prompt_negative,
                       MONSTER_TIERS, MONSTER_TIER_ORDER, monster_tier,
-                      SCENE_USAGES, scene_usage)
+                      SCENE_USAGES, scene_usage,
+                      ANIM_KINDS, ANIM_LEVELS, VIEW_LOCK, anim_level, anim_spec,
+                      CLIPS, DIRECTIONS)
 from .styles import get_style
 
 _MASTER_SIZE = (1152, 640)
@@ -491,10 +493,17 @@ async def _stage_assets(sid: str, kind: str, opts: dict) -> None:
             threshold = base_threshold * (_SEASON_THRESHOLD_FACTOR
                                           if item.get("season") else 1.0)
             w, h = asset_size(s, kind, item)      # 场景按用途、怪物按等级逐条定画幅
-            asset = await _gen_with_gate(
-                sid=sid, kind=kind, item=item, prompt=prompt,
-                negative=asset_negative(s, kind), threshold=threshold,
-                size=(w, h), tmode=tmode, master_path=master_path)
+            lv = anim_level(s, item)
+            if kind in ANIM_KINDS and lv != "off":
+                asset = await _gen_anim_asset(
+                    sid=sid, s=s, kind=kind, item=item, payload=payload_item,
+                    master_path=master_path, tmode=tmode, threshold=threshold,
+                    size=(w, h), level=lv)
+            else:
+                asset = await _gen_with_gate(
+                    sid=sid, kind=kind, item=item, prompt=prompt,
+                    negative=asset_negative(s, kind), threshold=threshold,
+                    size=(w, h), tmode=tmode, master_path=master_path)
             _upsert_asset(sid, asset)
             _item_update(sid, kind, real_i, status="done",
                          score=asset["tone"]["score"])
@@ -512,10 +521,133 @@ async def _stage_assets(sid: str, kind: str, opts: dict) -> None:
         raise RuntimeError(f"{n_fail}/{len(targets)} 张失败（可筛选重跑仅失败条目）")
 
 
+def _url_of(path: str | Path) -> str:
+    """本地绝对路径 → /data/... 静态地址。"""
+    p = Path(path).resolve()
+    try:
+        rel = p.relative_to(settings.data_dir_path.resolve())
+        return f"/data/{rel.as_posix()}"
+    except ValueError:
+        return f"/data/{p.name}"
+
+
+def _alpha_to_ref(path: str | Path) -> str:
+    """抠好的透明帧不能直接当图生图参考（透明区会被当成白色），
+    压到中性灰底上再喂给引擎，颜色与轮廓才不失真。"""
+    src = Path(path)
+    dst = src.with_name(src.stem + "_ref.png")
+    if not dst.is_file():
+        try:
+            from PIL import Image as _Im
+            im = _Im.open(src).convert("RGBA")
+            bg = _Im.new("RGB", im.size, (208, 210, 214))
+            bg.paste(im, (0, 0), im)
+            bg.save(dst)
+        except Exception:
+            return str(src)
+    return str(dst)
+
+
+async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: dict,
+                          master_path: str, tmode: str, threshold: float,
+                          size: tuple[int, int], level: str) -> dict:
+    """角色 / 宠物：按档位逐帧生成（站立 + 行走 × 各朝向），对齐后拼成精灵图集。
+
+    一致性策略：首帧（正面站立第一帧）只用基准图定风格；其余帧都带上首帧做双参考，
+    靠图生图把「同一个角色」锁住——否则每一帧都是新角色，走起来会变形。
+    """
+    spec, neg = anim_spec(level), asset_negative(s, kind)
+    cell = tuple(VIEW_LOCK["cell"])
+    anchor = tuple(VIEW_LOCK["anchor"])
+    out_dir = settings.data_dir_path / "outputs" / "gameassets" / "anim" / sid
+    aid = new_id("ast")
+    tag = f"{store.STAGE_LABELS[kind]}「{_item_tag(item, kind)}」"
+
+    banks: dict[str, dict] = {}
+    cover: Path | None = None
+    base_ref: str | None = None
+    scores: list[float] = []
+    reasons: list[str] = []
+    frames_done = 0
+
+    for dir_id in spec["dirs"]:
+        raw: dict[str, list[str]] = {}
+        for clip, count in (("idle", spec["idle"]), ("walk", spec["walk"])):
+            paths: list[str] = []
+            for i in range(count):
+                if _canceled(sid):
+                    raise _StageCanceled()
+                prompt = asset_prompt(
+                    s, payload, transparent=tmode != "none",
+                    anim_tail=anim.frame_suffix(clip, i, count, dir_id))
+                rec = await _gen_with_gate(
+                    sid=sid, kind=kind, item=item, prompt=prompt, negative=neg,
+                    threshold=threshold, size=size, tmode=tmode,
+                    master_path=master_path,
+                    extra_refs=[base_ref] if base_ref else None)
+                paths.append(rec["path"])
+                scores.append(float(rec["tone"]["score"]))
+                if not rec["quality"]["pass"]:
+                    reasons += [r for r in rec["quality"]["reasons"]
+                                if r not in reasons]
+                if base_ref is None:                    # 第一帧 = 全组身份基准
+                    base_ref = _alpha_to_ref(rec["path"])
+                frames_done += 1
+            raw[clip] = paths
+        frames = anim.build_frames(raw, cell, anchor)
+        bank_path = out_dir / f"{aid}_{dir_id}.png"
+        meta = anim.save_bank(frames, bank_path, cell)
+        banks[dir_id] = {**meta, "dir": dir_id,
+                         "dir_name": DIRECTIONS[dir_id]["name"],
+                         "path": str(bank_path), "url": _url_of(bank_path)}
+        if cover is None:
+            cover = out_dir / f"{aid}_cover.png"
+            frames["idle"][0].save(cover)
+        store.append_log(sid, "info",
+                         f"{tag} 朝向「{DIRECTIONS[dir_id]['name']}」"
+                         f"（{spec['idle'] + spec['walk']} 帧）完成")
+
+    if cover is None:
+        raise RuntimeError("动画帧生成失败（无有效帧）")
+    return {
+        "id": aid,
+        "item_id": item.get("id"),
+        "kind": kind, "kind_label": store.STAGE_LABELS[kind],
+        "name": item["name"], "desc": item["desc"],
+        "season": None, "season_name": None,
+        "gender": item.get("gender"),
+        "gender_name": (GENDERS[item["gender"]]["name"]
+                        if item.get("gender") in GENDERS else None),
+        "tier": item.get("tier"), "tier_id": item.get("tier_id"),
+        "usage": None, "usage_name": None, "usage_reason": None, "scene": None,
+        "path": str(cover), "url": _url_of(cover), "seed": None,
+        "size": list(cell), "transparent": {"method": tmode},
+        "tileable": False,
+        "prompt": asset_prompt(s, payload, transparent=tmode != "none"),
+        "quality": {"pass": not reasons, "reasons": reasons[:6],
+                    "metrics": {}, "attempts": 1},
+        "tone": {"score": min(scores) if scores else 0.0,
+                 "threshold": threshold, "pass": not reasons},
+        "structural_fail": bool(reasons),
+        "anim": {
+            "level": spec["id"], "level_name": spec["name"],
+            "cell": list(cell), "anchor": list(anchor),
+            "dirs": spec["dirs"], "mirror": spec["mirror"],
+            "clips": {cid: {"name": CLIPS[cid]["name"], "fps": CLIPS[cid]["fps"],
+                            "count": spec[cid]} for cid in ("idle", "walk")},
+            "banks": banks,
+            "frames_total": frames_done,
+            "view": anim.view_meta(),
+        },
+        "created_at": store.now_iso(),
+    }
+
+
 async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
                          threshold: float, size: tuple[int, int], tmode: str,
                          master_path: str, seed: int = -1,
-                         negative: str | None = None) -> dict:
+                         negative: str | None = None,
+                         extra_refs: list[str] | None = None) -> dict:
     """生成 + 质量守门 + 自动重试 + 透明底后处理，产出素材记录。
 
     守门规则：黑图/无结构/低熵/跑色任一不达标 → 换 seed 重试；
@@ -529,7 +661,8 @@ async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
         if _canceled(sid):
             raise _StageCanceled()
         rec = await _run_job(prompt=prompt, negative=neg,
-                             width=w, height=h, seed=seed, refs=[master_path])
+                             width=w, height=h, seed=seed,
+                             refs=[master_path] + list(extra_refs or []))
         last_rec, seed = rec, -1          # 首次用调用方 seed，后续换新 seed
         last_q = quality.inspect(rec["path"], master_path, threshold=threshold)
         structural = [r for r in last_q["reasons"] if not r.startswith("跑色")]
@@ -644,15 +777,17 @@ _SCENE_HINT: dict[str, str] = {
 
 
 def asset_prompt(s: dict, item: dict, *, transparent: bool = False,
-                 tileable: bool = False) -> str:
+                 tileable: bool = False, anim_tail: str = "") -> str:
     """六类素材统一组装。item: {kind,name,desc,season?,tier_id?,gender?,usage?,scene?}。
 
-    结构：参考图锚点 → 该类固定模板 → 季节/等级/性别/用途修饰 → 项目级补充词 → 收尾。
+    结构：参考图锚点 → 2.5D 45° 视图锁 → 该类固定模板 → 季节/等级/性别/用途修饰
+         → 动画帧修饰（角色/宠物）→ 项目级补充词 → 收尾。
     性别词放在主体最前面（2.1 对前置主体词最敏感）。
     """
     kind = item["kind"]
     anchor = ("Using the reference image strictly as style, color palette and lighting "
               f"anchor (time of day: {get_preset(s['time_preset'])['name']}), ")
+    view = VIEW_LOCK["prompt"] + ", "
     bg = _ISOLATED_BG if transparent else "plain light neutral background"
     gender = GENDERS.get(item.get("gender"), {}).get("prompt", "")
     who = f"{_clean(item['name'])} - {_clean(item['desc'])}"
@@ -664,20 +799,21 @@ def asset_prompt(s: dict, item: dict, *, transparent: bool = False,
                    if item.get("season") else "")
                 + "full detailed environment, "
                 + _SCENE_HINT.get(usage, _SCENE_HINT["battle"]))
+        view = ""                      # 场景自带的取景词已经含机位，不再叠 iso 相机
     elif kind == "character":
-        body = (f"full body character design, single character, "
-                f"{gender + ', ' if gender else ''}front view, "
-                f"standing pose, whole body visible: {who}, {bg}, centered")
+        body = (f"full body character sprite, single character, "
+                f"{gender + ', ' if gender else ''}"
+                f"standing pose, whole body in frame: {who}, {bg}, centered")
     elif kind == "pet":
-        body = ("cute game pet companion creature design, full body, side-front view: "
+        body = ("cute game pet companion creature sprite, full body: "
                 f"{who}, {bg}, centered")
     elif kind == "weapon":
         tier = WEAPON_TIERS.get(item.get("tier_id"))
-        body = ("game weapon design, single weapon, centered, three-quarter view: "
+        body = ("game weapon design, single weapon, centered: "
                 f"{who}, " + (f"{tier['prompt']} quality tier, " if tier else "") + bg)
     elif kind == "building":
         body = ("game architecture concept art, exterior view: "
-                f"{who}, full structure visible")
+                f"{who}, full structure visible, base sitting on an isometric ground plane")
     else:                                   # monster：等级定体型，场景定环境
         tier = MONSTER_TIERS[monster_tier(item)]
         body = (f"game monster creature design, full body, centered, tier: {tier['name']}, "
@@ -688,14 +824,17 @@ def asset_prompt(s: dict, item: dict, *, transparent: bool = False,
     extra = _clean(prompt_extra(s, kind))          # 项目级补充（该类独有）
     if extra:
         body = f"{body}, {extra}"
-    return f"{anchor}{body}. Keep style, palette and atmosphere identical to the reference"
+    tail = f", {anim_tail}" if anim_tail else ""
+    return f"{anchor}{view}{body}{tail}. Keep style, palette and atmosphere identical to the reference"
 
 
 def asset_negative(s: dict, kind: str) -> str:
-    """负面词 = 通用 + 风格 + 时间背景 + 该类项目级补充。"""
+    """负面词 = 通用 + 2.5D 视图（场景除外，它有自带取景词）+ 风格 + 时间背景 + 该类补充。"""
     style, preset = get_style(s["style"]), get_preset(s["time_preset"])
-    parts = [_COMMON_NEG, style["negative"], preset["negative"],
-             prompt_negative(s, kind)]
+    parts = [_COMMON_NEG]
+    if kind != "scene":
+        parts.append(VIEW_LOCK["negative"])     # 禁掉正面/平视/俯视等破 2.5D 的视角
+    parts += [style["negative"], preset["negative"], prompt_negative(s, kind)]
     return ", ".join(p for p in parts if p)
 
 

@@ -27,12 +27,14 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from . import exporter, pipeline, store, tonecheck
+from . import anim, exporter, pipeline, store, tonecheck
 from .planner import SCALES
 from .presets import (ASSET_KINDS, SEASONS, SEASON_ORDER, TIER_ORDER,
                       WEAPON_TIERS, TIME_PRESETS, GENDERS,
                       MONSTER_TIERS, MONSTER_TIER_ORDER,
-                      SCENE_USAGES, SCENE_USAGE_ORDER, transparent_mode)
+                      SCENE_USAGES, SCENE_USAGE_ORDER, transparent_mode,
+                      ANIM_LEVELS, ANIM_LEVEL_ORDER, ANIM_KINDS, ANIM_DEFAULT_LEVEL,
+                      VIEW_LOCK, DIRECTIONS, CLIPS, anim_spec, anim_frames_of)
 from .styles import STYLE_PRESETS
 
 router = APIRouter(prefix="/gameassets", tags=["gameassets"])
@@ -87,6 +89,8 @@ class PlanOp(BaseModel):
     scene: str | None = Field(None, description="怪物出没的场景名（仅 monster）")
     seasons: list[str] | None = Field(None, description="场景季列表（仅 scene，缺省四季）")
     genders: list[str] | None = Field(None, description="角色性别列表（仅 character：male/female）")
+    anim: str | None = Field(None, description="动画档位（角色/宠物）：off|lite|standard|full，"
+                                              "决定朝向数与站立/行走帧数")
     tileable: bool | None = Field(None, description="兼容旧字段：等价于 usage=tile")
 
 
@@ -102,6 +106,8 @@ class SettingsIn(BaseModel):
     threshold: float | None = Field(None, ge=10, le=120)
     prompts: dict[str, dict] | None = Field(
         None, description='按类提示词补充：{"character": {"extra": "...", "negative": "..."}}')
+    anim_level: str | None = Field(
+        None, description="项目默认动画档位：off|lite|standard|full（角色/宠物）")
 
 
 @router.get("/presets", summary="风格 / 时间背景 / 规模 / 季节 / 性别 / 等级 / 场景用途 预设")
@@ -136,6 +142,21 @@ async def list_presets():
         "genders": [{"id": k, "name": GENDERS[k]["name"]} for k in GENDER_ORDER],
         "class_labels": CLASS_LABELS,
         "class_templates": CLASS_TEMPLATE_HINT,
+        # 2.5D 斜 45° 视图锁 + 动画档位（前端方案编辑器据此出下拉与张数预估）
+        "view": {"id": VIEW_LOCK["id"], "name": VIEW_LOCK["name"],
+                 "cell": list(VIEW_LOCK["cell"]), "anchor": list(VIEW_LOCK["anchor"])},
+        "anim_levels": [{"id": k, "name": ANIM_LEVELS[k]["name"],
+                         "dirs": ANIM_LEVELS[k]["dirs"],
+                         "idle": ANIM_LEVELS[k]["idle"], "walk": ANIM_LEVELS[k]["walk"],
+                         "frames": anim_spec(k)["frames_total"],
+                         "note": ANIM_LEVELS[k]["note"]}
+                        for k in ANIM_LEVEL_ORDER],
+        "anim_kinds": list(ANIM_KINDS),
+        "anim_default": ANIM_DEFAULT_LEVEL,
+        "anim_dirs": [{"id": k, "name": DIRECTIONS[k]["name"],
+                       "short": DIRECTIONS[k]["short"]} for k in DIRECTIONS],
+        "clips": [{"id": k, "name": CLIPS[k]["name"], "fps": CLIPS[k]["fps"],
+                   "frames": len(CLIPS[k]["poses"])} for k in CLIPS],
     }
 
 
@@ -374,6 +395,33 @@ def _scene_usage_fields(op) -> dict:
     return {"usage": uid, "tileable": uid == "tile"}
 
 
+def _anim_payload(am: dict) -> dict:
+    """落库的 anim 元数据 → 运行时/前端要的紧凑结构（图集 URL + 行号）。"""
+    banks = {}
+    for dir_id, b in (am.get("banks") or {}).items():
+        rows = {cid: (b.get("clips") or {}).get(cid, {}).get("row", i)
+                for i, cid in enumerate(("idle", "walk"))}
+        banks[dir_id] = {"url": b.get("url"), "cols": b.get("cols"), "rows": rows}
+    return {"cell": am.get("cell"), "anchor": am.get("anchor"),
+            "dirs": am.get("dirs") or [], "mirror": am.get("mirror") or {},
+            "level": am.get("level"), "level_name": am.get("level_name"),
+            "frames_total": am.get("frames_total"),
+            "clips": {cid: {"name": c.get("name"), "fps": c.get("fps"),
+                            "count": c.get("count")}
+                      for cid, c in (am.get("clips") or {}).items()},
+            "banks": banks}
+
+
+def _anim_fields(op) -> dict:
+    """动画档位（角色/宠物）。空字符串 = 跟项目默认档。"""
+    if op.anim is None:
+        return {}
+    lv = str(op.anim).strip()
+    if lv and lv not in ANIM_LEVELS:
+        raise ValueError(f"未知动画档位：{lv}（可选：{', '.join(ANIM_LEVEL_ORDER)}）")
+    return {"anim_level": lv}
+
+
 def _monster_fields(op, s: dict, base: dict | None = None) -> dict:
     """怪物等级 + 出没场景。场景必须是本项目已有场景名（配属关系不能悬空）。"""
     base = base or {}
@@ -413,6 +461,8 @@ def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
             if kind == "character":
                 g = [x for x in (op.genders or ["male"]) if x in GENDERS]
                 entry["genders"] = g or ["male"]
+            if kind in ANIM_KINDS:
+                entry.update(_anim_fields(op))
             if kind == "monster":
                 entry.update(_monster_fields(op, s))
             entries.append(entry)
@@ -443,6 +493,8 @@ def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
             if kind == "character" and op.genders is not None:
                 g = [x for x in op.genders if x in GENDERS]
                 e["genders"] = g or ["male"]
+            if kind in ANIM_KINDS and op.anim is not None:
+                e.update(_anim_fields(op))
             if kind == "monster" and (op.tier_id is not None or op.scene is not None):
                 e.update(_monster_fields(op, s, base=e))
             entries[op.index] = e
@@ -465,7 +517,8 @@ def _apply_plan_edit(sid: str, s: dict, kind: str, ops: list) -> dict:
                     and prev.get("tier_id") == it.get("tier_id") \
                     and prev.get("gender") == it.get("gender") \
                     and prev.get("usage") == it.get("usage") \
-                    and prev.get("scene") == it.get("scene"):
+                    and prev.get("scene") == it.get("scene") \
+                    and prev.get("anim_level") == it.get("anim_level"):
                 it["status"] = prev["status"]
                 it["score"] = prev.get("score")
         removed = old_names - {it["name"] for it in new_items}
@@ -511,6 +564,11 @@ async def edit_settings(sid: str, body: SettingsIn):
             t["sizes"] = {**(t.get("sizes") or {}), **body.sizes}
         if body.threshold is not None:
             t["threshold"] = body.threshold
+        if body.anim_level is not None:
+            if body.anim_level not in ANIM_LEVELS:
+                raise ValueError(f"未知动画档位：{body.anim_level}"
+                                 f"（可选：{', '.join(ANIM_LEVEL_ORDER)}）")
+            t["anim"] = {**(t.get("anim") or {}), "anim_level": body.anim_level}
         if body.prompts is not None:
             from .presets import CLASS_LABELS
             bad = set(body.prompts) - set(ASSET_KINDS)
@@ -677,10 +735,13 @@ async def playtest_manifest(sid: str, group: int = 0):
         walk = None
 
     async def sprite(a: dict) -> dict:
-        """精灵：该透明的类没有透明版就现场补抠（rembg），失败退回原图。"""
+        """精灵：动画素材直接带图集信息；静态素材缺透明底就现场补抠（rembg）。"""
         out = {"id": a["id"], "name": a["name"], "url": a["url"],
                "gender": a.get("gender_name"), "tier": a.get("tier"),
                "tier_id": a.get("tier_id"), "alpha": False}
+        if a.get("anim"):
+            out.update({"alpha": True, "anim": _anim_payload(a["anim"])})
+            return out
         if transparent_mode(s, a["kind"]) == "none":
             return out
         if "_alpha" not in Path(a["path"]).stem:

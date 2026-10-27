@@ -175,6 +175,121 @@ MONSTER_TIERS: dict[str, dict] = {
 MONSTER_TIER_ORDER = ["minion", "elite", "boss", "worldboss"]
 
 
+# ------------------------------------------------------------
+#  视图锁：全项目统一 2.5D 斜 45°（等距斜视）。
+#
+#  以前每类各画各的视角——角色正面立绘、宠物侧前、场景横版 16:9，
+#  单看都好看，拼进一张画面立刻露馅：人物是平的，地面是斜的，影子对不上。
+#  2.5D 的关键不是「斜」，而是**所有素材共用同一台相机**：
+#  俯角 45°、正交等比、脚底贴地、Q 版三头身（斜视角下头身比太小会糊成一团）。
+#  这一段会拼进所有类的提示词，负面词里禁掉正面/平视/俯视/畸变。
+# ------------------------------------------------------------
+VIEW_LOCK: dict = {
+    "id": "iso45",
+    "name": "2.5D 斜 45°",
+    "prompt": ("2.5D isometric game art, 45-degree top-down camera, slight downward tilt, "
+               "consistent orthographic scale, chibi proportions about 3 heads tall, "
+               "full body visible, feet planted at the bottom of the frame"),
+    "negative": ("front orthographic view, straight-on eye-level view, flat top-down view, "
+                 "fisheye, extreme foreshortening, tilted horizon, cast shadow on background, "
+                 "multiple characters, text, watermark"),
+    # 动画帧统一画布：192 见方，脚底锚点落在 (96,178)——留 14px 给脚部阴影/裙摆
+    "cell": (192, 192),
+    "anchor": (96, 178),
+}
+
+# 八方向：生成 4~8 个基向，左半侧由镜像得到（大话西游/梦幻那套老做法）
+DIRECTIONS: dict[str, dict] = {
+    "s":  {"name": "正面", "short": "S",  "prompt": "facing the camera (south, toward viewer)"},
+    "se": {"name": "右下", "short": "SE", "prompt": ("facing lower-right (southeast), "
+                                                     "three-quarter front view")},
+    "e":  {"name": "右侧", "short": "E",  "prompt": "facing right (east), three-quarter side view"},
+    "ne": {"name": "右上", "short": "NE", "prompt": ("facing upper-right (northeast), "
+                                                     "three-quarter back view")},
+    "n":  {"name": "背面", "short": "N",  "prompt": "facing away from camera (north), full back view"},
+    "nw": {"name": "左上", "short": "NW", "prompt": ("facing upper-left (northwest), "
+                                                     "three-quarter back view")},
+    "w":  {"name": "左侧", "short": "W",  "prompt": "facing left (west), three-quarter side view"},
+    "sw": {"name": "左下", "short": "SW", "prompt": ("facing lower-left (southwest), "
+                                                     "three-quarter front view")},
+}
+
+# 动作：站立（呼吸循环）+ 行走（两拍循环，接触-过渡-接触-过渡）
+CLIPS: dict[str, dict] = {
+    "idle": {
+        "name": "站立", "fps": 6,
+        "poses": ["standing neutral, arms relaxed at sides, weight even",
+                  "slight breath in, chest lifts, shoulders rise a little",
+                  "breath out, shoulders settle back down",
+                  "tiny weight shift, returning to the neutral stance"],
+    },
+    "walk": {
+        "name": "行走", "fps": 10,
+        "poses": ["left foot forward contact, right arm swung forward, body low",
+                  "passing pose, left leg straight under body, right knee lifted",
+                  "right foot forward contact, left arm swung forward, body low",
+                  "passing pose, right leg straight under body, left knee lifted",
+                  "left foot landing again, torso dips slightly",
+                  "right foot landing, torso rises slightly"],
+    },
+}
+
+# 动画档位：决定生成几个朝向、每段几帧——直接决定要烧多少张图，UI 上明码标价
+ANIM_LEVELS: dict[str, dict] = {
+    "off": {
+        "name": "静态单帧", "dirs": [], "mirror": {}, "idle": 0, "walk": 0,
+        "note": "只出一张立绘，不生成动画帧（老项目兼容）",
+    },
+    "lite": {
+        "name": "轻量 · 3 向", "dirs": ["s", "e"],
+        "mirror": {"w": "e"}, "idle": 4, "walk": 6,
+        "note": "正面 + 右侧（左侧镜像），20 张/角色；2.5D 起步价，够走路转个身",
+    },
+    "standard": {
+        "name": "标准 · 5 向", "dirs": ["s", "se", "e", "ne", "n"],
+        "mirror": {"w": "e", "nw": "ne", "sw": "se"}, "idle": 4, "walk": 6,
+        "note": "含斜向与背面，50 张/角色；八向走位不穿帮，实战够用",
+    },
+    "full": {
+        "name": "全向 · 8 向", "dirs": ["s", "se", "e", "ne", "n", "nw", "w", "sw"],
+        "mirror": {}, "idle": 4, "walk": 6,
+        "note": "八向全实拍不镜像，80 张/角色；左右不对称的角色（单边披风/武器）必须选这个",
+    },
+}
+ANIM_LEVEL_ORDER = ["off", "lite", "standard", "full"]
+ANIM_KINDS = ("character", "pet")          # 需要动画帧的类
+ANIM_DEFAULT_LEVEL = "lite"
+
+
+def anim_spec(level_id: str | None) -> dict:
+    """档位 id → 展开的规格（dirs/mirror/帧数/总张数）。未知档位按默认档。"""
+    lid = str(level_id or "").strip()
+    if lid not in ANIM_LEVELS:
+        lid = ANIM_DEFAULT_LEVEL
+    lv = ANIM_LEVELS[lid]
+    total = len(lv["dirs"]) * (lv["idle"] + lv["walk"])
+    return {"id": lid, "name": lv["name"], "dirs": list(lv["dirs"]),
+            "mirror": dict(lv["mirror"]), "idle": lv["idle"], "walk": lv["walk"],
+            "frames_total": total, "note": lv["note"]}
+
+
+def anim_level(s: dict, item: dict | None = None) -> str:
+    """动画档位：条目覆盖 > 项目设置 > 默认档。"""
+    for src in ((item or {}), (s or {}).get("anim") or {}, (s or {})):
+        lid = str((src or {}).get("anim_level") or "").strip()
+        if lid in ANIM_LEVELS:
+            return lid
+    return ANIM_DEFAULT_LEVEL
+
+
+def anim_frames_of(s: dict, kind: str, item: dict | None = None) -> int:
+    """该条目要生成多少张帧图（UI 估算与日志用）。"""
+    if kind not in ANIM_KINDS:
+        return 0
+    return anim_spec(anim_level(s, item))["frames_total"]
+
+
+
 def monster_tier(entry: dict) -> str:
     """方案条目的怪物等级 id（老数据没有就按杂兵）。"""
     tid = str(entry.get("tier_id") or "").strip()
@@ -277,6 +392,7 @@ def build_stage_items(plan: dict, existing: dict[str, list[dict]] | None = None
                     })
             elif kind == "character":
                 gids = entry_genders(entry)
+                lv = str(entry.get("anim_level") or "")
                 for gid in gids:
                     key = f"{idx}:{gid}"
                     old = (old_by_key.get(key)
@@ -286,9 +402,10 @@ def build_stage_items(plan: dict, existing: dict[str, list[dict]] | None = None
                         "id": (old or {}).get("id") or new_id("itm"),
                         "key": key,
                         "name": entry["name"], "desc": entry["desc"],
-                        "gender": gid,
+                        "gender": gid, "anim_level": lv,
+                        "anim_frames": anim_frames_of({}, kind, {"anim_level": lv}),
                         "status": _inherit(old, entry["name"], entry["desc"],
-                                           gender=gid),
+                                           gender=gid, anim_level=lv),
                     })
             else:
                 key = str(idx)
@@ -304,9 +421,14 @@ def build_stage_items(plan: dict, existing: dict[str, list[dict]] | None = None
                 else:
                     item.update({"tier": entry.get("tier"),
                                  "tier_id": entry.get("tier_id")})
+                if kind == "pet":
+                    lv = str(entry.get("anim_level") or "")
+                    item.update({"anim_level": lv,
+                                 "anim_frames": anim_frames_of({}, kind, {"anim_level": lv})})
                 item["status"] = _inherit(old, entry["name"], entry["desc"],
                                           tier_id=item.get("tier_id"),
-                                          scene=item.get("scene"))
+                                          scene=item.get("scene"),
+                                          anim_level=item.get("anim_level"))
                 items.append(item)
         out[kind] = items
     return out
@@ -374,13 +496,15 @@ CLASS_LABELS: dict[str, str] = {
 
 # 给 UI 显示的固定模板摘要（真正的拼装在 pipeline.asset_prompt 里）
 CLASS_TEMPLATE_HINT: dict[str, str] = {
-    "scene": ("环境概念图 · 大全景 · 无角色无文字 · 画幅由「用途」定："
+    "scene": ("2.5D 斜 45° 环境图 · 大全景 · 无角色无文字 · 画幅由「用途」定："
               "16:9 战斗 / 1:1 平铺 / 2:3 竖屏 / 9:4 横幅 / 1:1 等距战场"),
-    "character": "全身立绘 · 单角色 · 正面站姿 · 居中 · 先写性别再写外观",
-    "pet": "宠物伙伴设计 · 全身 · 侧前 45° · 居中",
-    "weapon": "武器设计 · 单件 · 四分之三视角 · 居中 · 可叠加等级词",
-    "building": "建筑外观概念图 · 完整结构可见 · 无内部视角",
-    "monster": ("怪物设计 · 全身 · 居中 · 画幅由「等级」定："
+    "character": ("2.5D 斜 45° · Q 版三头身 · 全身 · 脚底贴地 · 按档位出站立/行走帧"
+                  "（轻量 3 向 20 张 / 标准 5 向 50 张 / 全向 8 向 80 张）"),
+    "pet": ("2.5D 斜 45° · Q 版 · 全身 · 脚底贴地 · 与主角同一台相机 · "
+            "按档位出站立/行走帧"),
+    "weapon": "武器设计 · 单件 · 与角色同一 45° 相机 · 居中 · 可叠加等级词",
+    "building": "建筑外观 · 2.5D 斜 45° · 底面落在等距地面上 · 完整结构可见",
+    "monster": ("怪物设计 · 2.5D 斜 45° · 全身 · 脚底贴地 · 画幅由「等级」定："
                 "杂兵 640 / 精英 768 / 首领 896 / 终局 1024，并写明出没场景"),
 }
 

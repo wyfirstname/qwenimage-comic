@@ -56,7 +56,10 @@ def palette_distance(pa: list[dict], pb: list[dict]) -> float:
     rest = list(range(len(rgb_b)))
     dists = []
     for ra, ga, ba in rgb_a:
-        best_i, best_d = -1, 1 << 30
+        if not rest:                     # 参考色板已配对完（素材色比基准色还多）
+            dists.append(255.0)
+            continue
+        best_i, best_d = rest[0], 1 << 30
         for i in rest:
             rb, gb, bb = rgb_b[i]
             d = (ra - rb) ** 2 + (ga - gb) ** 2 + (ba - bb) ** 2

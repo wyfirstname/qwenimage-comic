@@ -36,8 +36,8 @@ _PLAN_SCHEMA = """{
   "title": "游戏名",
   "synopsis": "两三句世界观",
   "scenes": [{"name": "场景名", "usage": "battle|tile|portrait|banner|iso", "desc": "外观描述，15-40字"}],
-  "characters": [{"name": "角色名", "gender": "男|女|男女", "desc": "外形/服装/气质描述，15-40字"}],
-  "pets": [{"name": "宠物名", "desc": "物种/体型/特征描述，15-40字"}],
+  "characters": [{"name": "角色名", "gender": "男|女|男女", "anim": "轻量|标准|全向", "desc": "外形/服装/气质描述，15-40字"}],
+  "pets": [{"name": "宠物名", "anim": "轻量|标准|全向", "desc": "物种/体型/特征描述，15-40字"}],
   "weapons": [{"name": "武器名", "tier": "普通|精良|史诗|传说", "desc": "形制/材质描述，15-40字"}],
   "buildings": [{"name": "建筑名", "desc": "结构/材质/氛围描述，15-40字"}],
   "monsters": [{"name": "野怪名", "tier": "杂兵|精英|首领|终局", "scene": "出没场景名（必须是上面场景之一）", "desc": "物种/体型/威胁感描述，15-40字"}]
@@ -62,6 +62,14 @@ _TIER_ALIAS = {
     "boss": "boss", "首领": "boss", "BOSS": "boss", "boss怪": "boss", "精英首领": "boss",
     "worldboss": "worldboss", "终局": "worldboss", "世界首领": "worldboss",
     "世界boss": "worldboss", "传说": "worldboss", "终极": "worldboss",
+}
+
+# 动画档位的中文说法（LLM 偶尔会写「需要走路动画」之类，尽量归一到已知档）
+_ANIM_ALIAS = {
+    "off": "off", "静态": "off", "单帧": "off", "不需要动画": "off",
+    "lite": "lite", "轻量": "lite", "3向": "lite", "三向": "lite", "简单动画": "lite",
+    "standard": "standard", "标准": "standard", "5向": "standard", "五向": "standard",
+    "full": "full", "全向": "full", "8向": "full", "八向": "full", "完整动画": "full",
 }
 
 
@@ -270,6 +278,10 @@ def _normalize(plan: dict, scale: dict) -> dict:
                 entry["genders"] = _parse_genders(it, name)
                 entry["gender_label"] = "/".join(
                     {"male": "男", "female": "女"}[g] for g in entry["genders"])
+            if kind in ("characters", "pets"):
+                # 动画档位：留空 = 跟项目设置（默认轻量档）；模型给了就归一
+                lv = str(it.get("anim") or it.get("anim_level") or "").strip()
+                entry["anim_level"] = _resolve(_ANIM_ALIAS, lv, "") if lv else ""
             if kind == "weapons":
                 tier = str(it.get("tier") or "普通")
                 tier_id = {"普通": "common", "精良": "fine",

@@ -212,6 +212,20 @@
   .item-row .it-acts button { border: 1px solid var(--border, #ddd); background: none; border-radius: 6px;
                               padding: 2px 8px; font-size: 11.5px; cursor: pointer; color: var(--primary, #3b6ef5); }
   .gender-chip { font-size: 11px; padding: 1px 7px; border-radius: 12px; }
+  .anim-chip { font-size: 11px; padding: 1px 7px; border-radius: 12px; cursor: pointer;
+    background: rgba(24,160,120,.14); color: #177a5c; border: 1px solid rgba(24,160,120,.28); }
+  .anim-chip:hover { background: rgba(24,160,120,.26); }
+  .anim-modal { max-width: 720px; }
+  .anim-wrap { display: flex; gap: 16px; flex-wrap: wrap; }
+  .anim-stage { background: #1b1e26; border-radius: 10px; padding: 8px;
+    display: flex; align-items: center; justify-content: center; }
+  .anim-ctl { display: flex; flex-direction: column; gap: 10px; flex: 1; min-width: 220px; }
+  .anim-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12.5px; }
+  .anim-dir { padding: 4px 10px; border-radius: 8px; border: 1px solid var(--border, #e3e3e3);
+    background: #fff; cursor: pointer; font-size: 12px; }
+  .anim-dir.on { background: var(--primary, #3b6ef5); color: #fff; border-color: transparent; }
+  .anim-dir:disabled { opacity: .35; cursor: not-allowed; }
+  .anim-meta { font-size: 12px; color: #7a7f8a; line-height: 1.7; }
   .gender-male { background: rgba(59,110,245,.12); color: #2b5ecf; }
   .gender-female { background: rgba(232,90,123,.14); color: #c3386b; }
 
@@ -422,6 +436,28 @@
   </div>
 </div>
 
+<div class="modal-mask" id="animMask" onclick="if(event.target===this)UI.closeAnim()">
+  <div class="modal anim-modal">
+    <h3 id="animTitle">动画预览</h3>
+    <p class="muted2" id="animSub"></p>
+    <div class="anim-wrap">
+      <div class="anim-stage"><canvas id="animCv" width="320" height="320"></canvas></div>
+      <div class="anim-ctl">
+        <div class="anim-row" id="animClips"></div>
+        <div class="anim-row" id="animDirs"></div>
+        <div class="anim-row">
+          <button class="btn btn-ghost" id="animPlay">暂停</button>
+          <span class="anim-meta" id="animCounter"></span>
+        </div>
+        <div class="anim-meta" id="animInfo"></div>
+      </div>
+    </div>
+    <div class="modal-foot" style="margin-top:12px">
+      <button class="btn btn-ghost" id="animClose">关闭</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
 
 <script>
@@ -470,6 +506,10 @@
     state.genders = pr.genders || [];
     state.sceneUsages = pr.scene_usages || [];
     state.monsterTiers = pr.monster_tiers || [];
+    state.animLevels = pr.anim_levels || [];
+    state.animDefault = pr.anim_default || 'lite';
+    state.animDirs = pr.anim_dirs || [];
+    state.view = pr.view || null;
     state.sets = st.items;
     renderCards($('styleCards'), state.styles);
     renderCards($('timeCards'), state.times, 2);       // 默认黄昏
@@ -872,6 +912,8 @@
       a.gender_name ? `<span class="gender-chip gender-${a.gender}">${a.gender_name}</span>` : '',
       a.tier ? `<span class="tier-chip tier-${a.tier_id}">${a.tier}</span>` : '',
       a.scene ? `<span class="zone-chip" title="出没场景">${esc(a.scene)}</span>` : '',
+      a.anim ? `<span class="anim-chip" title="点开看动画（站立/行走 × 各朝向）"
+        onclick="UI.openAnim('${a.id}')">▶ 动画 ${a.anim.dirs.length} 向 · ${a.anim.frames_total} 帧</span>` : '',
       a.size ? `<span class="size-chip">${a.size[0]}×${a.size[1]}</span>` : '',
       a.transparent ? `<span class="tr-chip">透明${a.transparent.method === 'rembg' ? '·AI' : ''}</span>` : '',
       q.pass === false ? `<span class="q-chip q-fail" title="${esc((q.reasons || []).join('；'))}">⚠ ${(q.reasons || [''])[0]?.split('（')[0] || '质量'}</span>`
@@ -1018,9 +1060,31 @@
   const PLAN_TIP = {
     scene: '画幅由「用途」决定——选战斗背景 / 可平铺 / 竖屏 / 横幅 / 等距战场，尺寸与理由在下面直接显示。',
     monster: '怪物按等级分档（画幅随等级走），每只必须挂在某个场景下——这就是「场景 ↔ 怪物」的配属关系。',
-    character: '勾两个性别 = 同名出男女两版；不勾默认男。',
+    character: '勾两个性别 = 同名出男女两版；动画档位决定朝向数与站立/行走帧数（张数直接标在下面）。',
+    pet: '动画档位同上：宠物也走站立/行走帧，与主角同一台 2.5D 45° 相机。',
     weapon: '等级词会进提示词（材质 + 光效），画幅固定 768×768。',
   };
+
+  // 动画档位下拉：直接标出「几个朝向 × 多少帧 = 多少张」
+  function animSelectHtml(level) {
+    const cur = level || '';
+    return `<select class="pe-anim" title="动画档位（决定朝向数与帧数）">
+        <option value="" ${cur === '' ? 'selected' : ''}>动画：跟项目默认（${
+          (state.animLevels.find(l => l.id === state.animDefault) || {}).name || '轻量 · 3 向'}）</option>
+        ${(state.animLevels || []).map(l =>
+          `<option value="${l.id}" ${l.id === cur ? 'selected' : ''}>${esc(l.name)} · ${l.frames} 张</option>`).join('')}
+      </select>`;
+  }
+
+  function animHintHtml(level) {
+    const lid = level || state.animDefault;
+    const l = (state.animLevels || []).find(x => x.id === lid);
+    if (!l) return '';
+    return lid === 'off'
+      ? '<b>静态单帧</b> —— 只出一张立绘，不生成动画帧'
+      : `<b>${esc(l.name)}</b> · ${l.dirs.length} 个朝向 × (站立 ${l.idle} + 行走 ${l.walk})`
+        + ` = <b>${l.frames} 张</b> — ${esc(l.note)}`;
+  }
 
   // 描述框：随内容长高，最少 3 行（原来单行 input 写不下 40 字）
   function growDesc(ta) {
@@ -1051,12 +1115,16 @@
       const gs = e.genders || ['male'];
       ctl = `<span class="season-boxes">性别：${[['male', '男'], ['female', '女']].map(([g, n]) =>
           `<label><input type="checkbox" class="pe-gender" value="${g}"
-            ${gs.includes(g) ? 'checked' : ''}>${n}</label>`).join('')}</span>`;
-      foot = '<span class="er-hint">勾两个 = 同名出男女两版（两条素材，提示词各自带性别词）</span>';
+            ${gs.includes(g) ? 'checked' : ''}>${n}</label>`).join('')}</span>`
+        + animSelectHtml(e.anim_level);
+      foot = '<span class="er-hint hint-live"></span>';
     } else if (kind === 'weapon') {
       ctl = `<select class="pe-tier" title="武器等级">${WEAPON_TIERS.map(([t, n]) =>
           `<option value="${t}" ${e.tier_id === t ? 'selected' : ''}>${n}</option>`).join('')}</select>`;
       foot = '<span class="er-hint">等级影响材质与光效强度，画幅固定 768×768</span>';
+    } else if (kind === 'pet') {
+      ctl = animSelectHtml(e.anim_level);
+      foot = '<span class="er-hint hint-live"></span>';
     } else {
       foot = `<span class="er-hint">画幅 ${kind === 'building' ? '896×672' : '768×768'}</span>`;
     }
@@ -1081,7 +1149,7 @@
       ta.oninput = sync;
       sync();
       row.querySelector('.pe-del').onclick = () => row.remove();
-      row.querySelectorAll('.pe-usage, .pe-mtier').forEach(sel =>
+      row.querySelectorAll('.pe-usage, .pe-mtier, .pe-anim').forEach(sel =>
         sel.onchange = () => rowHint(kind, row));
       rowHint(kind, row);
     });
@@ -1098,6 +1166,8 @@
       const t = mtierMeta(row.querySelector('.pe-mtier')?.value);
       box.innerHTML = t ? `<b>${esc(t.name)}</b> · 画幅 <b>${t.size[0]}×${t.size[1]}</b>`
         + ` — ${esc(t.note)}` : '';
+    } else if (kind === 'character' || kind === 'pet') {
+      box.innerHTML = animHintHtml(row.querySelector('.pe-anim')?.value);
     }
   }
 
@@ -1145,6 +1215,8 @@
         scene: row.querySelector('.pe-zone')?.value || null,
         seasons: picked(row, '.pe-season:checked'),
         genders: picked(row, '.pe-gender:checked'),
+        anim: row.querySelector('.pe-anim')
+          ? row.querySelector('.pe-anim').value : null,
       };
       if (row.dataset.i === 'new') ops.push({ action: 'add', ...body });
       else ops.push({ action: 'update', index: parseInt(row.dataset.i, 10), ...body });
@@ -1421,6 +1493,141 @@
          </table>`;
   }
   function closeSim() { $('simMask').classList.remove('show'); }
+
+  // ---- 动画预览：按图集切片播放站立/行走，方向可切、镜像自动翻转 ----
+  const animState = { aid: null, meta: null, clip: 'walk', dir: 's', bankDir: 's',
+                      flip: false, frame: 0, playing: true, last: 0, raf: 0, img: null };
+
+  function animAssetById(aid) {
+    return (state.detail?.assets || []).find(a => a.id === aid) || null;
+  }
+
+  function drawAnim() {
+    const cv = $('animCv'), meta = animState.meta;
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!meta || !animState.img) return;
+    const [cw, ch] = meta.cell;
+    const bank = (meta.banks || {})[animState.bankDir] || {};
+    const clip = (meta.clips || {})[animState.clip] || {};
+    const count = clip.count || 1;
+    const row = ((bank.clips || {})[animState.clip] || {}).row || 0;
+    const col = animState.frame % count;
+    const scale = Math.min(cv.width / cw, cv.height / ch) * 0.94;
+    const dw = cw * scale, dh = ch * scale;
+    const dx = (cv.width - dw) / 2, dy = (cv.height - dh) / 2;
+    ctx.save();
+    ctx.translate(dx + (animState.flip ? dw : 0), dy);
+    if (animState.flip) ctx.scale(-1, 1);
+    ctx.drawImage(animState.img, col * cw, row * ch, cw, ch, 0, 0, dw, dh);
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,.16)';       // 脚底锚点参考线
+    ctx.beginPath();
+    const ay = dy + (meta.anchor?.[1] || ch) * scale;
+    ctx.moveTo(dx, ay); ctx.lineTo(dx + dw, ay); ctx.stroke();
+    $('animCounter').textContent =
+      `${clip.name || animState.clip} · 第 ${col + 1}/${count} 帧 · ${clip.fps} fps`;
+  }
+
+  function animTick(ts) {
+    if (!animState.meta) return;
+    const clip = (animState.meta.clips || {})[animState.clip] || {};
+    const fps = clip.fps || 8, count = clip.count || 1;
+    if (!animState.last) animState.last = ts;
+    if (animState.playing && ts - animState.last >= 1000 / fps) {
+      animState.last = ts;
+      animState.frame = (animState.frame + 1) % count;
+      drawAnim();
+    }
+    animState.raf = requestAnimationFrame(animTick);
+  }
+
+  function loadAnimSheet() {
+    const bank = (animState.meta?.banks || {})[animState.bankDir];
+    if (!bank) return;
+    const img = new Image();
+    img.onload = () => { animState.img = img; drawAnim(); };
+    img.src = bank.url;
+  }
+
+  function renderAnimDirs() {
+    const meta = animState.meta; if (!meta) return;
+    const mirror = meta.mirror || {};
+    const order = ['s', 'se', 'e', 'ne', 'n', 'nw', 'w', 'sw'];
+    $('animDirs').innerHTML = '<span class="muted2" style="font-size:12px">朝向</span>'
+      + order.map(d => {
+          const own = (meta.dirs || []).includes(d);
+          const mir = mirror[d];
+          const name = (state.animDirs.find(x => x.id === d) || {}).name || d.toUpperCase();
+          return `<button class="anim-dir ${d === animState.dir ? 'on' : ''}"
+            data-dir="${d}" ${(own || mir) ? '' : 'disabled'}
+            title="${own ? '实拍方向' : mir ? `镜像自 ${mir.toUpperCase()}` : '该档位未生成'}">${name}</button>`;
+        }).join('');
+    $('animDirs').querySelectorAll('.anim-dir').forEach(b =>
+      b.onclick = () => animSetDir(b.dataset.dir));
+  }
+
+  function renderAnimClips() {
+    const meta = animState.meta; if (!meta) return;
+    $('animClips').innerHTML = '<span class="muted2" style="font-size:12px">动作</span>'
+      + ['idle', 'walk'].map(c => {
+          const info = (meta.clips || {})[c] || {};
+          if (!info.count) return '';
+          return `<button class="anim-dir ${c === animState.clip ? 'on' : ''}" data-clip="${c}">`
+            + `${esc(info.name || c)} ${info.count} 帧</button>`;
+        }).join('');
+    $('animClips').querySelectorAll('.anim-dir').forEach(b =>
+      b.onclick = () => { animState.clip = b.dataset.clip; animState.frame = 0;
+                          renderAnimClips(); drawAnim(); });
+  }
+
+  function animSetDir(dir) {
+    const meta = animState.meta; if (!meta) return;
+    const mirror = meta.mirror || {};
+    if ((meta.dirs || []).includes(dir)) { animState.bankDir = dir; animState.flip = false; }
+    else if (mirror[dir] && (meta.dirs || []).includes(mirror[dir])) {
+      animState.bankDir = mirror[dir]; animState.flip = true;
+    } else return;
+    animState.dir = dir; animState.frame = 0;
+    loadAnimSheet(); renderAnimDirs();
+  }
+
+  function openAnim(aid) {
+    const a = animAssetById(aid);
+    if (!a?.anim) return toast('这条素材没有动画帧（档位为静态单帧）');
+    const am = a.anim;
+    animState.aid = aid; animState.meta = am; animState.img = null;
+    animState.clip = (am.clips.walk || {}).count ? 'walk' : 'idle';
+    animState.playing = true; animState.frame = 0; animState.last = 0;
+    $('animTitle').textContent = `动画预览 · ${a.name}`;
+    $('animSub').textContent = `${am.level_name} · ${am.dirs.length} 向 · 共 ${am.frames_total} 帧 · 2.5D 斜 45°`;
+    const mirTxt = Object.entries(am.mirror || {}).map(([k, v]) => k.toUpperCase() + '←' + v.toUpperCase());
+    $('animInfo').innerHTML =
+      `画布 ${am.cell[0]}×${am.cell[1]} · 脚底锚点 ${am.anchor[0]},${am.anchor[1]}<br>`
+      + `站立 ${(am.clips.idle || {}).count || 0} 帧 @${(am.clips.idle || {}).fps}fps · `
+      + `行走 ${(am.clips.walk || {}).count || 0} 帧 @${(am.clips.walk || {}).fps}fps`
+      + (mirTxt.length ? `<br>镜像：${mirTxt.join('、')}` : '');
+    $('animPlay').textContent = '暂停';
+    renderAnimClips(); renderAnimDirs();
+    animSetDir((am.dirs || []).includes('s') ? 's' : (am.dirs || ['s'])[0]);
+    $('animMask').classList.add('show');
+    cancelAnimationFrame(animState.raf);
+    animState.raf = requestAnimationFrame(animTick);
+  }
+
+  function closeAnim() {
+    cancelAnimationFrame(animState.raf);
+    animState.meta = null; animState.raf = 0;
+    $('animMask').classList.remove('show');
+  }
+
+  $('animClose').onclick = closeAnim;
+  $('animPlay').onclick = () => {
+    animState.playing = !animState.playing;
+    animState.last = 0;
+    $('animPlay').textContent = animState.playing ? '暂停' : '播放';
+  };
   $('btnSim').addEventListener('click', () => runSim($('btnSim')));
   $('simRerun').addEventListener('click', () => runSim($('simRerun')));
   $('simClose').onclick = closeSim;
@@ -1459,6 +1666,11 @@
       if (e.key === 'Escape') { closeVar(); closeSet(); closeSim(); }
       return;
     }
+    if ($('animMask').classList.contains('show')) {
+      if (e.key === 'Escape') closeAnim();
+      if (e.key === ' ') { e.preventDefault(); $('animPlay').click(); }
+      return;
+    }
     if (!$('lbMask').classList.contains('show')) return;
     if (e.key === 'Escape') closeLb();
     if (e.key === 'ArrowLeft') lbStep(-1);
@@ -1482,7 +1694,7 @@
   // ================= 对外（onclick 内联用） =================
   window.UI = { openLb, closeLb, openVar, closeVar, commit: commitVariant,
                 rerun, delAsset, rollback, openPlan, closePlan, closeSet,
-                closeSim, atlas };
+                closeSim, openAnim, closeAnim, atlas };
 
   // ================= 工具 =================
   function esc(x) {

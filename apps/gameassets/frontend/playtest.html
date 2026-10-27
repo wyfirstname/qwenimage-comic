@@ -230,7 +230,50 @@ function placeMonsters() {
   });
 }
 
+async function prepAnim(sp, anim) {
+  sp.anim = anim;
+  sp.anchorY = (anim.anchor && anim.anchor[1]) || anim.cell[1];
+  sp.sheets = {};
+  await Promise.all(Object.entries(anim.banks || {}).map(async ([d, b]) => {
+    try { sp.sheets[d] = await loadImg(b.url); } catch (e) { /* 单方向缺图不影响整体 */ }
+  }));
+  return sp;
+}
+
+const DIR8 = ['e', 'se', 's', 'sw', 'w', 'nw', 'n', 'ne'];
+function vecToDir(dx, dy) {
+  if (!dx && !dy) return null;
+  const a = Math.atan2(dy, dx) * 180 / Math.PI;           // 屏幕坐标：+y 向下
+  return DIR8[((Math.round(a / 45) % 8) + 8) % 8];
+}
+function resolveDir(anim, want) {
+  const dirs = anim.dirs || [];
+  if (dirs.includes(want)) return { bank: want, flip: false };
+  const m = (anim.mirror || {})[want];
+  if (m && dirs.includes(m)) return { bank: m, flip: true };
+  return { bank: dirs[0] || 's', flip: false };
+}
+function animFrameFor(sp, want, moving, dt) {
+  const a = sp.anim;
+  const walkOk = ((a.clips.walk || {}).count || 0) > 0;
+  const clip = (moving && walkOk) ? 'walk' : 'idle';
+  if (!sp.fr) sp.fr = { clip, i: 0, t: 0 };
+  if (sp.fr.clip !== clip) { sp.fr.clip = clip; sp.fr.i = 0; sp.fr.t = 0; }
+  const info = a.clips[clip] || {};
+  const fps = info.fps || 8, count = info.count || 1;
+  sp.fr.t += dt;
+  if (sp.fr.t >= 1000 / fps) { sp.fr.t = 0; sp.fr.i = (sp.fr.i + 1) % count; }
+  const { bank, flip } = resolveDir(a, want);
+  const sheet = (sp.sheets || {})[bank];
+  if (!sheet) return null;
+  const row = (((a.banks || {})[bank] || {}).rows || {})[clip] || 0;
+  return { sheet, cell: a.cell, row, col: sp.fr.i % count, flip };
+}
+
 function draw() {
+  const nowTs = performance.now();
+  const dt = state._lastTs ? Math.min(120, nowTs - state._lastTs) : 16;
+  state._lastTs = nowTs;
   ctx.clearRect(0, 0, W, H);
   if (state.sceneImg) {
     ctx.drawImage(state.sceneImg,
@@ -250,33 +293,61 @@ function draw() {
     oc.putImageData(id, 0, 0);
     ctx.drawImage(off, 0, 0, W, H);
   }
-  // 阴影 + 精灵（feet anchor）
-  const drawSprite = (sp, cx, gy, h, flip, label) => {
+  // 阴影 + 精灵（feet anchor）。有动画帧的走图集切片，没有的回落到静态图。
+  const moved = (e, key) => {
+    const gx = e[key] !== undefined ? e[key] : e.x;
+    if (e._px === undefined) { e._px = gx; e._py = e.gy; return false; }
+    const dx = gx - e._px, dy = e.gy - e._py;
+    e._px = gx; e._py = e.gy;
+    const mv = Math.hypot(dx, dy) > 0.6;
+    if (mv) e._dir = vecToDir(dx, dy) || e._dir;
+    return mv;
+  };
+  const drawSprite = (sp, cx, gy, h, flip, label, dirWant, moving) => {
     if (!sp) return;
-    const w = sp.w * h / sp.h;
+    const af = sp.anim ? animFrameFor(sp, dirWant || 's', moving, dt) : null;
+    let dw, dh, ox, oy, mirrored = flip;
+    if (af) {
+      const [cw, ch] = af.cell;
+      const sc = h / (sp.anchorY || ch);
+      dw = cw * sc; dh = ch * sc;
+      ox = cx - dw / 2; oy = gy - (sp.anchorY || ch) * sc;
+      mirrored = af.flip;
+    } else {
+      dw = sp.w * h / sp.h; dh = h;
+      ox = cx - dw / 2; oy = gy - h;
+    }
     ctx.fillStyle = 'rgba(0,0,0,.28)';
     ctx.beginPath();
-    ctx.ellipse(cx, gy - 3, w * 0.32, 9, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.ellipse(cx, gy - 3, Math.min(dw, 220) * 0.30, 9, 0, 0, Math.PI * 2); ctx.fill();
     ctx.save();
-    if (flip) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
-    ctx.drawImage(sp.img, cx - w / 2, gy - h, w, h);
+    if (mirrored) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
+    if (af) {
+      const [cw, ch] = af.cell;
+      ctx.drawImage(af.sheet, af.col * cw, af.row * ch, cw, ch, ox, oy, dw, dh);
+    } else {
+      ctx.drawImage(sp.img, ox, oy, dw, dh);
+    }
     ctx.restore();
     if (label) {
       ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(0,0,0,.55)';
       const tw = ctx.measureText(label).width;
-      ctx.fillRect(cx - tw / 2 - 6, gy - h - 24, tw + 12, 18);
-      ctx.fillStyle = '#fff'; ctx.fillText(label, cx, gy - h - 11);
+      ctx.fillRect(cx - tw / 2 - 6, gy - Math.max(dh, h) - 24, tw + 12, 18);
+      ctx.fillStyle = '#fff'; ctx.fillText(label, cx, gy - Math.max(dh, h) - 11);
     }
   };
+  const pMove = state.player ? moved(state.player, 'x') : false;
+  const pDir = state.player?._dir || 's';
   drawSprite(state.pet?.spr, (state.player?.x || W/2) + 95, state.player?.gy || H*0.93,
-             PET_H, true);
+             PET_H, true, null, pDir, pMove);
   for (const m of state.monsters)
     drawSprite(m.spr, m.cx, m.gy, m.h, m.flip,
-               `${m.name}·${m.tier || '野怪'}${m.reached ? ' ✓' : (m.unreachable ? ' ✗不可达' : '')}`);
+               `${m.name}·${m.tier || '野怪'}${m.reached ? ' ✓' : (m.unreachable ? ' ✗不可达' : '')}`,
+               's', false);
   if (state.player)
     drawSprite(state.player.spr, state.player.x, state.player.gy, PLAYER_H,
-               false, `${state.player.name}`);
+               false, `${state.player.name}`, pDir, pMove);
   requestAnimationFrame(draw);
 }
 
@@ -487,6 +558,7 @@ async function boot() {
     setMsg('准备精灵（缺透明底的会现场补抠，首次稍慢）…');
     const prepAll = async (list) => Promise.all(list.filter(Boolean).map(async (x) => {
       try { x.spr = await prepSprite(x.url); } catch { x.spr = null; }
+      if (x.spr && x.anim) { try { await prepAnim(x.spr, x.anim); } catch {} }
       return x;
     }));
     await prepAll([man.player, man.pet, ...man.monsters]);
