@@ -105,6 +105,61 @@ def save_bank(frames: dict[str, list[Image.Image]], dst: Path,
     return {"file": dst.name, "size": list(sheet.size), **layout}
 
 
+# ------------------------------------------------------------
+#  经典整表（11.1）：对标大话西游走路表的单张形态——
+#  一行一个朝向（下→右下→右→右上→上→左上→左→左下）、一列一步态帧，
+#  透明底。各方向图集里把行走行 cell 切回来重排；档位没实拍的镜像向
+#  （w/nw/sw）从源向水平翻转填入，与运行时镜像像素级等价。
+# ------------------------------------------------------------
+CLASSIC_ORDER = ["s", "se", "e", "ne", "n", "nw", "w", "sw"]
+
+
+def classic_sheet(am: dict, out_dir: Path, stem: str) -> tuple[Path | None, dict]:
+    """把动画记录（anim 元数据）重排成经典整表。返回 (png 路径或 None, 元数据)。"""
+    cw, ch = (list(am.get("cell") or VIEW_LOCK["cell"]) + [192, 192])[:2]
+    banks, mirror = am.get("banks") or {}, am.get("mirror") or {}
+    count = int(((am.get("clips") or {}).get("walk") or {}).get("count") or 0)
+    if not banks or not count:
+        return None, {"reason": "no walk frames"}
+    rows, used = [], []
+    for d in CLASSIC_ORDER:
+        src = d if d in banks else mirror.get(d)
+        bank = banks.get(src or "")
+        if not bank:
+            continue
+        bp = Path(bank.get("path") or "")
+        if not bp.is_absolute():
+            bp = Path(".") / bp
+        if not bp.exists():
+            continue
+        row = ((bank.get("clips") or {}).get("walk") or {}).get("row")
+        if row is None:
+            continue
+        sheet = Image.open(bp).convert("RGBA")
+        cols = max(1, sheet.width // cw)
+        cells = []
+        for c in range(count):
+            cc = c % cols                       # 该向列数不足时循环补位
+            im = sheet.crop((cc * cw, row * ch, (cc + 1) * cw, (row + 1) * ch))
+            if src != d:
+                im = im.transpose(Image.FLIP_LEFT_RIGHT)
+            cells.append(im)
+        rows.append(cells)
+        used.append({"dir": d, "from": src, "mirrored": src != d})
+    if not rows:
+        return None, {"reason": "no bank files"}
+    cols = max(len(cs) for cs in rows)
+    out = Image.new("RGBA", (cw * cols, ch * len(rows)), (0, 0, 0, 0))
+    for r, cells in enumerate(rows):
+        for c, im in enumerate(cells):
+            out.alpha_composite(im, (c * cw, r * ch))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    png = out_dir / f"{stem}_classic.png"
+    out.save(png)
+    return png, {"rows": len(rows), "cols": cols, "cell": [cw, ch],
+                 "dirs": [u["dir"] for u in used], "used": used}
+
+
 def clip_meta() -> dict:
     return {cid: {"name": c["name"], "fps": c["fps"], "poses": len(c["poses"])}
             for cid, c in CLIPS.items()}

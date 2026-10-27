@@ -214,7 +214,8 @@ DIRECTIONS: dict[str, dict] = {
                                                      "three-quarter front view")},
 }
 
-# 动作：站立（呼吸循环）+ 行走（两拍循环，接触-过渡-接触-过渡）
+# 动作：站立（呼吸循环）+ 行走（八帧完整循环：接触-沉降-过渡-高点 × 两条腿）。
+# 八帧是大话西游那代表准走路表的帧数——六帧步态会明显跳步，八帧才圆得上。
 CLIPS: dict[str, dict] = {
     "idle": {
         "name": "站立", "fps": 6,
@@ -225,12 +226,14 @@ CLIPS: dict[str, dict] = {
     },
     "walk": {
         "name": "行走", "fps": 10,
-        "poses": ["left foot forward contact, right arm swung forward, body low",
-                  "passing pose, left leg straight under body, right knee lifted",
-                  "right foot forward contact, left arm swung forward, body low",
-                  "passing pose, right leg straight under body, left knee lifted",
-                  "left foot landing again, torso dips slightly",
-                  "right foot landing, torso rises slightly"],
+        "poses": ["left foot forward contact, right arm swung forward, body lowest",
+                  "double support, weight settling onto the left foot, slight recoil",
+                  "passing pose, right leg lifting off, body rising",
+                  "right leg swinging through under the body, highest point of the step",
+                  "right foot forward contact, left arm swung forward, body lowest",
+                  "double support, weight settling onto the right foot, slight recoil",
+                  "passing pose, left leg lifting off, body rising",
+                  "left leg swinging through under the body, highest point of the step"],
     },
 }
 
@@ -242,18 +245,18 @@ ANIM_LEVELS: dict[str, dict] = {
     },
     "lite": {
         "name": "轻量 · 3 向", "dirs": ["s", "e"],
-        "mirror": {"w": "e"}, "idle": 4, "walk": 6,
-        "note": "正面 + 右侧（左侧镜像），20 张/角色；2.5D 起步价，够走路转个身",
+        "mirror": {"w": "e"}, "idle": 4, "walk": 8,
+        "note": "正面 + 右侧（左侧镜像），24 张/角色；2.5D 起步价，够走路转个身",
     },
     "standard": {
         "name": "标准 · 5 向", "dirs": ["s", "se", "e", "ne", "n"],
-        "mirror": {"w": "e", "nw": "ne", "sw": "se"}, "idle": 4, "walk": 6,
-        "note": "含斜向与背面，50 张/角色；八向走位不穿帮，实战够用",
+        "mirror": {"w": "e", "nw": "ne", "sw": "se"}, "idle": 4, "walk": 8,
+        "note": "含斜向与背面，60 张/角色；八向走位不穿帮，实战够用",
     },
     "full": {
         "name": "全向 · 8 向", "dirs": ["s", "se", "e", "ne", "n", "nw", "w", "sw"],
-        "mirror": {}, "idle": 4, "walk": 6,
-        "note": "八向全实拍不镜像，80 张/角色；左右不对称的角色（单边披风/武器）必须选这个",
+        "mirror": {}, "idle": 4, "walk": 8,
+        "note": "八向全实拍不镜像，96 张/角色；左右不对称的角色（单边披风/武器）必须选这个",
     },
 }
 ANIM_LEVEL_ORDER = ["off", "lite", "standard", "full"]
@@ -499,7 +502,8 @@ CLASS_TEMPLATE_HINT: dict[str, str] = {
     "scene": ("2.5D 斜 45° 环境图 · 大全景 · 无角色无文字 · 画幅由「用途」定："
               "16:9 战斗 / 1:1 平铺 / 2:3 竖屏 / 9:4 横幅 / 1:1 等距战场"),
     "character": ("2.5D 斜 45° · Q 版三头身 · 全身 · 脚底贴地 · 按档位出站立/行走帧"
-                  "（轻量 3 向 20 张 / 标准 5 向 50 张 / 全向 8 向 80 张）"),
+                  "（轻量 3 向 24 张 / 标准 5 向 60 张 / 全向 8 向 96 张，"
+                  "行走 8 帧完整循环，可导出经典整表）"),
     "pet": ("2.5D 斜 45° · Q 版 · 全身 · 脚底贴地 · 与主角同一台相机 · "
             "按档位出站立/行走帧"),
     "weapon": "武器设计 · 单件 · 与角色同一 45° 相机 · 居中 · 可叠加等级词",

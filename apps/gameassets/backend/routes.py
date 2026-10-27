@@ -14,6 +14,7 @@
     GET  /sets/{sid}/export             一键导出 ZIP（可带引擎导入清单）
     GET  /sets/{sid}/atlas/{kind}       图集拼版（sprite sheet）
     GET  /sets/{sid}/contact-sheet      全项目接触表（棋盘格审阅图，11.0）
+    GET  /sets/{sid}/classic-sheet/{aid} 经典走路整表：行=朝向 列=步态帧（11.1）
     PATCH /sets/{sid}/settings          透明底方式 / 画幅 / 阈值 / 美术方向契约 按项目覆盖
     POST /sets/{sid}/simulate           仿真测试：逐张体检 + 合成模拟游戏画面
 
@@ -647,6 +648,31 @@ async def contact_sheet(sid: str, cell: int = 192, cols: int = 4):
         raise HTTPException(status_code=409, detail={"code": "EMPTY", "message": str(exc)})
     store.append_log(sid, "info", "已生成全项目接触表（棋盘格审阅图）")
     return {"url": exporter.export_url(png)}
+
+
+@router.get("/sets/{sid}/classic-sheet/{aid}",
+            summary="经典走路整表：一行一个朝向 × 一列一步态帧（大话西游式，11.1）")
+async def classic_sheet(sid: str, aid: str):
+    s = store.get_set(sid)
+    if not s:
+        raise HTTPException(status_code=404,
+                            detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    a = next((x for x in s["assets"] if x["id"] == aid), None)
+    if not a or not a.get("anim"):
+        raise HTTPException(status_code=404,
+                            detail={"code": "NO_ANIM",
+                                    "message": "该素材没有动画帧（档位为静态单帧）"})
+    am = a["anim"]
+    banks = am.get("banks") or {}
+    if not banks:
+        raise HTTPException(status_code=409,
+                            detail={"code": "EMPTY", "message": "动画帧尚未生成"})
+    out_dir = Path(next(iter(banks.values()))["path"]).parent
+    png, meta = anim.classic_sheet(am, out_dir, a["id"])
+    if not png:
+        raise HTTPException(status_code=409,
+                            detail={"code": "EMPTY", "message": "行走帧不完整，无法拼整表"})
+    return {"url": exporter.export_url(png), "meta": meta}
 
 
 @router.post("/sets/{sid}/simulate", summary="仿真测试：逐张体检 + 按场景合成模拟游戏画面（同步，秒级）")
