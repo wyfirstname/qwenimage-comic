@@ -519,18 +519,11 @@ curl -X POST "http://127.0.0.1:8000/api/v1/system/recover?hard=true"
 
 ## 支持作者 💗
 
-如果这个项目帮到了你，欢迎请作者喝杯咖啡 ☕ —— 也欢迎**扫码进群交流**：
-出图玩法 / 模型踩坑 / 功能建议，群里聊得更快。二维码有时效，若已过期，
-请先关注下方公众号回复「进群」获取最新入口。
+如果这个项目帮到了你，欢迎请作者喝杯咖啡 ☕
 
 <div align="center">
   <table>
     <tr>
-      <td align="center">
-        <img src="assets/group-chat.jpg" alt="微信交流群二维码" width="200"><br>
-        <sub><b>微信交流群</b> · 扫码进群，一起交流本地 AI 出图</sub><br>
-        <sub>（群二维码有 7 天时效，过期请通过公众号获取新群）</sub>
-      </td>
       <td align="center">
         <img src="assets/juanzeng.png" alt="微信赞赏码" width="230"><br>
         <sub><b>微信赞赏</b> · 金额随意，您的支持是持续更新的动力</sub>
