@@ -214,8 +214,10 @@ DIRECTIONS: dict[str, dict] = {
                                                      "three-quarter front view")},
 }
 
-# 动作：站立（呼吸循环）+ 行走（八帧完整循环：接触-沉降-过渡-高点 × 两条腿）。
-# 八帧是大话西游那代表准走路表的帧数——六帧步态会明显跳步，八帧才圆得上。
+# 动作：站立（呼吸循环）+ 行走（八帧）+ 奔跑（八帧）。
+# 主角与宠物共用这一套三段 clip——同一台相机、同一 cell、同一锚点，
+# 引擎侧只要按 clip 切行就能播。八帧是大话西游那代表准帧数，
+# 六帧步态会明显跳步，八帧才圆得上；奔跑多两拍滞空。
 CLIPS: dict[str, dict] = {
     "idle": {
         "name": "站立", "fps": 6,
@@ -235,28 +237,44 @@ CLIPS: dict[str, dict] = {
                   "passing pose, left leg lifting off, body rising",
                   "left leg swinging through under the body, highest point of the step"],
     },
+    "run": {
+        "name": "奔跑", "fps": 14,
+        "poses": ["left foot strike contact, torso leaning forward, arms pumping hard",
+                  "left leg absorbing impact, knee deeply bent, body at its lowest",
+                  "push off the left foot, right knee driving forward, body rising",
+                  "airborne, both feet off the ground, legs scissored wide",
+                  "right foot strike contact, torso leaning forward, opposite arm forward",
+                  "right leg absorbing impact, knee deeply bent, body at its lowest",
+                  "push off the right foot, left knee driving forward, body rising",
+                  "airborne, both feet off the ground, legs scissored the other way"],
+    },
 }
+CLIP_ORDER = ["idle", "walk", "run"]
 
-# 动画档位：决定生成几个朝向、每段几帧——直接决定要烧多少张图，UI 上明码标价
+# ------------------------------------------------------------
+#  动画档位：决定生成几个朝向、每段几帧——直接决定要烧多少张图，UI 上明码标价。
+#  三段（站立 4 / 行走 8 / 奔跑 8 = 每向 20 帧）是主角与宠物的标配；
+#  off 档仍可回到「只出一张立绘」的老行为。
+# ------------------------------------------------------------
 ANIM_LEVELS: dict[str, dict] = {
     "off": {
-        "name": "静态单帧", "dirs": [], "mirror": {}, "idle": 0, "walk": 0,
+        "name": "静态单帧", "dirs": [], "mirror": {}, "idle": 0, "walk": 0, "run": 0,
         "note": "只出一张立绘，不生成动画帧（老项目兼容）",
     },
     "lite": {
         "name": "轻量 · 3 向", "dirs": ["s", "e"],
-        "mirror": {"w": "e"}, "idle": 4, "walk": 8,
-        "note": "正面 + 右侧（左侧镜像），24 张/角色；2.5D 起步价，够走路转个身",
+        "mirror": {"w": "e"}, "idle": 4, "walk": 8, "run": 8,
+        "note": "正面 + 右侧（左侧镜像），40 张/角色；2.5D 起步价，站立/走/跑齐",
     },
     "standard": {
         "name": "标准 · 5 向", "dirs": ["s", "se", "e", "ne", "n"],
-        "mirror": {"w": "e", "nw": "ne", "sw": "se"}, "idle": 4, "walk": 8,
-        "note": "含斜向与背面，60 张/角色；八向走位不穿帮，实战够用",
+        "mirror": {"w": "e", "nw": "ne", "sw": "se"}, "idle": 4, "walk": 8, "run": 8,
+        "note": "含斜向与背面，100 张/角色；八向走位不穿帮，实战够用",
     },
     "full": {
         "name": "全向 · 8 向", "dirs": ["s", "se", "e", "ne", "n", "nw", "w", "sw"],
-        "mirror": {}, "idle": 4, "walk": 8,
-        "note": "八向全实拍不镜像，96 张/角色；左右不对称的角色（单边披风/武器）必须选这个",
+        "mirror": {}, "idle": 4, "walk": 8, "run": 8,
+        "note": "八向全实拍不镜像，160 张/角色；左右不对称的角色（单边披风/武器）必须选这个",
     },
 }
 ANIM_LEVEL_ORDER = ["off", "lite", "standard", "full"]
@@ -265,14 +283,16 @@ ANIM_DEFAULT_LEVEL = "lite"
 
 
 def anim_spec(level_id: str | None) -> dict:
-    """档位 id → 展开的规格（dirs/mirror/帧数/总张数）。未知档位按默认档。"""
+    """档位 id → 展开的规格（dirs/mirror/各 clip 帧数/每向帧数/总张数）。"""
     lid = str(level_id or "").strip()
     if lid not in ANIM_LEVELS:
         lid = ANIM_DEFAULT_LEVEL
     lv = ANIM_LEVELS[lid]
-    total = len(lv["dirs"]) * (lv["idle"] + lv["walk"])
+    clips = {c: int(lv.get(c) or 0) for c in CLIP_ORDER}
+    per_dir = sum(clips.values())
+    total = len(lv["dirs"]) * per_dir
     return {"id": lid, "name": lv["name"], "dirs": list(lv["dirs"]),
-            "mirror": dict(lv["mirror"]), "idle": lv["idle"], "walk": lv["walk"],
+            "mirror": dict(lv["mirror"]), "clips": clips, "per_dir": per_dir,
             "frames_total": total, "note": lv["note"]}
 
 
@@ -501,11 +521,11 @@ CLASS_LABELS: dict[str, str] = {
 CLASS_TEMPLATE_HINT: dict[str, str] = {
     "scene": ("2.5D 斜 45° 环境图 · 大全景 · 无角色无文字 · 画幅由「用途」定："
               "16:9 战斗 / 1:1 平铺 / 2:3 竖屏 / 9:4 横幅 / 1:1 等距战场"),
-    "character": ("2.5D 斜 45° · Q 版三头身 · 全身 · 脚底贴地 · 按档位出站立/行走帧"
-                  "（轻量 3 向 24 张 / 标准 5 向 60 张 / 全向 8 向 96 张，"
-                  "行走 8 帧完整循环，可导出经典整表）"),
+    "character": ("2.5D 斜 45° · Q 版三头身 · 全身 · 脚底贴地 · 站立/行走/奔跑三段"
+                  "（轻量 3 向 40 张 / 标准 5 向 100 张 / 全向 8 向 160 张；"
+                  "每向 站立4 + 行走8 + 奔跑8，可导出走/跑经典整表）"),
     "pet": ("2.5D 斜 45° · Q 版 · 全身 · 脚底贴地 · 与主角同一台相机 · "
-            "按档位出站立/行走帧"),
+            "站立/行走/奔跑三段（帧数同角色）"),
     "weapon": "武器设计 · 单件 · 与角色同一 45° 相机 · 居中 · 可叠加等级词",
     "building": "建筑外观 · 2.5D 斜 45° · 底面落在等距地面上 · 完整结构可见",
     "monster": ("怪物设计 · 2.5D 斜 45° · 全身 · 脚底贴地 · 画幅由「等级」定："

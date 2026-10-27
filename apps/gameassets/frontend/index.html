@@ -461,7 +461,7 @@
       </div>
     </div>
     <div class="modal-foot" style="margin-top:12px">
-      <button class="btn btn-ghost" id="animSheet" title="拼一张「行=朝向、列=步态帧」的经典整表（大话西游式）">整表</button>
+      <button class="btn btn-ghost" id="animSheet" title="拼一张「行=朝向、列=步态帧」的经典整表（按当前动作：走 / 跑）">整表</button>
       <button class="btn btn-ghost" id="animClose">关闭</button>
     </div>
   </div>
@@ -1610,7 +1610,7 @@
   function renderAnimClips() {
     const meta = animState.meta; if (!meta) return;
     $('animClips').innerHTML = '<span class="muted2" style="font-size:12px">动作</span>'
-      + ['idle', 'walk'].map(c => {
+      + ['idle', 'walk', 'run'].map(c => {
           const info = (meta.clips || {})[c] || {};
           if (!info.count) return '';
           return `<button class="anim-dir ${c === animState.clip ? 'on' : ''}" data-clip="${c}">`
@@ -1642,10 +1642,12 @@
     $('animTitle').textContent = `动画预览 · ${a.name}`;
     $('animSub').textContent = `${am.level_name} · ${am.dirs.length} 向 · 共 ${am.frames_total} 帧 · 2.5D 斜 45°`;
     const mirTxt = Object.entries(am.mirror || {}).map(([k, v]) => k.toUpperCase() + '←' + v.toUpperCase());
+    const clipTxt = ['idle', 'walk', 'run'].filter(c => (am.clips[c] || {}).count)
+      .map(c => `${am.clips[c].name || c} ${am.clips[c].count} 帧 @${am.clips[c].fps}fps`)
+      .join(' · ');
     $('animInfo').innerHTML =
       `画布 ${am.cell[0]}×${am.cell[1]} · 脚底锚点 ${am.anchor[0]},${am.anchor[1]}<br>`
-      + `站立 ${(am.clips.idle || {}).count || 0} 帧 @${(am.clips.idle || {}).fps}fps · `
-      + `行走 ${(am.clips.walk || {}).count || 0} 帧 @${(am.clips.walk || {}).fps}fps`
+      + clipTxt
       + (mirTxt.length ? `<br>镜像：${mirTxt.join('、')}` : '');
     $('animPlay').textContent = '暂停';
     renderAnimClips(); renderAnimDirs();
@@ -1664,8 +1666,9 @@
   $('animClose').onclick = closeAnim;
   $('animSheet').onclick = async () => {
     if (!animState.aid) return;
+    const clip = animState.clip === 'run' ? 'run' : 'walk';   // 站立帧少，不给整表
     try {
-      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/classic-sheet/${animState.aid}`);
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/classic-sheet/${animState.aid}?clip=${clip}`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
       window.open(d.url, '_blank');

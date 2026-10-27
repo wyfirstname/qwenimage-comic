@@ -181,24 +181,30 @@ def build_zip(s: dict, engine_tpl: str | None = None) -> Path:
                 banks[d] = {"file": name, "cols": b.get("cols"),
                             "rows": {k: v.get("row") for k, v in
                                      (b.get("clips") or {}).items()}}
-            classic_name = None
+            classic_names = {}
             am_banks = am.get("banks") or {}
-            if am_banks:                    # 经典整表：行=朝向 列=步态帧（11.1）
+            if am_banks:                    # 经典整表：行=朝向 列=步态帧（走/跑各一张）
                 b0 = Path(next(iter(am_banks.values()))["path"] or "")
                 if not b0.is_absolute():
                     b0 = Path(".") / b0
-                cp, _ = anim.classic_sheet(am, b0.parent, a["id"])
-                if cp:
-                    classic_name = (f"anim/{_safe(a['name'])}_"
-                                    f"{_safe(a.get('gender') or '')}_classic.png")
-                    zf.write(cp, f"{root}/{classic_name}")
+                for clip in ("walk", "run"):
+                    if not (((am.get("clips") or {}).get(clip) or {}).get("count")):
+                        continue
+                    cp, _ = anim.classic_sheet(am, b0.parent, a["id"], clip=clip)
+                    if not cp:
+                        continue
+                    tag = "" if clip == "walk" else f"_{clip}"
+                    name = (f"anim/{_safe(a['name'])}_"
+                            f"{_safe(a.get('gender') or '')}_classic{tag}.png")
+                    zf.write(cp, f"{root}/{name}")
+                    classic_names[clip] = name
             anim_index.append({
                 "kind": a["kind"], "name": a["name"], "gender": a.get("gender"),
                 "level": am.get("level"), "level_name": am.get("level_name"),
                 "cell": am.get("cell"), "anchor": am.get("anchor"),
                 "dirs": am.get("dirs"), "mirror": am.get("mirror"),
                 "clips": am.get("clips"), "frames_total": am.get("frames_total"),
-                "banks": banks, "classic_sheet": classic_name})
+                "banks": banks, "classic_sheet": classic_names})
         if anim_index:
             zf.writestr(f"{root}/anim/anim.json",
                         json.dumps({"view": "2.5D 45°", "items": anim_index},

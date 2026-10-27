@@ -47,7 +47,7 @@ from .presets import (ASPECTS, get_preset, asset_size, transparent_mode,
                       MONSTER_TIERS, MONSTER_TIER_ORDER, monster_tier,
                       SCENE_USAGES, scene_usage,
                       ANIM_KINDS, ANIM_LEVELS, VIEW_LOCK, anim_level, anim_spec,
-                      CLIPS, DIRECTIONS)
+                      CLIPS, CLIP_ORDER, DIRECTIONS)
 from .styles import get_style
 
 _MASTER_SIZE = (1152, 640)
@@ -583,7 +583,10 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
 
     for dir_id in spec["dirs"]:
         raw: dict[str, list[str]] = {}
-        for clip, count in (("idle", spec["idle"]), ("walk", spec["walk"])):
+        for clip in CLIP_ORDER:
+            count = spec["clips"].get(clip) or 0
+            if not count:
+                continue
             paths: list[str] = []
             for i in range(count):
                 if _canceled(sid):
@@ -616,7 +619,7 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
             frames["idle"][0].save(cover)
         store.append_log(sid, "info",
                          f"{tag} 朝向「{DIRECTIONS[dir_id]['name']}」"
-                         f"（{spec['idle'] + spec['walk']} 帧）完成")
+                         f"（{spec['per_dir']} 帧）完成")
 
     if cover is None:
         raise RuntimeError("动画帧生成失败（无有效帧）")
@@ -645,7 +648,8 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
             "cell": list(cell), "anchor": list(anchor),
             "dirs": spec["dirs"], "mirror": spec["mirror"],
             "clips": {cid: {"name": CLIPS[cid]["name"], "fps": CLIPS[cid]["fps"],
-                            "count": spec[cid]} for cid in ("idle", "walk")},
+                            "count": spec["clips"][cid]}
+                      for cid in CLIP_ORDER if spec["clips"].get(cid)},
             "banks": banks,
             "frames_total": frames_done,
             "view": anim.view_meta(),

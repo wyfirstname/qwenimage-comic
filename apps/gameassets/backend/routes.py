@@ -153,6 +153,8 @@ async def list_presets():
         "anim_levels": [{"id": k, "name": ANIM_LEVELS[k]["name"],
                          "dirs": ANIM_LEVELS[k]["dirs"],
                          "idle": ANIM_LEVELS[k]["idle"], "walk": ANIM_LEVELS[k]["walk"],
+                         "run": ANIM_LEVELS[k].get("run", 0),
+                         "per_dir": anim_spec(k)["per_dir"],
                          "frames": anim_spec(k)["frames_total"],
                          "note": ANIM_LEVELS[k]["note"]}
                         for k in ANIM_LEVEL_ORDER],
@@ -651,12 +653,16 @@ async def contact_sheet(sid: str, cell: int = 192, cols: int = 4):
 
 
 @router.get("/sets/{sid}/classic-sheet/{aid}",
-            summary="经典走路整表：一行一个朝向 × 一列一步态帧（大话西游式，11.1）")
-async def classic_sheet(sid: str, aid: str):
+            summary="经典走路/奔跑整表：一行一个朝向 × 一列一步态帧（clip=walk|run）")
+async def classic_sheet(sid: str, aid: str, clip: str = "walk"):
     s = store.get_set(sid)
     if not s:
         raise HTTPException(status_code=404,
                             detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    if clip not in ("walk", "run"):
+        raise HTTPException(status_code=400,
+                            detail={"code": "BAD_CLIP",
+                                    "message": "clip 只支持 walk（走）| run（跑）"})
     a = next((x for x in s["assets"] if x["id"] == aid), None)
     if not a or not a.get("anim"):
         raise HTTPException(status_code=404,
@@ -668,10 +674,11 @@ async def classic_sheet(sid: str, aid: str):
         raise HTTPException(status_code=409,
                             detail={"code": "EMPTY", "message": "动画帧尚未生成"})
     out_dir = Path(next(iter(banks.values()))["path"]).parent
-    png, meta = anim.classic_sheet(am, out_dir, a["id"])
+    png, meta = anim.classic_sheet(am, out_dir, a["id"], clip=clip)
     if not png:
         raise HTTPException(status_code=409,
-                            detail={"code": "EMPTY", "message": "行走帧不完整，无法拼整表"})
+                            detail={"code": "EMPTY",
+                                    "message": f"{clip} 帧不完整，无法拼整表"})
     return {"url": exporter.export_url(png), "meta": meta}
 
 

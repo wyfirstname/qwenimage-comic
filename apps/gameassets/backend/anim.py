@@ -4,11 +4,12 @@
 2.5D 斜 45° 的角色不能当立绘用——它得能走。这个模块负责把「一堆各自生成的帧」
 收拾成一套**帧序稳定、脚底不抖、可直接进引擎**的精灵表：
 
-1. 帧提示词：方向 + 帧序 + 姿态（站立呼吸循环 / 行走两拍循环）
+1. 帧提示词：方向 + 帧序 + 姿态（站立呼吸 / 行走八帧 / 奔跑八帧）
 2. 对齐：按 alpha 包围盒裁到内容，**整向统一缩放**（用该向 idle 首帧定标尺，逐帧各算
    会让角色走动时一胀一缩），再按「脚底锚点」贴进固定 cell
-3. 图集：每个方向一张 PNG，第一行站立、第二行行走（行/列数写进元数据）
+3. 图集：每个方向一张 PNG，行序 = 站立 / 行走 / 奔跑（行/列数写进元数据）
 4. 元数据：cell / anchor / dirs / mirror / clips(fps,count) / banks(sheet,cols,rows)
+5. 经典整表：行=朝向、列=步态帧，walk / run 各一张（大话西游式）
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from .presets import CLIPS, DIRECTIONS, VIEW_LOCK
+from .presets import CLIP_ORDER, CLIPS, DIRECTIONS, VIEW_LOCK
 
 # 主体在 cell 里占的高度比例（留头顶与脚边余量，避免贴边被引擎切到）
 _FILL = 0.86
@@ -80,7 +81,7 @@ def build_frames(raw: dict[str, list[Path]], cell: tuple[int, int],
                  anchor: tuple[int, int]) -> dict[str, list[Image.Image]]:
     """原始生成帧 → 对齐好的 cell 图。**整向统一缩放**：以第一条 clip 的第一帧定标尺。"""
     scale = None
-    for clip in ("idle", "walk"):
+    for clip in CLIP_ORDER:
         for p in raw.get(clip) or []:
             im = Image.open(p).convert("RGBA")
             if im.getbbox():
@@ -97,8 +98,8 @@ def build_frames(raw: dict[str, list[Path]], cell: tuple[int, int],
 
 def save_bank(frames: dict[str, list[Image.Image]], dst: Path,
               cell: tuple[int, int]) -> dict:
-    """落一张图集 PNG，返回元数据（相对 dst 的 url 由调用方补）。"""
-    rows = [(clip, frames[clip]) for clip in ("idle", "walk") if frames.get(clip)]
+    """落一张图集 PNG（每段一行：站立 / 行走 / 奔跑），返回元数据。"""
+    rows = [(clip, frames[clip]) for clip in CLIP_ORDER if frames.get(clip)]
     sheet, layout = compose_sheet(rows, cell)
     dst.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(dst)
@@ -114,13 +115,20 @@ def save_bank(frames: dict[str, list[Image.Image]], dst: Path,
 CLASSIC_ORDER = ["s", "se", "e", "ne", "n", "nw", "w", "sw"]
 
 
-def classic_sheet(am: dict, out_dir: Path, stem: str) -> tuple[Path | None, dict]:
-    """把动画记录（anim 元数据）重排成经典整表。返回 (png 路径或 None, 元数据)。"""
+def classic_sheet(am: dict, out_dir: Path, stem: str,
+                  clip: str = "walk") -> tuple[Path | None, dict]:
+    """把动画记录（anim 元数据）重排成经典整表。clip = walk | run（站立帧少，不给整表）。
+
+    返回 (png 路径或 None, 元数据)。
+    """
+    if clip not in ("walk", "run"):
+        clip = "walk"
     cw, ch = (list(am.get("cell") or VIEW_LOCK["cell"]) + [192, 192])[:2]
     banks, mirror = am.get("banks") or {}, am.get("mirror") or {}
-    count = int(((am.get("clips") or {}).get("walk") or {}).get("count") or 0)
+    count = int(((am.get("clips") or {}).get(clip) or {}).get("count") or 0)
+    suffix = "" if clip == "walk" else f"_{clip}"
     if not banks or not count:
-        return None, {"reason": "no walk frames"}
+        return None, {"reason": f"no {clip} frames", "clip": clip}
     rows, used = [], []
     for d in CLASSIC_ORDER:
         src = d if d in banks else mirror.get(d)
@@ -132,7 +140,7 @@ def classic_sheet(am: dict, out_dir: Path, stem: str) -> tuple[Path | None, dict
             bp = Path(".") / bp
         if not bp.exists():
             continue
-        row = ((bank.get("clips") or {}).get("walk") or {}).get("row")
+        row = ((bank.get("clips") or {}).get(clip) or {}).get("row")
         if row is None:
             continue
         sheet = Image.open(bp).convert("RGBA")
@@ -147,16 +155,16 @@ def classic_sheet(am: dict, out_dir: Path, stem: str) -> tuple[Path | None, dict
         rows.append(cells)
         used.append({"dir": d, "from": src, "mirrored": src != d})
     if not rows:
-        return None, {"reason": "no bank files"}
+        return None, {"reason": "no bank files", "clip": clip}
     cols = max(len(cs) for cs in rows)
     out = Image.new("RGBA", (cw * cols, ch * len(rows)), (0, 0, 0, 0))
     for r, cells in enumerate(rows):
         for c, im in enumerate(cells):
             out.alpha_composite(im, (c * cw, r * ch))
     out_dir.mkdir(parents=True, exist_ok=True)
-    png = out_dir / f"{stem}_classic.png"
+    png = out_dir / f"{stem}_classic{suffix}.png"
     out.save(png)
-    return png, {"rows": len(rows), "cols": cols, "cell": [cw, ch],
+    return png, {"clip": clip, "rows": len(rows), "cols": cols, "cell": [cw, ch],
                  "dirs": [u["dir"] for u in used], "used": used}
 
 

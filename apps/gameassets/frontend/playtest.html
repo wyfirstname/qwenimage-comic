@@ -256,7 +256,10 @@ function resolveDir(anim, want) {
 function animFrameFor(sp, want, moving, dt) {
   const a = sp.anim;
   const walkOk = ((a.clips.walk || {}).count || 0) > 0;
-  const clip = (moving && walkOk) ? 'walk' : 'idle';
+  const runOk = ((a.clips.run || {}).count || 0) > 0;
+  // 移动时按 Shift = 奔跑（有 run 帧才切），否则走路；静止回站立
+  const clip = !moving ? 'idle'
+    : (runOk && state.keys['shift'] ? 'run' : (walkOk ? 'walk' : 'idle'));
   if (!sp.fr) sp.fr = { clip, i: 0, t: 0 };
   if (sp.fr.clip !== clip) { sp.fr.clip = clip; sp.fr.i = 0; sp.fr.t = 0; }
   const info = a.clips[clip] || {};
@@ -466,7 +469,7 @@ function startManual() {
   if (!state.player) { setMsg('没有主角素材，无法实测'); return; }
   state.mode = 'manual';
   $('btnBot').disabled = true; $('btnManual').disabled = true;
-  setMsg('WASD / 方向键移动，Esc 结束');
+  setMsg('WASD / 方向键移动，按住 Shift 奔跑，Esc 结束');
   const loop = (ts) => {
     if (state.mode !== 'manual') return;
     const dt = Math.min(0.05, (ts - state.lastT) / 1000 || 0.016);
@@ -479,7 +482,8 @@ function startManual() {
     if (dx || dy) {
       const l = Math.hypot(dx, dy);
       const before = state.player.gy;
-      tryMove(dx / l * 240 * dt, dy / l * 240 * dt);
+      const spd = state.keys['shift'] ? 400 : 240;   // Shift = 奔跑（对应 run 帧）
+      tryMove(dx / l * spd * dt, dy / l * spd * dt);
       state.metrics && (state.metrics.manual_walk = true);
       if (before !== state.player.gy) { /* 纵深移动生效 */ }
     }
