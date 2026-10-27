@@ -280,6 +280,10 @@ ANIM_LEVELS: dict[str, dict] = {
 ANIM_LEVEL_ORDER = ["off", "lite", "standard", "full"]
 ANIM_KINDS = ("character", "pet")          # 需要动画帧的类
 ANIM_DEFAULT_LEVEL = "lite"
+# 动画帧生成画幅：独立于立绘画幅。帧最终落进 192×192 cell，384² = 2 倍采样
+# 足够精细；用立绘的 512×768 逐帧生成一张要 2.7 倍像素，40 帧×3 次重试能把
+# 单个角色拖到半小时以上（用户实测主角久不出图），降到这里后单帧显著提速。
+ANIM_FRAME_SIZE = (384, 384)
 
 
 def anim_spec(level_id: str | None) -> dict:

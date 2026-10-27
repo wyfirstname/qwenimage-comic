@@ -46,7 +46,8 @@ from .presets import (ASPECTS, get_preset, asset_size, transparent_mode,
                       GENDERS, prompt_extra, prompt_negative,
                       MONSTER_TIERS, MONSTER_TIER_ORDER, monster_tier,
                       SCENE_USAGES, scene_usage,
-                      ANIM_KINDS, ANIM_LEVELS, VIEW_LOCK, anim_level, anim_spec,
+                      ANIM_KINDS, ANIM_LEVELS, ANIM_FRAME_SIZE, VIEW_LOCK,
+                      anim_level, anim_spec,
                       CLIPS, CLIP_ORDER, DIRECTIONS)
 from .styles import get_style
 
@@ -327,7 +328,9 @@ def _upsert_asset(sid: str, asset: dict) -> None:
                 old = a
             else:
                 kept.append(a)
-        if old:
+        if old and old.get("id") != asset["id"]:
+            # 同 id（12.1 动画分步生成的进度记录）直接顶掉，不进版本历史；
+            # 真重跑（新 id）才把旧图存档。
             history = old.get("history") or []
             history.insert(0, {k: old.get(k) for k in
                                ("path", "url", "seed", "tone", "created_at",
@@ -506,10 +509,13 @@ async def _stage_assets(sid: str, kind: str, opts: dict) -> None:
             w, h = asset_size(s, kind, item)      # 场景按用途、怪物按等级逐条定画幅
             lv = anim_level(s, item)
             if kind in ANIM_KINDS and lv != "off":
+                prev = next((a for a in s["assets"]
+                             if a.get("item_id") == item.get("id") and a.get("anim")),
+                            None)                     # 上次记录：增量续跑的依据
                 asset = await _gen_anim_asset(
                     sid=sid, s=s, kind=kind, item=item, payload=payload_item,
                     master_path=master_path, tmode=tmode, threshold=threshold,
-                    size=(w, h), level=lv)
+                    size=(w, h), level=lv, prev=prev)
             else:
                 asset = await _gen_with_gate(
                     sid=sid, kind=kind, item=item, prompt=prompt,
@@ -561,18 +567,44 @@ def _alpha_to_ref(path: str | Path) -> str:
 
 async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: dict,
                           master_path: str, tmode: str, threshold: float,
-                          size: tuple[int, int], level: str) -> dict:
-    """角色 / 宠物：按档位逐帧生成（站立 + 行走 × 各朝向），对齐后拼成精灵图集。
+                          size: tuple[int, int], level: str,
+                          prev: dict | None = None) -> dict:
+    """角色 / 宠物：按档位逐帧生成（站立 + 行走 + 奔跑 × 各朝向），对齐后拼成精灵图集。
 
     一致性策略：首帧（正面站立第一帧）只用基准图定风格；其余帧都带上首帧做双参考，
     靠图生图把「同一个角色」锁住——否则每一帧都是新角色，走起来会变形。
+
+    分步生成（12.1）：
+      - 帧画幅用 ANIM_FRAME_SIZE（384²，cell 的 2 倍采样），不再烧立绘的 512×768；
+      - 每完成一个朝向就把半成品记录原位落库（不进版本历史），中途取消/失败
+        已完成的朝向不报废，前端立刻能看到部分帧；
+      - 重跑同条目时，档位一致且图集元数据匹配的朝向直接复用（增量续跑，
+        日志标「跳过生成」），只补缺的朝向。
     """
     spec, neg = anim_spec(level), asset_negative(s, kind)
     cell = tuple(VIEW_LOCK["cell"])
     anchor = tuple(VIEW_LOCK["anchor"])
+    fw, fh = ANIM_FRAME_SIZE
     out_dir = settings.data_dir_path / "outputs" / "gameassets" / "anim" / sid
-    aid = new_id("ast")
+    aid = (prev or {}).get("id") or new_id("ast")
     tag = f"{store.STAGE_LABELS[kind]}「{_item_tag(item, kind)}」"
+
+    prev_anim = (prev or {}).get("anim") or {}
+    prev_banks: dict[str, dict] = prev_anim.get("banks") or {}
+    level_same = prev_anim.get("level") == spec["id"]
+    exp_clips = {c: n for c, n in spec["clips"].items() if n}
+
+    def _bank_ok(b: dict | None) -> bool:
+        """旧朝向图集能否直接复用：档位没变、文件还在、行列与当前规格一致。"""
+        if not (b and level_same):
+            return False
+        p = Path(b.get("path") or "")
+        if not p.is_absolute():
+            p = Path(".") / p
+        meta = b.get("clips") or {}
+        return (p.is_file() and b.get("cols") == max(exp_clips.values())
+                and set(meta) == set(exp_clips)
+                and all(meta.get(c, {}).get("count") == n for c, n in exp_clips.items()))
 
     banks: dict[str, dict] = {}
     cover: Path | None = None
@@ -581,7 +613,54 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
     reasons: list[str] = []
     frames_done = 0
 
+    def _record() -> dict:
+        """当前进度的素材记录（半成品 / 成品共用，anim.expected 标总数）。"""
+        return {
+            "id": aid,
+            "item_id": item.get("id"),
+            "kind": kind, "kind_label": store.STAGE_LABELS[kind],
+            "name": item["name"], "desc": item["desc"],
+            "season": None, "season_name": None,
+            "gender": item.get("gender"),
+            "gender_name": (GENDERS[item["gender"]]["name"]
+                            if item.get("gender") in GENDERS else None),
+            "tier": item.get("tier"), "tier_id": item.get("tier_id"),
+            "usage": None, "usage_name": None, "usage_reason": None, "scene": None,
+            "path": str(cover) if cover else None,
+            "url": _url_of(cover) if cover else None,
+            "seed": None,
+            "size": list(cell), "transparent": {"method": tmode},
+            "tileable": False,
+            "prompt": asset_prompt(s, payload, transparent=tmode != "none"),
+            "quality": {"pass": not reasons, "reasons": reasons[:6],
+                        "metrics": {}, "attempts": 1},
+            "tone": {"score": min(scores) if scores else 0.0,
+                     "threshold": threshold, "pass": not reasons},
+            "structural_fail": bool(reasons),
+            "frame_size": [fw, fh],
+            "anim": {
+                "level": spec["id"], "level_name": spec["name"],
+                "cell": list(cell), "anchor": list(anchor),
+                "dirs": spec["dirs"], "mirror": spec["mirror"],
+                "clips": {cid: {"name": CLIPS[cid]["name"], "fps": CLIPS[cid]["fps"],
+                                "count": spec["clips"][cid]}
+                          for cid in CLIP_ORDER if spec["clips"].get(cid)},
+                "banks": banks,
+                "frames_total": frames_done,
+                "expected": spec["frames_total"],
+                "view": anim.view_meta(),
+            },
+            "created_at": (prev or {}).get("created_at") or store.now_iso(),
+        }
+
     for dir_id in spec["dirs"]:
+        if _bank_ok(prev_banks.get(dir_id)):
+            banks[dir_id] = prev_banks[dir_id]
+            frames_done += spec["per_dir"]
+            store.append_log(sid, "info",
+                             f"{tag} 朝向「{DIRECTIONS[dir_id]['name']}」已有帧图，"
+                             f"跳过生成（帧 {frames_done}/{spec['frames_total']}）")
+            continue
         raw: dict[str, list[str]] = {}
         for clip in CLIP_ORDER:
             count = spec["clips"].get(clip) or 0
@@ -596,8 +675,8 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
                     anim_tail=anim.frame_suffix(clip, i, count, dir_id))
                 rec = await _gen_with_gate(
                     sid=sid, kind=kind, item=item, prompt=prompt, negative=neg,
-                    threshold=threshold, size=size, tmode=tmode,
-                    master_path=master_path,
+                    threshold=threshold, size=(fw, fh), tmode=tmode,
+                    master_path=master_path, max_attempts=2,
                     extra_refs=[base_ref] if base_ref else None)
                 paths.append(rec["path"])
                 scores.append(float(rec["tone"]["score"]))
@@ -619,60 +698,51 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
             frames["idle"][0].save(cover)
         store.append_log(sid, "info",
                          f"{tag} 朝向「{DIRECTIONS[dir_id]['name']}」"
-                         f"（{spec['per_dir']} 帧）完成")
+                         f"（{spec['per_dir']} 帧）完成 "
+                         f"（帧 {frames_done}/{spec['frames_total']}）")
+        _upsert_anim_progress(sid, _record())          # 每朝向即落库，失败不报废
 
     if cover is None:
-        raise RuntimeError("动画帧生成失败（无有效帧）")
-    return {
-        "id": aid,
-        "item_id": item.get("id"),
-        "kind": kind, "kind_label": store.STAGE_LABELS[kind],
-        "name": item["name"], "desc": item["desc"],
-        "season": None, "season_name": None,
-        "gender": item.get("gender"),
-        "gender_name": (GENDERS[item["gender"]]["name"]
-                        if item.get("gender") in GENDERS else None),
-        "tier": item.get("tier"), "tier_id": item.get("tier_id"),
-        "usage": None, "usage_name": None, "usage_reason": None, "scene": None,
-        "path": str(cover), "url": _url_of(cover), "seed": None,
-        "size": list(cell), "transparent": {"method": tmode},
-        "tileable": False,
-        "prompt": asset_prompt(s, payload, transparent=tmode != "none"),
-        "quality": {"pass": not reasons, "reasons": reasons[:6],
-                    "metrics": {}, "attempts": 1},
-        "tone": {"score": min(scores) if scores else 0.0,
-                 "threshold": threshold, "pass": not reasons},
-        "structural_fail": bool(reasons),
-        "anim": {
-            "level": spec["id"], "level_name": spec["name"],
-            "cell": list(cell), "anchor": list(anchor),
-            "dirs": spec["dirs"], "mirror": spec["mirror"],
-            "clips": {cid: {"name": CLIPS[cid]["name"], "fps": CLIPS[cid]["fps"],
-                            "count": spec["clips"][cid]}
-                      for cid in CLIP_ORDER if spec["clips"].get(cid)},
-            "banks": banks,
-            "frames_total": frames_done,
-            "view": anim.view_meta(),
-        },
-        "created_at": store.now_iso(),
-    }
+        # 全部朝向都走增量复用：复用旧封面；连封面都没了就从图集裁站立首帧
+        old_cover = (prev or {}).get("path")
+        if old_cover and Path(old_cover).is_file():
+            cover = Path(old_cover)
+        else:
+            from PIL import Image as _Im
+            b0 = banks[spec["dirs"][0]]
+            bp = Path(b0["path"])
+            sheet0 = _Im.open(bp).convert("RGBA")
+            cover = out_dir / f"{aid}_cover.png"
+            sheet0.crop((0, 0, cell[0], cell[1])).save(cover)
+    return _record()
+
+
+def _upsert_anim_progress(sid: str, asset: dict) -> None:
+    """动画增量进度：按 id 原位替换，不进版本历史（半成品不值得占历史位）。"""
+    def _apply(t: dict) -> None:
+        t["assets"] = [a for a in t["assets"] if a.get("id") != asset["id"]]
+        t["assets"].append(asset)
+    store.mutate(sid, _apply)
 
 
 async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
                          threshold: float, size: tuple[int, int], tmode: str,
                          master_path: str, seed: int = -1,
                          negative: str | None = None,
-                         extra_refs: list[str] | None = None) -> dict:
+                         extra_refs: list[str] | None = None,
+                         max_attempts: int = _MAX_ATTEMPTS) -> dict:
     """生成 + 质量守门 + 自动重试 + 透明底后处理，产出素材记录。
 
     守门规则：黑图/无结构/低熵/跑色任一不达标 → 换 seed 重试；
     结构性缺陷（黑图等）重试后仍差 → 失败；仅跑色 → 入库但标记（用户可用筛选重跑）。
+    动画帧走 max_attempts=2：一个角色几十帧，单帧重试 3 次太拖；坏一帧
+    还有整段（朝向）级续跑兜底。
     """
     w, h = size
     neg = negative or _COMMON_NEG
     last_q, last_rec = None, None
     structural_fail = True
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
+    for attempt in range(1, max_attempts + 1):
         if _canceled(sid):
             raise _StageCanceled()
         rec = await _run_job(prompt=prompt, negative=neg,
@@ -687,10 +757,10 @@ async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
                 break
             # 仅跑色：不再烧显存重试跑色（重跑大概率还是跑色，交给筛选重跑换措辞）
             break
-        if attempt < _MAX_ATTEMPTS:
+        if attempt < max_attempts:
             store.append_log(sid, "warn",
                              f"「{item['name']}」质量未达标（{'；'.join(structural)}），"
-                             f"换 seed 重试 {attempt}/{_MAX_ATTEMPTS - 1}")
+                             f"换 seed 重试 {attempt}/{max_attempts - 1}")
     if last_rec is None:
         raise RuntimeError("生成失败（无有效返回）")
 

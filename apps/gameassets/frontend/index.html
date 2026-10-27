@@ -922,8 +922,8 @@
       a.gender_name ? `<span class="gender-chip gender-${a.gender}">${a.gender_name}</span>` : '',
       a.tier ? `<span class="tier-chip tier-${a.tier_id}">${a.tier}</span>` : '',
       a.scene ? `<span class="zone-chip" title="出没场景">${esc(a.scene)}</span>` : '',
-      a.anim ? `<span class="anim-chip" title="点开看动画（站立/行走 × 各朝向）"
-        onclick="UI.openAnim('${a.id}')">▶ 动画 ${a.anim.dirs.length} 向 · ${a.anim.frames_total} 帧</span>` : '',
+      a.anim ? `<span class="anim-chip" title="点开看动画（站立/行走/奔跑 × 各朝向）"
+        onclick="UI.openAnim('${a.id}')">▶ 动画 ${a.anim.dirs.length} 向 · ${a.anim.frames_total}${a.anim.expected && a.anim.frames_total < a.anim.expected ? '/' + a.anim.expected : ''} 帧</span>` : '',
       a.size ? `<span class="size-chip">${a.size[0]}×${a.size[1]}</span>` : '',
       a.transparent ? `<span class="tr-chip">透明${a.transparent.method === 'rembg' ? '·AI' : ''}</span>` : '',
       q.pass === false ? `<span class="q-chip q-fail" title="${esc((q.reasons || []).join('；'))}">⚠ ${(q.reasons || [''])[0]?.split('（')[0] || '质量'}</span>`
