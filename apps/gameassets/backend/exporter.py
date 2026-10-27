@@ -17,11 +17,16 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import re
 import zipfile
 from pathlib import Path
 
+from PIL import Image, ImageDraw, ImageFont
+
 from shared.config import settings
+
+from . import artdir
 
 _UNSAFE = re.compile(r'[\\/:*?"<>|\s]+')
 
@@ -41,11 +46,24 @@ def asset_filename(a: dict) -> str:
 
 
 def _manifest(s: dict) -> dict:
+    ad = s.get("artdir") or {}
     return {
         "id": s["id"], "name": s["name"], "idea": s.get("idea"),
         "style": s.get("style_name") or s.get("style"),
         "time_preset": s.get("time_name") or s.get("time_preset"),
         "scale": s.get("scale"),
+        "art_direction": {
+            "source": "hand-edited" if s.get("artdir_edited") else "derived",
+            "view_lock": "2.5D 45-degree, orthographic scale, foot anchor",
+            "axes": {artdir.AXES[k]["name"]: ad.get(k)
+                     for k in artdir.AXIS_ORDER if ad.get(k)},
+        },
+        "provenance": {
+            "tool": "qwenimages 游戏素材工坊 (Qwen-Image pipeline)",
+            "generated": True,
+            "note": ("AI 生图产物，经抠图/对齐/守门后处理；"
+                     "商用前请自行确认目标平台的模型许可条款"),
+        },
         "master": {"path": s["master"]["path"], "seed": s["master"].get("seed"),
                    "palette": s["master"].get("palette")} if s.get("master") else None,
         "assets": [{
@@ -55,9 +73,17 @@ def _manifest(s: dict) -> dict:
             "usage": a.get("usage"), "scene": a.get("scene"),
             "seed": a.get("seed"), "size": a.get("size"),
             "transparent": (a.get("transparent") or {}).get("method"),
+            "alpha_qa": a.get("alpha_qa"),
             "tone_score": (a.get("tone") or {}).get("score"),
             "quality": {k: (a.get("quality") or {}).get(k)
                         for k in ("pass", "reasons", "attempts")},
+            "provenance": {
+                "created_at": a.get("created_at"),
+                "prompt": a.get("prompt"),
+                "history_count": len(a.get("history") or []),
+                "matte": (a.get("transparent") or {}).get("method"),
+                "tone_score": (a.get("tone") or {}).get("score"),
+            },
             "prompt": a.get("prompt"),
             "anim": ({"level": (a["anim"] or {}).get("level"),
                       "cell": (a["anim"] or {}).get("cell"),
@@ -109,6 +135,9 @@ def build_zip(s: dict, engine_tpl: str | None = None) -> Path:
         m = _manifest(s)
         zf.writestr(f"{root}/manifest.json",
                     json.dumps(m, ensure_ascii=False, indent=1))
+        # 美术方向契约（11.0）：导出包内附可读 brief，团队/引擎侧对齐用
+        zf.writestr(f"{root}/art-direction-brief.md",
+                    artdir.brief_md(s).encode("utf-8"))
         # 逐张清单 CSV
         csv_buf = io.StringIO()
         w = csv.writer(csv_buf)
@@ -172,6 +201,64 @@ def build_zip(s: dict, engine_tpl: str | None = None) -> Path:
                 zf.write(mp, f"{root}/master/master.png")
     zip_path.write_bytes(buf.getvalue())
     return zip_path
+
+
+def _checkerboard(size: tuple[int, int], tile: int = 12) -> Image.Image:
+    """透明底审阅用的棋盘格（借力 build_preview_sheet.py）。"""
+    image = Image.new("RGBA", size, "#c9c9c9")
+    draw = ImageDraw.Draw(image)
+    for y in range(0, size[1], tile):
+        for x in range(0, size[0], tile):
+            if (x // tile + y // tile) % 2:
+                draw.rectangle((x, y, x + tile - 1, y + tile - 1), fill="#eeeeee")
+    return image
+
+
+def build_contact_sheet(s: dict, cell: int = 192, cols: int = 4) -> Path:
+    """全项目接触表（contact sheet）：棋盘格 + 最近邻缩放 + 文件名标签。
+
+    用途：一眼审全家——剪影/色板/边缘处理是否一家亲，哪个素材烤死背景
+    （棋盘格上不透明立即穿帮）。这是 create-game-assets 的验收动作之一。
+    """
+    assets = list(s["assets"])
+    if not assets:
+        raise ValueError("还没有素材，先跑完某类生成")
+    cols = max(1, min(8, cols))
+    rows = math.ceil(len(assets) / cols)
+    pad, label_h = 12, 22
+    cw, ch = cell + pad * 2, cell + label_h + pad * 2
+    sheet = Image.new("RGBA", (cw * cols, ch * rows), "#202124")
+    draw = ImageDraw.Draw(sheet)
+    font = ImageFont.load_default()
+    for i, a in enumerate(assets):
+        cx, cy = (i % cols) * cw, (i // cols) * ch
+        preview = _checkerboard((cell, cell))
+        p = Path(a["path"])
+        if not p.is_absolute():
+            p = Path(".") / p
+        try:
+            with Image.open(p) as im:
+                src = im.convert("RGBA")
+                scale = min(cell / src.width, cell / src.height, 1.0)
+                fitted = src.resize(
+                    (max(1, round(src.width * scale)),
+                     max(1, round(src.height * scale))), Image.NEAREST)
+        except Exception:
+            fitted = None
+        if fitted is not None:
+            preview.alpha_composite(fitted, ((cell - fitted.width) // 2,
+                                             (cell - fitted.height) // 2))
+        sheet.alpha_composite(preview, (cx + pad, cy + pad))
+        label = f"{a['name']}"
+        if len(label) > 26:
+            label = label[:23] + "..."
+        draw.text((cx + pad, cy + pad + cell + 4), label,
+                  fill="#ffffff", font=font)
+    out_dir = settings.data_dir_path / "exports" / "gameassets"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    png = out_dir / f"{s['id']}_contact_sheet.png"
+    sheet.convert("RGB").save(png, quality=95)
+    return png
 
 
 def build_atlas(s: dict, kind: str, cols: int = 4, pad: int = 8) -> Path:

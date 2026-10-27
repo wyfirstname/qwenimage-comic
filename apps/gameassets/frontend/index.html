@@ -330,6 +330,7 @@
         <span class="kind-chip" id="dTime"></span>
         <span class="spacer"></span>
         <button class="btn btn-ghost" id="btnSettings">参数</button>
+        <button class="btn btn-ghost" id="btnSheet">接触表</button>
         <button class="btn btn-ghost" id="btnSim">仿真测试</button>
         <button class="btn btn-ghost" id="btnPlay">进场景实测</button>
         <button class="btn btn-ghost" id="btnExport">导出 ZIP</button>
@@ -414,6 +415,13 @@
     <div style="margin-top:10px">
       <label class="muted2">色调阈值（色距，越大越宽容）</label>
       <input id="setThreshold" type="number" min="10" max="120" style="width:100px">
+    </div>
+    <div style="margin-top:12px;border-top:1px solid rgba(128,128,128,.2);padding-top:10px">
+      <label class="muted2"><b>美术方向契约</b>（八轴，逐张注入提示词；留空的轴不注入。
+        <span id="adSource"></span>）</label>
+      <div id="setAdRows" style="margin-top:6px;max-height:230px;overflow:auto"></div>
+      <p class="muted2" style="font-size:11.5px;margin-top:4px">
+        改动即视为手填契约（自动推导不再覆盖）；全部清空 = 恢复自动推导。</p>
     </div>
     <div style="margin-top:14px;text-align:right">
       <button class="btn btn-ghost" onclick="UI.closeSet()">取消</button>
@@ -510,6 +518,7 @@
     state.animDefault = pr.anim_default || 'lite';
     state.animDirs = pr.anim_dirs || [];
     state.view = pr.view || null;
+    state.artdirAxes = pr.artdir_axes || [];
     state.sets = st.items;
     renderCards($('styleCards'), state.styles);
     renderCards($('timeCards'), state.times, 2);       // 默认黄昏
@@ -1409,6 +1418,18 @@
     } catch (e) { toast(e.message); }
   }
 
+  // 接触表：全项目一张棋盘格审阅图（剪影/色板/烤死背景一眼看穿）
+  async function contactSheet(btn) {
+    try {
+      busy(btn, true, '拼图中…');
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/contact-sheet`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      window.open(d.url, '_blank');
+    } catch (e) { toast(e.message); }
+    finally { busy(btn, false); }
+  }
+
   $('btnSettings').addEventListener('click', () => {
     const s = state.detail;
     if (!s) return;
@@ -1423,16 +1444,33 @@
         </select></div>`;
     }).join('');
     $('setThreshold').value = s.threshold ?? 48;
+    // 美术方向契约：八轴编辑区（当前值反填；空值轴显示占位提示）
+    $('adSource').textContent = s.artdir_edited ? '当前：手填契约' : '当前：自动推导';
+    $('setAdRows').innerHTML = (state.artdirAxes || []).map(ax => {
+      const cur = (s.artdir || {})[ax.id] || '';
+      return `<div style="margin-bottom:6px">
+        <div style="font-size:12px"><b>${esc(ax.name)}</b>
+          <span class="muted2" title="${esc(ax.hint)}">${esc(ax.hint)}</span></div>
+        <input class="set-ad" data-k="${ax.id}" value="${esc(cur)}"
+          style="width:100%;font-size:12px;padding:3px 6px;box-sizing:border-box"
+          placeholder="留空 = 本轴不进提示词">
+      </div>`;
+    }).join('');
     $('setMask').classList.add('show');
   });
 
   async function saveSettings() {
     const transparent = {};
     document.querySelectorAll('.set-tr').forEach(sel => { transparent[sel.dataset.k] = sel.value; });
+    const artdir = {};
+    document.querySelectorAll('.set-ad').forEach(inp => {
+      if (inp.value.trim()) artdir[inp.dataset.k] = inp.value.trim();
+    });
     try {
       const r = await fetch(`/api/v1/gameassets/sets/${state.current}/settings`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transparent, threshold: parseFloat($('setThreshold').value) }) });
+        body: JSON.stringify({ transparent, threshold: parseFloat($('setThreshold').value),
+                               artdir }) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
       closeSet(); toast('参数已保存（下一次生成生效）'); poll(true);
@@ -1629,6 +1667,7 @@
     $('animPlay').textContent = animState.playing ? '暂停' : '播放';
   };
   $('btnSim').addEventListener('click', () => runSim($('btnSim')));
+  $('btnSheet').addEventListener('click', (e) => contactSheet(e.target));
   $('simRerun').addEventListener('click', () => runSim($('simRerun')));
   $('simClose').onclick = closeSim;
   // 本页所在的静态目录：独立跑是 "/"，门户托管是 "/apps/<id>/"。
@@ -1694,7 +1733,7 @@
   // ================= 对外（onclick 内联用） =================
   window.UI = { openLb, closeLb, openVar, closeVar, commit: commitVariant,
                 rerun, delAsset, rollback, openPlan, closePlan, closeSet,
-                closeSim, openAnim, closeAnim, atlas };
+                closeSim, openAnim, closeAnim, atlas, contactSheet };
 
   // ================= 工具 =================
   function esc(x) {

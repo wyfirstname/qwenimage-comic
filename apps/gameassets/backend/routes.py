@@ -13,6 +13,8 @@
     PATCH /sets/{sid}/settings          透明底方式 / 画幅 / 阈值 按项目覆盖
     GET  /sets/{sid}/export             一键导出 ZIP（可带引擎导入清单）
     GET  /sets/{sid}/atlas/{kind}       图集拼版（sprite sheet）
+    GET  /sets/{sid}/contact-sheet      全项目接触表（棋盘格审阅图，11.0）
+    PATCH /sets/{sid}/settings          透明底方式 / 画幅 / 阈值 / 美术方向契约 按项目覆盖
     POST /sets/{sid}/simulate           仿真测试：逐张体检 + 合成模拟游戏画面
 
 异常原则：任何阶段失败都落库并展示（状态 chip + 日志行），前端还有
@@ -27,7 +29,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from . import anim, exporter, pipeline, store, tonecheck
+from . import anim, artdir, exporter, pipeline, store, tonecheck
 from .planner import SCALES
 from .presets import (ASSET_KINDS, SEASONS, SEASON_ORDER, TIER_ORDER,
                       WEAPON_TIERS, TIME_PRESETS, GENDERS,
@@ -108,6 +110,8 @@ class SettingsIn(BaseModel):
         None, description='按类提示词补充：{"character": {"extra": "...", "negative": "..."}}')
     anim_level: str | None = Field(
         None, description="项目默认动画档位：off|lite|standard|full（角色/宠物）")
+    artdir: dict[str, str] | None = Field(
+        None, description="美术方向契约（八轴，见 /presets 的 artdir_axes）；传空对象恢复自动推导")
 
 
 @router.get("/presets", summary="风格 / 时间背景 / 规模 / 季节 / 性别 / 等级 / 场景用途 预设")
@@ -157,6 +161,9 @@ async def list_presets():
                        "short": DIRECTIONS[k]["short"]} for k in DIRECTIONS],
         "clips": [{"id": k, "name": CLIPS[k]["name"], "fps": CLIPS[k]["fps"],
                    "frames": len(CLIPS[k]["poses"])} for k in CLIPS],
+        # 美术方向契约八轴定义（前端设置面板据此渲染编辑区）
+        "artdir_axes": [{"id": k, "name": v["name"], "hint": v["hint"]}
+                        for k, v in artdir.AXES.items()],
     }
 
 
@@ -585,6 +592,11 @@ async def edit_settings(sid: str, body: SettingsIn):
                 else:
                     merged[k] = {"extra": extra, "negative": negative}
             t["prompts"] = merged
+        if body.artdir is not None:
+            from . import artdir as _artdir
+            cleaned = _artdir.normalize(body.artdir)
+            t["artdir"] = cleaned or _artdir.derive(t)   # 清空 = 回到自动推导
+            t["artdir_edited"] = bool(cleaned)
     try:
         store.mutate(sid, _apply)
     except ValueError as exc:
@@ -618,6 +630,22 @@ async def atlas(sid: str, kind: str, cols: int = 4):
         png = exporter.build_atlas(s, kind, cols=cols)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": "EMPTY", "message": str(exc)})
+    return {"url": exporter.export_url(png)}
+
+
+@router.get("/sets/{sid}/contact-sheet",
+            summary="全项目接触表（棋盘格审阅图：剪影/色板/烤死背景一眼看穿）")
+async def contact_sheet(sid: str, cell: int = 192, cols: int = 4):
+    s = store.get_set(sid)
+    if not s:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    try:
+        png = await asyncio.to_thread(
+            exporter.build_contact_sheet, s,
+            max(64, min(512, cell)), max(1, min(8, cols)))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"code": "EMPTY", "message": str(exc)})
+    store.append_log(sid, "info", "已生成全项目接触表（棋盘格审阅图）")
     return {"url": exporter.export_url(png)}
 
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""出图质量守门：黑图 / 纯色废图 / 跑色，三重检测。
+"""出图质量守门：黑图 / 纯色废图 / 跑色 / 假透明，四重检测。
 
 背景：2.1 蒸馏模型对提示词敏感（夜晚措辞、引导系数都能把采样推进崩溃），
 坏图形态是「近纯黑 / 近纯色、无结构」。此前只有色调评分，坏图照样入库——
@@ -10,6 +10,7 @@
   - 对比度：亮度标准差 < 10 → 无结构（纯色 / 渐变占满）
   - 信息熵：灰度熵 < 1.8 bit → 低信息量（大块纯色）
   - 色调：沿用 tonecheck 色板距离，超阈 → 跑色（季节卡阈值由调用方放宽）
+  - 透明：alpha_check（抠图后调用）→ 没通道/全不透明=假透明/裁边
 """
 
 from __future__ import annotations
@@ -25,6 +26,43 @@ from . import tonecheck
 BRIGHT_MIN = 16.0      # 亮度下限
 CONTRAST_MIN = 10.0    # 亮度标准差下限
 ENTROPY_MIN = 1.8      # 灰度熵下限（bit）
+TRANSPARENT_MIN = 0.01   # 要求透明的素材：透明像素占比下限（假透明检测）
+
+
+def alpha_check(path) -> dict:
+    """透明通道体检（借力 create-game-assets 的 asset_report.py --require-alpha 思路）。
+
+    检出三类问题：
+      - no_alpha      —— 文件没有 alpha 通道
+      - fake_trans    —— RGBA 但所有像素全不透明（烤死背景/假棋盘格的典型形态）
+      - edge_touch    —— 内容包围盒四边全贴到画框（主体可能被裁边）
+    返回 {has_alpha, transparent_ratio, content_bounds, problems:[code,...], details}
+    """
+    from PIL import Image
+
+    img = Image.open(Path(path))
+    img.load()
+    problems: list[str] = []
+    if "A" not in img.getbands() and "transparency" not in img.info:
+        return {"has_alpha": False, "transparent_ratio": 0.0,
+                "content_bounds": None, "problems": ["no_alpha"],
+                "details": {"format": img.format, "mode": img.mode}}
+    rgba = img.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    hist = alpha.histogram()
+    n = rgba.width * rgba.height
+    transparent = sum(hist[:200])            # alpha<200 视为透明/半透明
+    ratio = transparent / max(1, n)
+    bounds = alpha.getbbox()
+    if ratio < TRANSPARENT_MIN:
+        problems.append("fake_trans")
+    if bounds and bounds == (0, 0, rgba.width, rgba.height):
+        problems.append("edge_touch")        # 四边全贴框 → 可能裁边
+    return {"has_alpha": True, "transparent_ratio": round(ratio, 4),
+            "content_bounds": list(bounds) if bounds else None,
+            "problems": problems,
+            "details": {"format": img.format, "mode": img.mode,
+                        "size": [rgba.width, rgba.height]}}
 
 
 def _metrics(source) -> dict:

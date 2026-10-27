@@ -182,6 +182,8 @@ def make_set(*, name: str, idea: str, style: str, style_name: str, time_preset: 
         "threshold": threshold,
         "scale": scale,
         "anim": {"anim_level": "lite"},   # 角色/宠物动画档位（2.5D 45° 帧集）
+        "artdir": None,          # 美术方向契约（八轴，规则推导/用户手填）
+        "artdir_edited": False,  # 用户手填过 → 自动推导不再覆盖
         "plan": None,            # 策划方案（plan 阶段产出）
         "master": None,          # 场景基准图 {path,url,seed,palette:[hex]}
         "assets": [],

@@ -17,6 +17,12 @@
   - 阶段取消：cancel_stage()，逐张检查取消标志，已出的素材保留
   - 多候选：gen_variants() 一次出 N 张候选，选优提交（提交时旧图进版本历史）
   - 多参考图：_run_job 接受 refs 列表（基准图 + 角色当前图），换装/多姿态一致性
+
+11.0 新增（借力 awesome-gamedev-agent-skills 的 create-game-assets 方法论）：
+  - 美术方向契约（artdir.py）：八轴视觉系统，规则推导 + 用户可改，逐张注入提示词
+  - 提示词八段块：ROLE → SUBJECT → VIEW → ART DIRECTION → GAME-SCALE READ
+    → TECHNICAL OUTPUT → LOCKS → EXCLUDE；不变块逐张复用 = 家族一致性
+  - alpha 守门（quality.alpha_check）：假透明（RGBA 全不透明）/抠图丢失/裁边检测
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ from shared.config import settings
 from shared.models_util import new_id
 from engine.sdk import engine
 
-from . import anim, quality, store, tonecheck, transmat
+from . import anim, artdir, quality, store, tonecheck, transmat
 from .planner import plan_from_idea
 from .presets import (ASPECTS, get_preset, asset_size, transparent_mode,
                       SEASONS, WEAPON_TIERS, ASSET_KINDS, build_stage_items,
@@ -363,6 +369,11 @@ async def _stage_plan(sid: str, s: dict) -> None:
         store.append_log(sid, "warn", f"LLM 策划不可用（{exc}），降级规则模板")
         plan = await asyncio.to_thread(_rule_direct, s["idea"], s["scale"])
     _save_plan_and_items(sid, plan)
+    # 美术方向契约：方案落定后按风格+世界观规则推导八轴（用户手填过则不覆盖）
+    def _seed_ad(t: dict) -> None:
+        if not t.get("artdir") and not t.get("artdir_edited"):
+            t["artdir"] = artdir.derive(t)
+    store.mutate(sid, _seed_ad)
     counts = {k: len(plan[_PLAN_KEYS[k]]) for k in ASSET_KINDS}
     store.append_log(
         sid, "info",
@@ -680,6 +691,7 @@ async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
         raise RuntimeError("生成失败（无有效返回）")
 
     path, transparent = last_rec["path"], None
+    alpha_q: dict | None = None
     if tmode != "none":
         try:
             out = Path(path).with_name(Path(path).stem + "_alpha.png")
@@ -691,6 +703,21 @@ async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
         except Exception as exc:
             store.append_log(sid, "warn",
                              f"「{item['name']}」透明底处理失败（{exc}），保留原图")
+        # alpha 守门（11.0）：假透明/没通道/裁边 —— 烤死背景和裁边素材不许悄悄入库
+        try:
+            alpha_q = quality.alpha_check(path)
+        except Exception:
+            alpha_q = None
+        if alpha_q and alpha_q["problems"]:
+            msgs = {"fake_trans": "假透明（全图无一透明像素，抠图可能失败）",
+                    "no_alpha": "没有透明通道",
+                    "edge_touch": "主体贴满画框（疑似裁边）"}
+            for code in alpha_q["problems"]:
+                store.append_log(sid, "warn", f"「{item['name']}」{msgs.get(code, code)}")
+            last_q["reasons"] = last_q["reasons"] + [
+                msgs.get(c, c) for c in alpha_q["problems"] if c != "edge_touch"]
+            last_q["pass"] = False
+            structural_fail = True
     p = Path(path).resolve()
     try:
         rel = p.relative_to(settings.data_dir_path.resolve())
@@ -716,6 +743,7 @@ async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
         "scene": item.get("scene"),
         "path": path, "url": url, "seed": last_rec.get("seed"),
         "size": [w, h], "transparent": transparent,
+        "alpha_qa": alpha_q,
         "tileable": bool(item.get("tileable")),
         "prompt": prompt,
         "quality": {"pass": last_q["pass"], "reasons": last_q["reasons"],
@@ -749,11 +777,19 @@ def _style_block(s: dict) -> str:
             f"{style['prompt']}, {preset['prompt']}")
 
 
+def _artdir_block(s: dict) -> str:
+    """美术方向契约 → 提示词不变块（八轴；空契约返回空串）。"""
+    return artdir.prompt_block(s.get("artdir"))
+
+
 def master_prompt(s: dict) -> tuple[str, str]:
     style, preset = get_style(s["style"]), get_preset(s["time_preset"])
     scene = (s["plan"]["scenes"] or [{"name": "主场景", "desc": s["idea"]}])[0]
+    ad = _artdir_block(s)
+    ad_tail = f", {ad}" if ad else ""
     prompt = (f"game concept art, environment establishing shot, "
-              f"{_clean(scene['name'])} - {_clean(scene['desc'])}, {_style_block(s)}, "
+              f"{_clean(scene['name'])} - {_clean(scene['desc'])}, {_style_block(s)}"
+              f"{ad_tail}, "
               "rich details, no characters, no text")
     return prompt, f"{_COMMON_NEG}, {style['negative']}, {preset['negative']}"
 
@@ -778,54 +814,80 @@ _SCENE_HINT: dict[str, str] = {
 
 def asset_prompt(s: dict, item: dict, *, transparent: bool = False,
                  tileable: bool = False, anim_tail: str = "") -> str:
-    """六类素材统一组装。item: {kind,name,desc,season?,tier_id?,gender?,usage?,scene?}。
+    """六类素材统一组装——八段块结构（借力 create-game-assets 的提示词骨架）：
 
-    结构：参考图锚点 → 2.5D 45° 视图锁 → 该类固定模板 → 季节/等级/性别/用途修饰
-         → 动画帧修饰（角色/宠物）→ 项目级补充词 → 收尾。
+        ROLE/PURPOSE   生产用途（这张图是干嘛的）
+        SUBJECT        主体（名字 + 视觉描述 + 性别/季节/等级/环境上下文）
+        VIEW           视图锁（2.5D 45° / 场景自带取景词）
+        ART DIRECTION  不变块：风格基因 + 时间背景 + 八轴美术契约
+        GAME-SCALE READ 游戏尺度可读性（剪影/锚点要求）
+        TECHNICAL OUTPUT 技术输出（画幅用途/底色要求/动画帧后缀）
+        LOCKS          不变块：以参考图锚定，风格色板光照不许漂
+        EXCLUDE        不变块：禁字/水印/边框/裁边
+
+    不变块逐张复用是家族一致性的关键；可变块只有 SUBJECT/VIEW/TECHNICAL。
     性别词放在主体最前面（2.1 对前置主体词最敏感）。
     """
     kind = item["kind"]
-    anchor = ("Using the reference image strictly as style, color palette and lighting "
-              f"anchor (time of day: {get_preset(s['time_preset'])['name']}), ")
-    view = VIEW_LOCK["prompt"] + ", "
-    bg = _ISOLATED_BG if transparent else "plain light neutral background"
     gender = GENDERS.get(item.get("gender"), {}).get("prompt", "")
     who = f"{_clean(item['name'])} - {_clean(item['desc'])}"
+    bg = _ISOLATED_BG if transparent else "plain light neutral background"
 
     if kind == "scene":
         usage = scene_usage(item) or ("tile" if tileable else "battle")
-        body = (f"game environment concept art: {who}, "
-                + (f"{SEASONS[item['season']]['prompt']} season, "
-                   if item.get("season") else "")
-                + "full detailed environment, "
-                + _SCENE_HINT.get(usage, _SCENE_HINT["battle"]))
-        view = ""                      # 场景自带的取景词已经含机位，不再叠 iso 相机
+        role = "game environment concept art, production background"
+        subject = (who
+                   + (f", {SEASONS[item['season']]['prompt']} season"
+                      if item.get("season") else ""))
+        view = _SCENE_HINT.get(usage, _SCENE_HINT["battle"])
     elif kind == "character":
-        body = (f"full body character sprite, single character, "
-                f"{gender + ', ' if gender else ''}"
-                f"standing pose, whole body in frame: {who}, {bg}, centered")
+        role = "production character sprite"
+        subject = (f"full body single character"
+                   + (f", {gender}" if gender else "")
+                   + f", standing pose, whole body in frame: {who}")
+        view = "centered, " + bg
     elif kind == "pet":
-        body = ("cute game pet companion creature sprite, full body: "
-                f"{who}, {bg}, centered")
+        role = "production game pet companion creature sprite"
+        subject = f"full body cute companion creature: {who}"
+        view = "centered, " + bg
     elif kind == "weapon":
         tier = WEAPON_TIERS.get(item.get("tier_id"))
-        body = ("game weapon design, single weapon, centered: "
-                f"{who}, " + (f"{tier['prompt']} quality tier, " if tier else "") + bg)
+        role = "production game weapon design asset"
+        subject = (f"single weapon, centered: {who}"
+                   + (f", {tier['prompt']} quality tier" if tier else ""))
+        view = bg
     elif kind == "building":
-        body = ("game architecture concept art, exterior view: "
-                f"{who}, full structure visible, base sitting on an isometric ground plane")
+        role = "production game architecture concept art"
+        subject = f"exterior view, full structure visible: {who}"
+        view = "base sitting on an isometric ground plane"
     else:                                   # monster：等级定体型，场景定环境
         tier = MONSTER_TIERS[monster_tier(item)]
-        body = (f"game monster creature design, full body, centered, tier: {tier['name']}, "
-                f"{tier['prompt']}: {who}, "
-                + (f"native to the {_clean(item['scene'])} region, "
-                   if item.get("scene") else "")
-                + bg)
+        role = "production game monster creature design"
+        subject = (f"full body tier-{tier['name']} creature, {tier['prompt']}: {who}"
+                   + (f", native to the {_clean(item['scene'])} region"
+                      if item.get("scene") else ""))
+        view = "centered, " + bg
+
+    ad = _artdir_block(s)
+    art_dir = ", ".join(x for x in (_style_block(s), ad) if x)
     extra = _clean(prompt_extra(s, kind))          # 项目级补充（该类独有）
     if extra:
-        body = f"{body}, {extra}"
-    tail = f", {anim_tail}" if anim_tail else ""
-    return f"{anchor}{view}{body}{tail}. Keep style, palette and atmosphere identical to the reference"
+        subject = f"{subject}, {extra}"
+    read = ("clean silhouette readable at native game scale, "
+            "foot/base anchored consistently" if kind != "scene"
+            else "main structure readable at gameplay camera distance")
+    view_full = view if kind == "scene" else f"{VIEW_LOCK['prompt']}, {view}"
+    technical = f"{view_full}, {anim_tail}" if anim_tail else view_full
+    return (f"ROLE/PURPOSE: {role}. "
+            f"SUBJECT: {subject}. "
+            f"VIEW: {view_full}. "
+            f"ART DIRECTION: {art_dir}. "
+            f"GAME-SCALE READ: {read}. "
+            f"TECHNICAL OUTPUT: {technical}. "
+            "LOCKS: Using the reference image strictly as style, color palette and "
+            f"lighting anchor (time of day: {get_preset(s['time_preset'])['name']}), "
+            "keep style, palette, proportions and atmosphere identical to the reference. "
+            f"EXCLUDE: {_COMMON_NEG} cropped edges")
 
 
 def asset_negative(s: dict, kind: str) -> str:
