@@ -338,6 +338,12 @@ def _upsert_asset(sid: str, asset: dict) -> None:
             del history[_MAX_HISTORY:]
             asset["history"] = history
         t["assets"] = kept + [asset]
+        # 条目收工：把阶段条上挂着的「当前项 + 已出 N 张」摘掉。
+        # 这一步只在 _upsert_asset（收尾）走，_upsert_anim_progress 不清，
+        # 否则用户会看到一条永久停在 21/21 的「正在生成」。
+        st = ((t.get("pipeline") or {}).get("stages") or {}).get(asset.get("kind"))
+        if st is not None:
+            st.pop("live", None)
     store.mutate(sid, _apply)
 
 
@@ -534,6 +540,11 @@ async def _stage_assets(sid: str, kind: str, opts: dict) -> None:
             _item_update(sid, kind, real_i, status="failed", error=str(exc))
             store.append_log(sid, "error",
                              f"{store.STAGE_LABELS[kind]}「{name_tag}」失败：{exc}")
+            # 只留异常字符串根本定位不到行号（本仓库吃过这个亏），补一条栈
+            import traceback as _tb
+            store.append_log(sid, "warn",
+                             f"{store.STAGE_LABELS[kind]}「{name_tag}」堆栈："
+                             + _tb.format_exc().strip().splitlines()[-1][:300])
     if n_fail:
         raise RuntimeError(f"{n_fail}/{len(targets)} 张失败（可筛选重跑仅失败条目）")
 
@@ -568,7 +579,8 @@ def _alpha_to_ref(path: str | Path) -> str:
 async def _gen_design_sheets(*, sid: str, s: dict, kind: str, item: dict,
                              payload: dict, master_path: str, spec: dict,
                              out_dir: Path, aid: str,
-                             prev_design: dict | None) -> dict:
+                             prev_design: dict | None,
+                             on_sheet=None) -> dict:
     """第一层：身份卡（多栏 turnaround sheet）。
 
     这是 13.0 的地基。12.x 每帧都从零采样，40 帧是 40 次独立掷骰子，
@@ -650,6 +662,11 @@ async def _gen_design_sheets(*, sid: str, s: dict, kind: str, item: dict,
             f"{store.STAGE_LABELS[kind]}「{_item_tag(item, kind)}」身份卡 "
             f"{si + 1}/{ta['count']} 完成：{'/'.join(DIRECTIONS[d]['name'] for d in dirs)}"
             f"（{w}×{h}）")
+        if on_sheet:                    # 立刻给用户看这一张（长等待的第一个信号）
+            try:
+                on_sheet(sheets_meta, columns)
+            except Exception as exc:    # 展示失败不能拖垮生成
+                store.append_log(sid, "warn", f"身份卡进度回写失败：{exc}")
     return {"level": spec["id"], "sheets": sheets_meta, "columns": columns,
             "reused": False}
 
@@ -704,19 +721,23 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
     frames_done = 0
     keys_done = 0
 
-    # ---------- 第一层：身份卡 ----------
-    # 全部朝向都已有可复用图集时连身份卡也不必再出（真续跑：零出图）
-    if all(_bank_ok(prev_banks.get(d)) for d in spec["dirs"]):
-        design = prev_anim.get("design") or {"level": spec["id"], "sheets": [],
-                                             "columns": {}}
-    else:
-        design = await _gen_design_sheets(
-            sid=sid, s=s, kind=kind, item=item, payload=payload,
-            master_path=master_path, spec=spec, out_dir=out_dir, aid=aid,
-            prev_design=prev_anim.get("design"))
+    # 出一张显示一张（13.1）：每落一张图就把记录冲一次库。
+    # 2060 上单张 2~4 分钟、一个朝向 10 张，若只在朝向完成时落库，用户要空等
+    # 半小时才看见第一张——那不是「慢」，在用户眼里是「卡死/报错」。
+    live: dict = {"phase": "design", "dir": None, "dir_name": None,
+                  "clip": None, "clip_name": None, "idx": 0, "count": 0,
+                  "path": None, "url": None, "started_at": store.now_iso()}
+    previews: list[dict] = []          # 最近出过的关键姿态，前端排成小图墙
+    design: dict = {"level": spec["id"], "sheets": [], "columns": {}}
+    building = {"on": True}
 
     def _record() -> dict:
-        """当前进度的素材记录（半成品 / 成品共用，anim.expected 标总数）。"""
+        """当前进度的素材记录（半成品 / 成品共用，anim.expected 标总数）。
+
+        缩略图优先用封面；还没组出封面时用「刚出的那张」——用户在卡片上看到
+        的就是自己真正在等的那张图，而不是占位符。
+        """
+        thumb = cover or (Path(live["path"]) if live.get("path") else None)
         return {
             "id": aid,
             "item_id": item.get("id"),
@@ -728,8 +749,8 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
                             if item.get("gender") in GENDERS else None),
             "tier": item.get("tier"), "tier_id": item.get("tier_id"),
             "usage": None, "usage_name": None, "usage_reason": None, "scene": None,
-            "path": str(cover) if cover else None,
-            "url": _url_of(cover) if cover else None,
+            "path": str(thumb) if thumb else None,
+            "url": _url_of(thumb) if thumb else None,
             "seed": None,
             "size": list(cell), "transparent": {"method": tmode},
             "tileable": False,
@@ -762,9 +783,43 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
                 "interp_frames": frames_done - keys_done,
                 "calls_total": spec["calls_total"],
                 "view": anim.view_meta(),
+                # 实时进度：前端据此显示「正在出 X 朝向 Y 姿态 3/4」和小图墙
+                "building": building["on"],
+                "live": {**live, "keys_done": keys_done,
+                         "keys_total": spec["keys_total"],
+                         "calls_done": len(design.get("sheets") or []) + keys_done,
+                         "calls_total": spec["calls_total"]},
+                "previews": previews[-16:],
             },
             "created_at": (prev or {}).get("created_at") or store.now_iso(),
         }
+
+    # ---------- 第一层：身份卡 ----------
+    # 全部朝向都已有可复用图集时连身份卡也不必再出（真续跑：零出图）
+    if all(_bank_ok(prev_banks.get(d)) for d in spec["dirs"]):
+        design = prev_anim.get("design") or {"level": spec["id"], "sheets": [],
+                                             "columns": {}}
+    else:
+        # 先占一个位：让卡片在点下「生成」的瞬间就出现，写明正在画身份卡。
+        # 第一张身份卡往往是最久的一次等待（960×640 一次出四栏），
+        # 这段空窗期不给反馈，用户只会以为失败了。
+        _upsert_anim_progress(sid, _record())
+
+        def _on_sheet(sheets_meta: list[dict], cols: dict[str, dict]) -> None:
+            """身份卡一出来就展示：它本身就是用户最想先看到的东西。"""
+            nonlocal design
+            design = {"level": spec["id"], "sheets": list(sheets_meta),
+                      "columns": dict(cols)}
+            last = sheets_meta[-1]
+            live.update(phase="design", path=last["path"], url=last["url"],
+                        dir=None, dir_name=None, clip=None, clip_name=None)
+            _upsert_anim_progress(sid, _record())
+
+        design = await _gen_design_sheets(
+            sid=sid, s=s, kind=kind, item=item, payload=payload,
+            master_path=master_path, spec=spec, out_dir=out_dir, aid=aid,
+            prev_design=prev_anim.get("design"), on_sheet=_on_sheet)
+
 
     for dir_id in spec["dirs"]:
         if _bank_ok(prev_banks.get(dir_id)):
@@ -811,6 +866,18 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
                     reasons += [r for r in rec["quality"]["reasons"]
                                 if r not in reasons]
                 keys_done += 1
+                # 出一张显示一张：这一张连同「正在画哪一帧」立刻落库。
+                # idx/count 用「第几张关键姿态 / 共几张」而不是帧序号——用户看到的
+                # 应该是「行走 2/4」，不是「行走第 4 帧 / 共 8 帧」这种内部编号。
+                live.update(phase="keypose", dir=dir_id,
+                            dir_name=DIRECTIONS[dir_id]["name"],
+                            clip=clip, clip_name=CLIPS[clip]["name"],
+                            idx=idxs.index(i) + 1, count=len(idxs),
+                            path=rec["path"], url=_url_of(rec["path"]))
+                previews.append({"dir": dir_id, "clip": clip, "idx": i,
+                                 "url": live["url"]})
+                del previews[:-16]
+                _upsert_anim_progress(sid, _record())
         frames = anim.build_frames_from_keys(keys, spec["tweens"], spec["clips"],
                                              cell, anchor)
         n_frames = sum(len(v) for v in frames.values())
@@ -847,14 +914,37 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
             sheet0 = _Im.open(bp).convert("RGBA")
             cover = out_dir / f"{aid}_cover.png"
             sheet0.crop((0, 0, cell[0], cell[1])).save(cover)
+    building["on"] = False            # 收尾：前端据此把「生成中」换成完成态
+    live["phase"] = "done"
     return _record()
 
 
 def _upsert_anim_progress(sid: str, asset: dict) -> None:
-    """动画增量进度：按 id 原位替换，不进版本历史（半成品不值得占历史位）。"""
+    """动画增量进度：按 id 原位替换，不进版本历史（半成品不值得占历史位）。
+
+    同时把「出到哪一张」写进 stages[kind].live：只看阶段进度条、不点卡片的人
+    也能看到进度在动。否则一个角色 21 次出图、耗时一小时，阶段条会从 0%
+    直接跳到 100%，中途完全静止——看起来就像卡死。
+    """
+    am = asset.get("anim") or {}
+    lv = am.get("live") or {}
+    building = bool(am.get("building"))
+
     def _apply(t: dict) -> None:
         t["assets"] = [a for a in t["assets"] if a.get("id") != asset["id"]]
         t["assets"].append(asset)
+        pipe = t.get("pipeline") or {}
+        st = (pipe.get("stages") or {}).get(asset.get("kind"))
+        if st is None:
+            return
+        if building:
+            st["live"] = {"name": asset.get("name"),
+                          "label": lv.get("dir_name") or
+                                   ("身份卡" if lv.get("phase") == "design" else ""),
+                          "done": int(lv.get("calls_done") or 0),
+                          "total": int(lv.get("calls_total") or 0)}
+        else:
+            st.pop("live", None)      # 收尾清掉，别把上一项的残留挂成「当前」
     store.mutate(sid, _apply)
 
 
@@ -1344,15 +1434,6 @@ def commit_variant(*, sid: str, aid: str, variant: dict,
     store.mutate(sid, _apply)
     store.append_log(sid, "info", f"「{old['name']}」已更新（候选提交，旧版进历史）")
     return new_asset
-
-
-def _url_of(p: Path) -> str:
-    """本地路径 → 前端可访问的 /data/... URL。"""
-    try:
-        rel = p.resolve().relative_to(settings.data_dir_path.resolve())
-        return f"/data/{rel.as_posix()}"
-    except ValueError:
-        return f"/data/{p.name}"
 
 
 def recut_asset(s: dict, asset: dict) -> dict:

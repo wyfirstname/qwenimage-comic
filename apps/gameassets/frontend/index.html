@@ -110,6 +110,24 @@
   .card-actions button { border: none; border-radius: 6px; padding: 3px 8px; font-size: 11.5px; cursor: pointer;
                          background: rgba(255,255,255,.92); box-shadow: 0 1px 4px rgba(0,0,0,.18); }
 
+  /* ===== 生成中的实时态（逐张落库 → 逐张可见） ===== */
+  .asset-card.building { box-shadow: 0 0 0 1px rgba(59,110,245,.35); }
+  .asset-card.building img { object-fit: contain; background: #f7f7fa; }
+  .shot-ph { aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+             gap: 8px; font-size: 12.5px; color: #777; background: #f7f7fa; }
+  .shot-badge { position: absolute; left: 6px; top: 6px; font-size: 11px; padding: 2px 8px;
+                border-radius: 10px; background: rgba(59,110,245,.92); color: #fff;
+                display: inline-flex; align-items: center; gap: 4px; }
+  .pulse { width: 9px; height: 9px; border-radius: 50%; background: #3b6ef5;
+           animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: .25; transform: scale(.8); }
+                     50% { opacity: 1; transform: scale(1.1); } }
+  .live-box { margin-top: 6px; }
+  .live-line { font-size: 11.5px; color: #555; display: flex; gap: 4px; align-items: baseline; }
+  .live-strip { display: flex; gap: 4px; margin-top: 5px; overflow-x: auto; padding-bottom: 2px; }
+  .live-strip img { width: 40px; height: 40px; border-radius: 6px; border: 1px solid var(--border, #e3e3e3);
+                    object-fit: contain; background: #fff; flex: 0 0 auto; }
+
   /* ===== 弹窗（放大 / 候选 / 方案编辑 / 设置） ===== */
   .modal-mask { display: none; position: fixed; inset: 0; background: rgba(15,20,30,.62);
                 z-index: 50; align-items: center; justify-content: center; }
@@ -186,7 +204,12 @@
   .stage-card.wide { flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap;
                      padding: 10px 14px; }
   .stage-card.wide .stage-bar { flex: 1; min-width: 120px; }
-  .stage-card.wide .stage-btnrow { margin-left: auto; }
+  .stage-card.wide .stage-meta { flex: 0 1 auto; min-width: 0; }
+  .stage-card.wide .stage-meta .cnt { overflow: hidden; text-overflow: ellipsis;
+                                      white-space: nowrap; max-width: 320px; }
+  .stage-card.wide .stage-btnrow { margin-left: auto; flex: none; }
+  .stage-btn { white-space: nowrap; flex: none; }
+  .stage-filter { flex: none; }
 
   /* 该类提示词面板 */
   .prompt-panel { border: 1px solid var(--border, #e3e3e3); border-radius: 10px;
@@ -493,6 +516,9 @@
   const PLAN_KEY = { scene: 'scenes', character: 'characters', pet: 'pets',
                      weapon: 'weapons', building: 'buildings', monster: 'monsters' };
   const SEASON_CN = { spring: '春', summer: '夏', autumn: '秋', winter: '冬' };
+  // 朝向 id → 中文，仅用于进度小图墙的 title（完整名称由后端 dir_name 给）
+  const DIR = { s: '正面', se: '右前', e: '右侧', ne: '右后',
+                n: '背面', nw: '左后', w: '左侧', sw: '左前' };
   const SEASON_ORDER = ['spring', 'summer', 'autumn', 'winter'];
   const WEAPON_TIERS = [['common', '普通'], ['fine', '精良'],
                         ['epic', '史诗'], ['legendary', '传说']];
@@ -706,9 +732,17 @@
       state.tab,
       ST_ORDER.map(k => {
         const st = stages[k] || {};
-        return [st.status, st.done || 0, st.total || 0, st.error || '', (st.items || []).length];
+        return [st.status, st.done || 0, st.total || 0, st.error || '', (st.items || []).length,
+                (st.live || {}).done || 0];
       }),
-      (s.assets || []).map(a => a.id + (a.history || []).length).join('|'),
+      // 素材指纹要带「内容」而不只是 id：动画半成品是按同一个 id 反复顶掉的，
+      // 只比 id + 历史长度会导致新出的帧永远不触发重绘（用户看不见进度）。
+      (s.assets || []).map(a => {
+        const am = a.anim || {};
+        return [a.id, a.url || '', (a.history || []).length,
+                am.frames_total || 0, am.key_frames || 0,
+                (am.live || {}).idx ?? '', am.building ? 1 : 0].join(':');
+      }).join('|'),
       (s.pipeline?.log || []).length,
       JSON.stringify(s.prompts || {}),
     ]);
@@ -789,15 +823,24 @@
   // ---- 阶段控制条（两类页签共用）----
   function stageBar(kind, st) {
     const [chipText, chipCls] = ST_CHIP[st.status] || ST_CHIP.idle;
-    const pct = st.total ? (st.done / st.total * 100) : (st.status === 'done' ? 100 : 0);
+    // 子项级进度：一个角色 21 张图要一小时，只按「条目数」算进度条会整段静止；
+    // 有 live 就按「当前条目已出张数」折算进去，条子跟着一张一张走。
+    const lv = st.live || {};
+    const frac = (lv.total ? Math.min(1, (lv.done || 0) / lv.total) : 0);
+    const pct = st.total ? Math.min(100, ((st.done || 0) + frac) / st.total * 100)
+                         : (st.status === 'done' ? 100 : 0);
     const active = ['queued', 'running'].includes(st.status);
     const isClass = KINDS6.includes(kind);
     const opts = isClass && st.total ? filterOptions(kind, st) : [];
+    // 阶段条上的「当前项」只放短信息（长文案会把按钮挤成竖排），全量放 title
+    const liveTxt = lv.total ? ` · ${esc(lv.label || '出图')} ${lv.done}/${lv.total} 张` : '';
+    const liveTip = lv.total
+      ? `「${esc(lv.name || '')}」${esc(lv.label || '')} ${lv.done}/${lv.total} 张` : '';
     return `<div class="stage-card wide" data-stage="${kind}">
       <div class="stage-head"><b>${ST_NAME[kind]}生成</b>
         <span class="st-chip ${chipCls}">${chipText}</span></div>
       <div class="stage-bar"><b style="width:${pct}%"></b></div>
-      <div class="stage-meta"><span class="cnt">${st.total ? `${st.done || 0}/${st.total}` : ''}</span>
+      <div class="stage-meta"><span class="cnt" title="${liveTip}">${st.total ? `${st.done || 0}/${st.total}` : ''}${liveTxt}</span>
         <span class="err">${esc(st.error || '')}</span></div>
       <div class="stage-btnrow">
         <button class="stage-btn go" ${active ? 'disabled' : ''}>${active ? '进行中…'
@@ -918,6 +961,8 @@
 
   function assetCard(a) {
     const tone = a.tone || {}, q = a.quality || {};
+    const am = a.anim || null, lv = (am && am.live) || {};
+    const building = !!(am && am.building);
     const chips = [
       a.season_name ? `<span class="season-chip">${a.season_name}</span>` : '',
       a.gender_name ? `<span class="gender-chip gender-${a.gender}">${a.gender_name}</span>` : '',
@@ -931,9 +976,35 @@
         : q.pass === true ? '<span class="q-chip q-pass">✓守门</span>' : '',
       (a.history || []).length ? `<span class="q-chip" style="background:rgba(0,0,0,.06);color:#777" title="有历史版本，点图查看">${a.history.length}版</span>` : '',
     ].join('');
-    return `<div class="asset-card">
-      <img src="${a.url}" loading="lazy" class="${a.transparent ? 'alpha' : ''}"
-           onclick="UI.openLb('${a.id}')">
+    // 生成中的实时态：卡片顶部压一条「正在画什么」，图墙按张追加。
+    // 只在还没有图时才用文字占位——已经有图就必须让用户看见那张图。
+    const liveShot = a.url
+      ? `<img src="${a.url}" loading="lazy" class="${a.transparent ? 'alpha' : ''}"
+              onclick="UI.openLb('${a.id}')">`
+      : `<div class="shot-ph"><i class="pulse"></i>${esc(
+            lv.phase === 'design' ? '正在画身份卡…' : '排队中，等第一张…')}</div>`;
+    const liveBadge = building
+      ? `<div class="shot-badge">● 生成中 ${am.key_frames || 0}/${am.key_expected || 0} 张</div>`
+      : '';
+    let liveBox = '';
+    if (building) {
+      const at = [lv.dir_name, lv.clip_name].filter(Boolean).join(' · ');
+      const cur = lv.count ? ` ${lv.idx}/${lv.count}` : '';
+      const secs = lv.started_at
+        ? Math.max(0, (Date.now() - new Date(lv.started_at).getTime()) / 1000) : 0;
+      const spent = secs < 60 ? '刚刚开始' : `已 ${Math.round(secs / 60)} 分钟`;
+      const strip = (am.previews || []).slice(-8);
+      liveBox = `<div class="live-box">
+        <div class="live-line"><b>${esc(at || '身份卡')}</b>${cur}
+          <span class="muted">· ${spent}</span></div>
+        ${strip.length ? `<div class="live-strip">${strip.map(p =>
+            `<img src="${p.url}" title="${esc((DIR[p.dir] || p.dir))} · ${esc(p.clip)} 第 ${p.idx + 1} 帧">`
+          ).join('')}</div>` : ''}
+      </div>`;
+    }
+    return `<div class="asset-card${building ? ' building' : ''}">
+      ${liveShot}
+      ${liveBadge}
       <div class="card-actions">
         <button title="单张精修（改词/锁seed/多候选）" onclick="UI.openVar('${a.id}')">✎</button>
         <button title="直接重跑" onclick="UI.rerun('${a.id}')">↻</button>
@@ -943,6 +1014,7 @@
         <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
           <b style="font-size:13px">${esc(a.name)}</b>${chips}
         </div>
+        ${liveBox}
         <div style="margin-top:4px">
           <span class="tone-badge ${tone.pass ? 'tone-pass' : 'tone-fail'}">
             ${tone.pass ? '✓ 色调一致' : '⚠ 色调偏离'} ${Math.round(tone.score)}

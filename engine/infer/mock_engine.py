@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 from typing import Callable, Optional
 
@@ -107,6 +108,12 @@ class MockEngine:
             if progress_cb:
                 progress_cb(int(i / total_steps * 90), f"采样 {i}/{total_steps}")
             time.sleep(0.02)
+
+        # MOCK_DELAY：单张额外等待秒数。mock 默认是「秒出」，前端逐张落库的
+        # 中间态根本来不及被看到；联调「出一张显示一张」时用这个把节奏拉慢。
+        _delay = float(os.environ.get("MOCK_DELAY") or 0)
+        if _delay > 0:
+            time.sleep(_delay)
 
         first_ref = reference
         if first_ref is None and references:
