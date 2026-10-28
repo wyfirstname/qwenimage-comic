@@ -96,6 +96,11 @@ class MockEngine:
         reference: Optional[Image.Image] = None,
         references: Optional[list[Image.Image]] = None,
         strength: float = 0.6,
+        control: Optional[Image.Image] = None,
+        control_mode: str = "pose",
+        control_strength: float = 0.8,
+        control_start: float = 0.0,
+        control_end: float = 0.9,
         progress_cb: Optional[Callable[[int, str], None]] = None,
     ) -> EngineResult:
         started = time.time()
@@ -174,6 +179,17 @@ class MockEngine:
             fill=(220, 220, 220, 220),
         )
 
+        ctrl_info = None
+        if control is not None:
+            # 把骨架以 25% 不透明度叠上去：mock 里也能肉眼确认「控制图到达了引擎」。
+            # 强度/区间原样回传，断言脚本用它验证参数没在中间层被吃掉。
+            layer = control.convert("RGB").resize((width, height), Image.LANCZOS)
+            img = Image.blend(img.convert("RGB"), layer, 0.25)
+            ctrl_info = {"mode": control_mode, "strength": control_strength,
+                         "start": control_start, "end": control_end,
+                         "size": list(control.size)}
+            self.last_control = dict(ctrl_info)
+
         if progress_cb:
             progress_cb(95, "解码")
         time.sleep(0.05)
@@ -183,6 +199,7 @@ class MockEngine:
             seed=actual_seed,
             elapsed_ms=int((time.time() - started) * 1000),
             engine=self.name,
+            control=ctrl_info,
         )
 
 

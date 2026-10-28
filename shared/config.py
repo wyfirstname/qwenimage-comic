@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     text_encoder_file: str = "text_encoders/qwen3vl_8b_int8_convrot.safetensors"
     vae_file: str = "vae/qwen_image_2.1_vae_bf16.safetensors"
 
+    # ---------------- 控制图（ControlNet） ----------------
+    # 动画帧的姿态控制走 ComfyUI 侧的 Union 分支。文件名不必填全路径：
+    # 引擎会去 /object_info 的下拉框里核对，选不到就如实报「缺哪个权重、放哪」。
+    control_union_file: str = "Qwen-Image-2.1-Fun-Controlnet-Union-ComfyUI.safetensors"
+    control_lora_file: str = "qwen_image_union_diffsynth_lora.safetensors"
+
     # ---------------- 设备 ----------------
     device: str = "cuda:0"
     # 注意：文本编码器（Qwen3-VL-8B）的落点**没有**配置项。

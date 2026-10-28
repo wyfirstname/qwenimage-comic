@@ -41,7 +41,7 @@ from shared.config import settings
 from shared.models_util import new_id
 from engine.sdk import engine
 
-from . import anim, artdir, quality, store, tonecheck, transmat
+from . import anim, artdir, pose, quality, store, tonecheck, transmat
 from .planner import plan_from_idea
 from .presets import (ASPECTS, get_preset, asset_size, transparent_mode,
                       SEASONS, WEAPON_TIERS, ASSET_KINDS, build_stage_items,
@@ -50,6 +50,8 @@ from .presets import (ASPECTS, get_preset, asset_size, transparent_mode,
                       SCENE_USAGES, scene_usage,
                       ANIM_KINDS, ANIM_LEVELS, ANIM_FRAME_SIZE, VIEW_LOCK,
                       anim_level, anim_spec, anim_confirm,
+                      anim_control, anim_control_strength,
+                      ANIM_CONTROL_START, ANIM_CONTROL_END,
                       CLIPS, CLIP_ORDER, DIRECTIONS)
 from .styles import get_style
 
@@ -710,6 +712,7 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
 
     prev_anim = (prev or {}).get("anim") or {}
     prev_banks: dict[str, dict] = prev_anim.get("banks") or {}
+    prev_control: dict = prev_anim.get("control") or {}
     level_same = prev_anim.get("level") == spec["id"]
     exp_clips = {c: n for c, n in spec["clips"].items() if n}
     ta = spec["turnaround"]
@@ -750,6 +753,18 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
     gate_mode = anim_confirm(s, item)
     gate: dict = {"mode": gate_mode, "pending": None, "approved": {},
                   "rounds": {}, "notes": {}}
+
+    # 姿态控制（13.3）：每个关键姿态都配一张 OpenPose 骨架图，作为 ControlNet 的
+    # 硬约束。mode=auto 时缺权重会降级，但会在卡片上写清「姿态无控制」——
+    # 悄悄降级正是这次 64 格全站姿却没人发现的原因。
+    ctrl_mode = anim_control(s, item)
+    ctrl_strength = anim_control_strength(s, item)
+    pose_dir = out_dir / "pose"
+    control: dict = {"mode": ctrl_mode, "requested": ctrl_mode,
+                     "strength": ctrl_strength,
+                     "start": ANIM_CONTROL_START, "end": ANIM_CONTROL_END,
+                     "applied": False, "frames": 0, "route": "",
+                     "reason": ""}
 
     def _record() -> dict:
         """当前进度的素材记录（半成品 / 成品共用，anim.expected 标总数）。
@@ -810,6 +825,8 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
                          "calls_done": len(design.get("sheets") or []) + keys_done,
                          "calls_total": spec["calls_total"]},
                 "previews": previews[-16:],
+                # 姿态控制：这一组帧到底有没有被骨架管住（没有就明写原因）
+                "control": dict(control),
                 # 人工确认：mode + 当前挂着的那一帧 + 已通过的朝向 + 各 target 重画次数
                 "gate": {"mode": gate_mode,
                          "pending": dict(gate["pending"]) if gate["pending"] else None,
@@ -948,7 +965,54 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
         # 该朝向的参考栏：身份卡实拍栏，或（standard 的 ne）从邻近栏 + 视角词派生
         col_ref, view_phrase = _col_of(dir_id)
 
+        # 骨架必须按「画布」的比例来画：融合编辑的输出尺寸跟着 image_1（参考栏）
+        # 走，而 Union 是把控制图铺到同一张 latent 网格上的——方图配竖画布，
+        # 骨架会被横向拉开，出来的步态就是「劈叉」。所以这里量一下参考栏。
+        ctrl_size = (fw, fh)
+        if col_ref:
+            try:
+                from PIL import Image as _Im
+                with _Im.open(col_ref) as _ref:
+                    ctrl_size = _ref.size
+                if min(ctrl_size) < 256:      # 太小的画布放大一点，骨架细节才够
+                    k = 256 / min(ctrl_size)
+                    ctrl_size = (int(round(ctrl_size[0] * k)),
+                                 int(round(ctrl_size[1] * k)))
+            except Exception as exc:
+                store.append_log(sid, "warn",
+                                 f"{tag} 读不到参考栏尺寸（{exc}），骨架改用帧画幅")
+                ctrl_size = (fw, fh)
+
         keys: dict[str, dict[int, str]] = {}
+
+        async def _gen_frame(prompt: str, ctrl: dict | None) -> tuple[dict, bool]:
+            """出一帧，返回 (记录, 这一帧有没有真被骨架管住)。
+
+            第二个返回值不能省：降级后是「没有控制」画出来的，如果调用方还按
+            ctrl_req 非空去记账，卡片就会显示「🦴 骨架 20」，而实际上一条骨架
+            都没进模型——那正是这次要修的那种「看起来做了」的谎。
+            """
+            nonlocal ctrl_mode
+            try:
+                rec = await _gen_with_gate(
+                    sid=sid, kind=kind, item=item, prompt=prompt, negative=neg,
+                    threshold=threshold, size=(fw, fh), tmode=tmode,
+                    master_path=master_path, max_attempts=2,
+                    extra_refs=[col_ref] if col_ref else None,
+                    control=ctrl)
+                return rec, bool(ctrl)
+            except Exception as exc:
+                if (ctrl and ctrl_mode == "auto"
+                        and getattr(exc, "control_unavailable", False)):
+                    control["reason"] = str(exc)
+                    control["mode"] = "off"
+                    ctrl_mode = "off"
+                    store.append_log(
+                        sid, "warn",
+                        f"{tag} 姿态控制不可用，本阶段后续帧按「无骨架」生成：{exc}")
+                    return await _gen_frame(prompt, None)
+                raise
+
         # 每朝向只在首帧停一次：首帧对了，后面 9 张都以它为参考，错不了多少；
         # 首帧就歪，那 9 张全是浪费。
         need_confirm = gate_mode != "off"
@@ -968,21 +1032,29 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
                         s, payload, transparent=tmode != "none",
                         anim_tail=anim.key_suffix(clip, i, count, dir_id, view_phrase)
                         + (f", art director's correction: {hint}" if hint else ""))
-                    rec = await _gen_with_gate(
-                        sid=sid, kind=kind, item=item, prompt=prompt, negative=neg,
-                        threshold=threshold, size=(fw, fh), tmode=tmode,
-                        master_path=master_path, max_attempts=2,
-                        extra_refs=[col_ref] if col_ref else None)
+                    ctrl_req = None
+                    if ctrl_mode != "off":
+                        pm = pose_dir / f"{aid}_{dir_id}_{clip}_{i}.png"
+                        pose.pose_map(pm, dir_id, clip, i, ctrl_size)
+                        ctrl_req = {"path": str(pm), "mode": "pose",
+                                    "strength": ctrl_strength,
+                                    "start": ANIM_CONTROL_START,
+                                    "end": ANIM_CONTROL_END}
+                    rec, ctrl_used = await _gen_frame(prompt, ctrl_req)
                     # 出一张显示一张：这一张连同「正在画哪一帧」立刻落库。
                     # idx/count 用「第几张关键姿态 / 共几张」而不是帧序号——用户看到的
                     # 应该是「行走 2/4」，不是「行走第 4 帧 / 共 8 帧」这种内部编号。
+                    if ctrl_used:
+                        control["applied"] = True
+                        control["frames"] = int(control.get("frames") or 0) + 1
                     live.update(phase="keypose", dir=dir_id,
                                 dir_name=DIRECTIONS[dir_id]["name"],
                                 clip=clip, clip_name=CLIPS[clip]["name"],
                                 idx=idxs.index(i) + 1, count=len(idxs),
                                 path=rec["path"], url=_url_of(rec["path"]))
                     previews.append({"dir": dir_id, "clip": clip, "idx": i,
-                                     "url": live["url"]})
+                                     "url": live["url"],
+                                     "pose_url": _url_of(ctrl_req["path"]) if ctrl_req else None})
                     del previews[:-16]
                     _upsert_anim_progress(sid, _record())
                     if not need_confirm:
@@ -1028,7 +1100,20 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
             f"（关键姿态 {spec['keys_per_dir']} 张 + 插值 "
             f"{n_frames - spec['keys_per_dir']} 帧，共 {n_frames} 帧；"
             f"整体 {frames_done}/{spec['frames_total']} 帧）")
+        if ctrl_mode != "off" and control["applied"]:
+            store.append_log(sid, "info",
+                             f"{tag} 姿态控制生效（强度 {ctrl_strength}，"
+                             f"关键帧 {control['frames']} 张带骨架）")
         _upsert_anim_progress(sid, _record())          # 每朝向即落库，失败不报废
+
+    if not control["applied"] and prev_control.get("applied"):
+        # 整组都是复用的旧图集：这些帧上一趟确实带过骨架，控制记录就沿用上一趟。
+        # 否则续跑一次卡片就从「🦴 骨架 20」变成「姿态无控制」——数据没变、
+        # 结论变了，用户只会以为这次坏了。
+        control.update({k: prev_control.get(k) for k in
+                        ("mode", "requested", "strength", "start", "end",
+                         "frames", "applied", "route", "reason")})
+        control["reused"] = True
 
     if cover is None:
         # 全部朝向都走增量复用：复用旧封面；连封面都没了就从图集裁站立首帧
@@ -1181,6 +1266,7 @@ async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
                          master_path: str, seed: int = -1,
                          negative: str | None = None,
                          extra_refs: list[str] | None = None,
+                         control: dict | None = None,
                          max_attempts: int = _MAX_ATTEMPTS) -> dict:
     """生成 + 质量守门 + 自动重试 + 透明底后处理，产出素材记录。
 
@@ -1198,7 +1284,8 @@ async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,
             raise _StageCanceled()
         rec = await _run_job(prompt=prompt, negative=neg,
                              width=w, height=h, seed=seed,
-                             refs=[master_path] + list(extra_refs or []))
+                             refs=list(extra_refs or []) + [master_path],
+                             control=control)
         last_rec, seed = rec, -1          # 首次用调用方 seed，后续换新 seed
         last_q = quality.inspect(rec["path"], master_path, threshold=threshold)
         structural = [r for r in last_q["reasons"] if not r.startswith("跑色")]
@@ -1510,7 +1597,9 @@ def _rule_direct(idea: str, scale_id: str) -> dict:
 # ============================================================
 
 async def _run_job(*, prompt: str, negative: str, width: int, height: int,
-                   seed: int, refs: list[str] | None = None) -> dict:
+                   seed: int, refs: list[str] | None = None,
+                   control: dict | None = None) -> dict:
+    """单次出图。control={"path","mode","strength","start","end"} 是姿态骨架。"""
     payload = {
         "job_id": new_id("job"),
         "prompt": prompt,
@@ -1541,6 +1630,17 @@ async def _run_job(*, prompt: str, negative: str, width: int, height: int,
             "guidance_scale": 1.0,
             "strength": 1.0,
         })
+    if control and control.get("path"):
+        cp = Path(control["path"])
+        if not cp.is_absolute():
+            cp = Path(".") / cp
+        payload["control"] = {
+            "image": f"data:image/png;base64,{base64.b64encode(cp.read_bytes()).decode()}",
+            "mode": str(control.get("mode") or "pose"),
+            "strength": float(control.get("strength") or 0.8),
+            "start": float(control.get("start") or 0.0),
+            "end": float(control.get("end") if control.get("end") is not None else 0.9),
+        }
     repo.create_job(job_id=payload["job_id"], prompt=prompt, negative=negative,
                     params=payload, seed=seed, count=1,
                     mode="img2img" if use_refs else "txt2img")

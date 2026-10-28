@@ -13,3 +13,7 @@ qwenimages:
     diffusion_models: qwen-image-2.1-unc
     text_encoders: qwen-image-2.1-unc/text_encoders
     vae: qwen-image-2.1-unc/vae
+    # 姿态控制（13.3）：ControlNet Union 权重 + Control-LoRA 兜底
+    # 放到项目根的 models/controlnet/ 与 models/model_patches/ 即可被 ComfyUI 看到
+    controlnet: controlnet
+    model_patches: model_patches

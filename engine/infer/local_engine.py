@@ -266,10 +266,23 @@ class LocalEngine:
         reference: Optional[Image.Image] = None,
         references: Optional[list[Image.Image]] = None,
         strength: float = 0.6,
+        control: Optional[Image.Image] = None,
+        control_mode: str = "pose",
+        control_strength: float = 0.8,
+        control_start: float = 0.0,
+        control_end: float = 0.9,
         progress_cb: Optional[Callable[[int, str], None]] = None,
     ) -> EngineResult:
         import torch
 
+        if control is not None:
+            # diffusers 这条通道没有接 ControlNet（Qwen-Image 2.1 的 GGUF 也塞不进
+            # diffusers 的 controlnet 包装）。宁可报错，也不要悄悄把骨架丢掉。
+            from engine.infer.controlnet import ControlUnavailable
+
+            raise ControlUnavailable(
+                "local（diffusers）通道不支持姿态控制图；请改用 ENGINE_MODE=comfy，"
+                "并在 ComfyUI 里装 Qwen Image 2.1 Fun ControlNet Union。")
         if not self.loaded:
             self.load()
 

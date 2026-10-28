@@ -38,12 +38,42 @@ from .presets import (ASSET_KINDS, SEASONS, SEASON_ORDER, TIER_ORDER,
                       SCENE_USAGES, SCENE_USAGE_ORDER, transparent_mode,
                       ANIM_LEVELS, ANIM_LEVEL_ORDER, ANIM_KINDS, ANIM_DEFAULT_LEVEL,
                       ANIM_CONFIRM_MODES, ANIM_CONFIRM_ORDER, ANIM_CONFIRM_DEFAULT,
+                      ANIM_CONTROL_MODES, ANIM_CONTROL_ORDER, ANIM_CONTROL_DEFAULT,
+                      ANIM_CONTROL_STRENGTH,
                       VIEW_LOCK, DIRECTIONS, CLIPS, anim_spec, anim_frames_of)
 from .styles import STYLE_PRESETS
 
 router = APIRouter(prefix="/gameassets", tags=["gameassets"])
 
 _RUNNABLE = set(store.STAGE_IDS) | {"all"}
+
+
+def _control_capability() -> dict:
+    """本机姿态控制通路（缺权重时把「装什么、放哪」直接给前端）。
+
+    mock 档视为可用：占位引擎不跑模型，但会把骨架叠进 mock 图，用来验证
+    「控制图确实一路传到了引擎」——这是端到端断言的基础。
+    """
+    from shared.config import settings as _s
+
+    mode = (_s.engine_mode or "mock").lower()
+    if mode == "mock":
+        return {"available": True, "route": "mock", "label": "占位引擎",
+                "model": None, "detail": "mock 模式：骨架会叠进预览图（不跑模型）"}
+    if mode == "local":
+        return {"available": False, "route": None, "label": None, "model": None,
+                "detail": "local（diffusers）通道不支持控制图，请改用 ENGINE_MODE=comfy"}
+    try:
+        from engine.infer.manager import manager
+
+        eng = manager.engine
+        if eng is not None and hasattr(eng, "control_status"):
+            return eng.control_status()
+    except Exception as exc:                    # 探测失败不影响页面
+        return {"available": False, "route": None, "label": None, "model": None,
+                "detail": f"控制通路探测失败：{exc}"}
+    return {"available": False, "route": None, "label": None, "model": None,
+            "detail": "引擎尚未创建，出图时会再探测一次"}
 
 
 class GenerateIn(BaseModel):
@@ -123,6 +153,10 @@ class SettingsIn(BaseModel):
         None, description="项目默认动画档位：off|lite|standard|full（角色/宠物）")
     anim_confirm: str | None = Field(
         None, description="人工确认模式：off（全自动）|dir（每朝向首帧）|design（身份卡+每朝向）")
+    anim_control: str | None = Field(
+        None, description="姿态控制档位：auto（有 Union 权重就用）|pose（缺权重报错）|off")
+    anim_control_strength: float | None = Field(
+        None, ge=0.1, le=2.0, description="ControlNet 姿态强度（0.8 常用平衡点）")
     artdir: dict[str, str] | None = Field(
         None, description="美术方向契约（八轴，见 /presets 的 artdir_axes）；传空对象恢复自动推导")
 
@@ -182,6 +216,14 @@ async def list_presets():
                                 "note": ANIM_CONFIRM_MODES[k]["note"]}
                                for k in ANIM_CONFIRM_ORDER],
         "anim_confirm_default": ANIM_CONFIRM_DEFAULT,
+        # 13.3 姿态控制：骨架硬约束（没有它，64 格都是同一个站姿）
+        "anim_control_modes": [{"id": k, "name": ANIM_CONTROL_MODES[k]["name"],
+                                "note": ANIM_CONTROL_MODES[k]["note"]}
+                               for k in ANIM_CONTROL_ORDER],
+        "anim_control_default": ANIM_CONTROL_DEFAULT,
+        "anim_control_strength": ANIM_CONTROL_STRENGTH,
+        # 本机控制通路能力（缺权重时前端直接提示该装什么，而不是出图后才发现）
+        "control_capability": _control_capability(),
         "anim_dirs": [{"id": k, "name": DIRECTIONS[k]["name"],
                        "short": DIRECTIONS[k]["short"]} for k in DIRECTIONS],
         "clips": [{"id": k, "name": CLIPS[k]["name"], "fps": CLIPS[k]["fps"],
@@ -606,6 +648,14 @@ async def edit_settings(sid: str, body: SettingsIn):
                 raise ValueError(f"未知确认模式：{body.anim_confirm}"
                                  f"（可选：{', '.join(ANIM_CONFIRM_ORDER)}）")
             t["anim"] = {**(t.get("anim") or {}), "anim_confirm": body.anim_confirm}
+        if body.anim_control is not None:
+            if body.anim_control not in ANIM_CONTROL_MODES:
+                raise ValueError(f"未知姿态控制档位：{body.anim_control}"
+                                 f"（可选：{', '.join(ANIM_CONTROL_ORDER)}）")
+            t["anim"] = {**(t.get("anim") or {}), "anim_control": body.anim_control}
+        if body.anim_control_strength is not None:
+            t["anim"] = {**(t.get("anim") or {}),
+                         "anim_control_strength": float(body.anim_control_strength)}
         if body.prompts is not None:
             from .presets import CLASS_LABELS
             bad = set(body.prompts) - set(ASSET_KINDS)

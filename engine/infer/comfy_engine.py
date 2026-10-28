@@ -225,13 +225,44 @@ class ComfyEngine:
             return False, self.last_error
         return True, f"ComfyUI 已重启并就绪（{self.last_load_seconds}s）"
 
+    # ================= 控制图能力 =================
+    def control_capability(self, refresh: bool = False) -> tuple:
+        """探测本机的控制通路（结果缓存 60 秒，避免每次出图都问一遍 ComfyUI）。"""
+        now = time.time()
+        cached = getattr(self, "_control_cache", None)
+        if cached and not refresh and now - cached[0] < 60:
+            return cached[1], cached[2]
+        from engine.infer import controlnet
+
+        route, why = controlnet.detect()
+        self._control_cache = (now, route, why)
+        return route, why
+
+    def control_status(self) -> dict:
+        """给接口 / 前端看的能力表（不抛错）。"""
+        route, why = self.control_capability()
+        return {
+            "available": route is not None,
+            "route": getattr(route, "route", None),
+            "label": getattr(route, "label", None),
+            "model": getattr(route, "model_name", None),
+            "detail": why or getattr(route, "detail", ""),
+        }
+
     # ================= 工作流 =================
     def _build_workflow(self, *, prompt: str, negative: str, width: int, height: int,
                         steps: int, guidance_scale: float, seed: int,
                         ref_name: Optional[str], strength: float,
-                        ref_names: Optional[list[str]] = None) -> dict:
+                        ref_names: Optional[list[str]] = None,
+                        control: Optional[dict] = None) -> dict:
+        """control = {route, name, strength, start, end}；None 表示不加控制。"""
         g = self._graph
         nodes: dict = {}
+        route = (control or {}).get("route")
+
+        if control:
+            nodes["40"] = g("LoadImage", image=control["name"])
+            control_link = ["40", 0]
 
         # ComfyUI 的文件列表均为「文件名」（子目录由 extra_model_paths 展开映射），
         # 因此这里统一取 basename，兼容 .env 里带 text_encoders/ 前缀的配置
@@ -285,7 +316,24 @@ class ComfyEngine:
                 nid = str(20 + i)  # 21, 22, ...
                 nodes[nid] = g("LoadImage", image=name)
                 enc[f"images.image_{i}"] = [nid, 0]
-            nodes["12"] = {"class_type": "TextEncodeQwenImage21", "inputs": enc}
+            if route == "union":
+                # Union 分支的参考图编码：image_1 决定画布，image_2/_3 只是外观参考，
+                # 语义与 TextEncodeQwenImage21 的 images.image_N 一一对应
+                uenc: dict[str, Any] = {
+                    "clip": ["2", 0], "vae": ["3", 0],
+                    "reference_image": enc.get("images.image_1"),
+                    "prompt": prompt, "negative_prompt": negative or "",
+                    "resolution": 0,
+                }
+                if enc.get("images.image_2"):
+                    uenc["reference_image_2"] = enc["images.image_2"]
+                if enc.get("images.image_3"):
+                    uenc["reference_image_3"] = enc["images.image_3"]
+                nodes["12"] = {"class_type": "QwenImage21UnionReferenceEncode",
+                               "inputs": uenc}
+            else:
+                nodes["12"] = {"class_type": "TextEncodeQwenImage21", "inputs": enc}
+            model_link = self._patch_control(nodes, model_link, control)
             nodes["9"] = g("KSampler",
                            model=model_link,
                            positive=["12", 0],
@@ -326,6 +374,8 @@ class ComfyEngine:
             denoise = 1.0
             cfg = 1.0
 
+        model_link = self._patch_control(nodes, model_link, control)
+
         nodes["9"] = g("KSampler",
                        model=model_link,
                        positive=["12" if ref_name is None else "5", 0],
@@ -340,6 +390,27 @@ class ComfyEngine:
         nodes["11"] = g("SaveImage", images=["10", 0],
                         filename_prefix="qwenimages/api")
         return {"prompt": nodes, "client_id": self.client_id}
+
+    def _patch_control(self, nodes: dict, model_link: list,
+                       control: Optional[dict]) -> list:
+        """把「控制图 + Union/Control-LoRA」接进模型链，返回新模型链接。
+
+        两条编码分支（融合编辑 / 文本编码）都要经过这里——融合分支是提前
+        return 的，只在尾部接会漏掉它。
+        """
+        if not control:
+            return model_link
+        from engine.infer import controlnet
+
+        extra, link = controlnet.build_nodes(
+            route=controlnet.ControlRoute(str(control["route"]), control["name"], ""),
+            model_link=model_link, vae_link=["3", 0],
+            control_link=["40", 0],
+            strength=float(control.get("strength", 0.8)),
+            start=float(control.get("start", 0.0)),
+            end=float(control.get("end", 0.9)))
+        nodes.update(extra)
+        return link
 
     @staticmethod
     def _graph(class_type: str, **inputs: object) -> dict:
@@ -470,6 +541,11 @@ class ComfyEngine:
         reference: Optional[Image.Image] = None,
         references: Optional[list[Image.Image]] = None,
         strength: float = 0.6,
+        control: Optional[Image.Image] = None,
+        control_mode: str = "pose",
+        control_strength: float = 0.8,
+        control_start: float = 0.0,
+        control_end: float = 0.9,
         progress_cb: Optional[Callable[[int, str], None]] = None,
     ) -> EngineResult:
         import random
@@ -490,10 +566,30 @@ class ComfyEngine:
                 progress_cb(4, f"已上传 {len(ref_names)} 张参考图")
         ref_name = self._upload_reference(reference) if reference is not None else None
 
+        ctrl: Optional[dict] = None
+        if control is not None:
+            route, why = self.control_capability()
+            if route is None:
+                # 不能静默丢控制图：骨架没进模型，出来的还是那一堆「站着不动」，
+                # 而用户以为已经开了姿态控制。报出来，让人知道该装什么。
+                from engine.infer.controlnet import ControlUnavailable
+
+                raise ControlUnavailable(f"姿态控制不可用：{why}")
+            ctrl = {"route": route.route,
+                    "name": self._upload_reference(control),
+                    "strength": control_strength,
+                    "start": control_start, "end": control_end}
+            if progress_cb:
+                progress_cb(4, f"控制图已上传（{route.label} · {control_mode}）")
+            print(f"[engine] 控制图：mode={control_mode} strength={control_strength} "
+                  f"range={control_start}-{control_end} route={route.route} "
+                  f"({route.model_name})", flush=True)
+
         workflow = self._build_workflow(
             prompt=prompt, negative=negative, width=width, height=height,
             steps=steps, guidance_scale=guidance_scale, seed=seed,
             ref_name=ref_name, strength=strength, ref_names=ref_names,
+            control=ctrl,
         )
         if ref_names:
             # 一行可核对的证据：日志里看到这行，才说明参考图真的进了工作流

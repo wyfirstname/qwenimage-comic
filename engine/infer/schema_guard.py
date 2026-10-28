@@ -48,6 +48,11 @@ def _object_info(class_type: str) -> dict | None:
     return info or None
 
 
+def object_info(class_type: str) -> dict | None:
+    """公开只读入口：控制通路探测也用它（同一份缓存，不重复拉）。"""
+    return _object_info(class_type)
+
+
 def _autogrow_slots(info: dict) -> dict[str, list[str]]:
     """节点声明了哪些动态输入：{输入名: 允许的槽位名}。"""
     out: dict[str, list[str]] = {}
@@ -83,6 +88,12 @@ def ensure_inputs_reach(workflow: dict, expect_refs: int = 0) -> None:
         info = _object_info(str(class_type))
         if not info:
             continue
+        # Union 的参考图编码节点用 reference_image / reference_image_2 的固定键
+        # （不是 Autogrow），一样要数进来，否则「参考图没进模型」这条检查会误报。
+        ref_keys = [k for k in inputs
+                    if k == "reference_image" or k.startswith("reference_image_")]
+        if ref_keys:
+            seen_refs = max(seen_refs, len(ref_keys))
         slots = _autogrow_slots(info)
         for slot_name, allowed in slots.items():
             bare = slot_name in inputs

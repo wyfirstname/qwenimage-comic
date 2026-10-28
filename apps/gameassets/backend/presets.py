@@ -358,6 +358,57 @@ ANIM_CONFIRM_ORDER = ["off", "dir", "design"]
 ANIM_CONFIRM_DEFAULT = "dir"
 
 
+# ------------------------------------------------------------
+#  姿态控制（13.3）
+#
+#  为什么必须有：融合编辑（参考图 + denoise=1）的输出几乎完全跟着参考图画布，
+#  提示词里的 "left foot forward" 是软约束。用户 16G 机器实拍：一整张 8×8 走
+#  路表里 64 格几乎都是同一个站姿，朝向也只是「正面的近亲」。骨架进了模型
+#  （ControlNet Pose）才是硬约束。
+#
+#  auto   有 Union 权重就开，没有就诚实降级（卡片上标「姿态无控制」）
+#  pose   强制开：没有权重就报错，不悄悄降级（批量跑图前的自检档）
+#  off    关闭（只想快速看构图 / 显存很紧）
+# ------------------------------------------------------------
+ANIM_CONTROL_MODES: dict[str, dict] = {
+    "auto": {"name": "自动（有 Union 权重就用）",
+             "note": "有 ControlNet Union 就上骨架硬控；没有就照旧并标出「姿态无控制」"},
+    "pose": {"name": "强制姿态控制",
+             "note": "缺权重直接报错，不悄悄降级——批量跑之前先用它自检"},
+    "off":  {"name": "关闭", "note": "不加骨架，姿势全交给提示词（当前效果就是这么来的）"},
+}
+ANIM_CONTROL_ORDER = ["auto", "pose", "off"]
+ANIM_CONTROL_DEFAULT = "auto"
+# 姿态强度：0.8 是 Union Pose 的常用平衡点（再高肢体发僵，再低会回到参考图的站姿）
+ANIM_CONTROL_STRENGTH = 0.8
+# 采样区间：前 90% 步数由骨架主导，最后 10% 放开让模型补细节（发型/衣褶）
+ANIM_CONTROL_START = 0.0
+ANIM_CONTROL_END = 0.9
+
+
+def anim_control(s: dict, item: dict | None = None) -> str:
+    """姿态控制档位：条目覆盖 > 项目设置 > 默认（自动）。"""
+    for src in ((item or {}), (s or {}).get("anim") or {}, (s or {})):
+        mid = str((src or {}).get("anim_control") or "").strip()
+        if mid in ANIM_CONTROL_MODES:
+            return mid
+    return ANIM_CONTROL_DEFAULT
+
+
+def anim_control_strength(s: dict, item: dict | None = None) -> float:
+    for src in ((item or {}), (s or {}).get("anim") or {}, (s or {})):
+        raw = (src or {}).get("anim_control_strength")
+        if raw is None:
+            continue
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if 0.0 < v <= 2.0:
+            return v
+    return ANIM_CONTROL_STRENGTH
+
+
 def turnaround_spec(level_id: str | None) -> dict:
     """档位 → 身份卡规格：几张、每张几栏、每栏朝向、派生朝向、单张画幅。"""
     lid = str(level_id or "").strip()

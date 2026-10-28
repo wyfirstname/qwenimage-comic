@@ -92,9 +92,27 @@ def _prepare_references(payload: Optional[dict]) -> list[Image.Image]:
     return out
 
 
+def _prepare_control(payload: Optional[dict]) -> Optional[Image.Image]:
+    """解析控制图（ControlNet 用的姿势骨架）。
+
+    payload["control"] = {"image": "data:image/png;base64,...", "mode": "pose",
+                          "strength": 0.8, "start": 0.0, "end": 0.9}
+    没有就别传——引擎侧不允许「有控制请求却悄悄没生效」。
+    """
+    data = ((payload or {}).get("control") or {}).get("image")
+    if not data:
+        return None
+    try:
+        return decode_base64_image(data)
+    except Exception as exc:
+        raise GenerationError(f"控制图解析失败：{exc}") from exc
+
+
 def _run_once(payload: dict, job_id: str, index: int, progress_cb) -> dict:
     """执行单张出图（在子线程中运行）。"""
     references = _prepare_references(payload)
+    control_img = _prepare_control(payload)
+    ctrl_cfg = (payload or {}).get("control") or {}
     seed = payload.get("seed", -1)
     if seed is not None and seed >= 0:
         seed = seed + index  # 批量时保证每张不同
@@ -113,11 +131,18 @@ def _run_once(payload: dict, job_id: str, index: int, progress_cb) -> dict:
             references=references if fusion else None,
             reference=None if fusion else (references[0] if references else None),
             strength=payload.get("strength", 0.6),
+            control=control_img,
+            control_mode=str(ctrl_cfg.get("mode") or "pose"),
+            control_strength=float(ctrl_cfg.get("strength", 0.8)),
+            control_start=float(ctrl_cfg.get("start", 0.0)),
+            control_end=float(ctrl_cfg.get("end", 0.9)),
             progress_cb=progress_cb,
         )
     finally:
         for img in references:
             img.close()
+        if control_img is not None:
+            control_img.close()
 
     image: Image.Image = result.image
     # 漫画工作室的出图带 output_subdir（按项目归档），主界面普通出图退回按日期分目录

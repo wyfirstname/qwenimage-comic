@@ -467,6 +467,20 @@
         首帧就歪的话，只亏这 1 张，而不是整组 10 张。</p>
     </div>
     <div style="margin-top:12px;border-top:1px solid rgba(128,128,128,.2);padding-top:10px">
+      <label class="muted2"><b>动画帧的姿态控制（ControlNet）</b></label>
+      <select id="setAnimControl" style="width:100%;margin-top:4px"></select>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+        <span class="muted2" style="font-size:12px">骨架强度</span>
+        <input id="setAnimCtrlStrength" type="number" min="0.1" max="2" step="0.05"
+               style="width:80px">
+        <span class="muted2" id="controlCap" style="font-size:11.5px;flex:1"></span>
+      </div>
+      <p class="muted2" style="font-size:11.5px;margin-top:4px">
+        每个朝向的每个关键姿态都先画一张 OpenPose 骨架图，作为硬约束喂给
+        ControlNet Union。没有骨架时，融合编辑只会照着参考图那张站姿重画——
+        这就是「64 格一个姿势」的原因。强度 0.8 是平衡点：再高肢体发僵，再低会滑回原姿势。</p>
+    </div>
+    <div style="margin-top:12px;border-top:1px solid rgba(128,128,128,.2);padding-top:10px">
       <label class="muted2"><b>美术方向契约</b>（八轴，逐张注入提示词；留空的轴不注入。
         <span id="adSource"></span>）</label>
       <div id="setAdRows" style="margin-top:6px;max-height:230px;overflow:auto"></div>
@@ -572,6 +586,10 @@
     state.animLevels = pr.anim_levels || [];
     state.animConfirmModes = pr.anim_confirm_modes || [];
     state.animConfirmDefault = pr.anim_confirm_default || 'dir';
+    state.animControlModes = pr.anim_control_modes || [];
+    state.animControlDefault = pr.anim_control_default || 'auto';
+    state.animControlStrength = pr.anim_control_strength ?? 0.8;
+    state.controlCapability = pr.control_capability || {};
     state.animDefault = pr.anim_default || 'lite';
     state.animDirs = pr.anim_dirs || [];
     state.view = pr.view || null;
@@ -1006,6 +1024,14 @@
       a.scene ? `<span class="zone-chip" title="出没场景">${esc(a.scene)}</span>` : '',
       a.anim ? `<span class="anim-chip" title="点开看动画（站立/行走/奔跑 × 各朝向）"
         onclick="UI.openAnim('${a.id}')">▶ 动画 ${a.anim.dirs.length} 向 · ${a.anim.frames_total}${a.anim.expected && a.anim.frames_total < a.anim.expected ? '/' + a.anim.expected : ''} 帧</span>` : '',
+      // 姿态控制（13.3）：让「骨架到底管没管住」在卡片上有个明确说法。
+      // 没管住又不标出来，就还是「都过关但看着不对」的老毛病。
+      a.anim && a.anim.control && a.anim.control.applied
+        ? `<span class="anim-chip" style="background:rgba(46,125,50,.12);color:#2e7d32"
+             title="每帧由 OpenPose 骨架硬控（强度 ${a.anim.control.strength}，关键帧 ${a.anim.control.frames} 张）">🦴 骨架 ${a.anim.control.frames}</span>`
+        : (a.anim && a.anim.control && a.anim.control.requested !== 'off'
+          ? `<span class="q-chip q-fail" title="${esc(a.anim.control.reason || '没有可用的 ControlNet 通路')}">姿态无控制</span>`
+          : ''),
       a.size ? `<span class="size-chip">${a.size[0]}×${a.size[1]}</span>` : '',
       a.transparent ? `<span class="tr-chip">透明${a.transparent.method === 'rembg' ? '·AI' : ''}</span>` : '',
       q.pass === false ? `<span class="q-chip q-fail" title="${esc((q.reasons || []).join('；'))}">⚠ ${(q.reasons || [''])[0]?.split('（')[0] || '质量'}</span>`
@@ -1605,6 +1631,17 @@
     $('setAnimConfirm').innerHTML = (state.animConfirmModes || []).map(m =>
       `<option value="${m.id}" ${m.id === amc ? 'selected' : ''}>${esc(m.name)} — ${esc(m.note)}</option>`
     ).join('');
+    const amctrl = (s.anim || {}).anim_control || state.animControlDefault || 'auto';
+    $('setAnimControl').innerHTML = (state.animControlModes || []).map(m =>
+      `<option value="${m.id}" ${m.id === amctrl ? 'selected' : ''}>${esc(m.name)} — ${esc(m.note)}</option>`
+    ).join('');
+    $('setAnimCtrlStrength').value =
+      (s.anim || {}).anim_control_strength ?? state.animControlStrength ?? 0.8;
+    const cap = state.controlCapability || {};
+    $('controlCap').textContent = cap.available
+      ? `本机可用：${cap.label || cap.route || ''}`
+      : `本机不可用：${cap.detail || '缺 Union 权重'}`;
+    $('controlCap').style.color = cap.available ? '#2e7d32' : '#c62828';
     // 美术方向契约：八轴编辑区（当前值反填；空值轴显示占位提示）
     $('adSource').textContent = s.artdir_edited ? '当前：手填契约' : '当前：自动推导';
     $('setAdRows').innerHTML = (state.artdirAxes || []).map(ax => {
@@ -1631,7 +1668,9 @@
       const r = await fetch(`/api/v1/gameassets/sets/${state.current}/settings`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transparent, threshold: parseFloat($('setThreshold').value),
-                               artdir, anim_confirm: $('setAnimConfirm').value }) });
+                               artdir, anim_confirm: $('setAnimConfirm').value,
+                               anim_control: $('setAnimControl').value,
+                               anim_control_strength: parseFloat($('setAnimCtrlStrength').value) }) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
       closeSet(); toast('参数已保存（下一次生成生效）'); poll(true);
