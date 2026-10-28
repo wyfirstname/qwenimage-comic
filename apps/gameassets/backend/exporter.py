@@ -86,11 +86,18 @@ def _manifest(s: dict) -> dict:
             },
             "prompt": a.get("prompt"),
             "anim": ({"level": (a["anim"] or {}).get("level"),
+                      "method": (a["anim"] or {}).get("method"),
                       "cell": (a["anim"] or {}).get("cell"),
                       "anchor": (a["anim"] or {}).get("anchor"),
                       "dirs": (a["anim"] or {}).get("dirs"),
                       "clips": (a["anim"] or {}).get("clips"),
-                      "frames_total": (a["anim"] or {}).get("frames_total")}
+                      "frames_total": (a["anim"] or {}).get("frames_total"),
+                      "key_frames": (a["anim"] or {}).get("key_frames"),
+                      "interp_frames": (a["anim"] or {}).get("interp_frames"),
+                      "design_columns": {
+                          d: {"sheet": c.get("sheet"), "col": c.get("col")}
+                          for d, c in (((a["anim"] or {}).get("design") or {})
+                                       .get("columns") or {}).items()}}
                      if a.get("anim") else None),
         } for a in s["assets"]],
     }
@@ -181,6 +188,19 @@ def build_zip(s: dict, engine_tpl: str | None = None) -> Path:
                 banks[d] = {"file": name, "cols": b.get("cols"),
                             "rows": {k: v.get("row") for k, v in
                                      (b.get("clips") or {}).items()}}
+            # 身份卡（13.0）：多栏 turnaround 原图，改角色设定时以它为准
+            design_names = []
+            for si, sm in enumerate((am.get("design") or {}).get("sheets") or []):
+                dp = Path(sm.get("path") or "")
+                if not dp.is_absolute():
+                    dp = Path(".") / dp
+                if not dp.is_file():
+                    continue
+                dname = (f"anim/design_{_safe(a['name'])}_"
+                         f"{_safe(a.get('gender') or '')}_{si}.png")
+                zf.write(dp, f"{root}/{dname}")
+                design_names.append({"file": dname, "dirs": sm.get("dirs"),
+                                     "size": sm.get("size")})
             classic_names = {}
             am_banks = am.get("banks") or {}
             if am_banks:                    # 经典整表：行=朝向 列=步态帧（走/跑各一张）
@@ -201,9 +221,14 @@ def build_zip(s: dict, engine_tpl: str | None = None) -> Path:
             anim_index.append({
                 "kind": a["kind"], "name": a["name"], "gender": a.get("gender"),
                 "level": am.get("level"), "level_name": am.get("level_name"),
-                "cell": am.get("cell"), "anchor": am.get("anchor"),
+                "method": am.get("method"), "cell": am.get("cell"),
+                "anchor": am.get("anchor"),
                 "dirs": am.get("dirs"), "mirror": am.get("mirror"),
                 "clips": am.get("clips"), "frames_total": am.get("frames_total"),
+                # 三层分布的账（13.0）：身份卡几张、真出了几个关键姿态、插值多少帧
+                "key_frames": am.get("key_frames"),
+                "interp_frames": am.get("interp_frames"),
+                "design": design_names,
                 "banks": banks, "classic_sheet": classic_names})
         if anim_index:
             zf.writestr(f"{root}/anim/anim.json",

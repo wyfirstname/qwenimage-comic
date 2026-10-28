@@ -24,14 +24,33 @@ from .presets import CLIP_ORDER, CLIPS, DIRECTIONS, VIEW_LOCK
 _FILL = 0.86
 
 
-def frame_suffix(clip: str, idx: int, total: int, dir_id: str) -> str:
-    """拼在提示词尾部的动画修饰——姿态 + 朝向 + 一致性要求。"""
+def frame_suffix(clip: str, idx: int, total: int, dir_id: str,
+                 view_phrase: str = "") -> str:
+    """拼在提示词尾部的动画修饰——姿态 + 朝向 + 一致性要求。
+
+    view_phrase：身份卡里没有这个朝向时补的视角词（如「躯干转 45° 背对」），
+    用来让图生图在参考栏的基础上把角度掰过去。
+    """
     poses = CLIPS.get(clip, {}).get("poses") or [""]
     pose = poses[min(idx, len(poses) - 1)]
-    facing = DIRECTIONS.get(dir_id, {}).get("prompt", "")
+    facing = view_phrase or DIRECTIONS.get(dir_id, {}).get("prompt", "")
     return (f"animation frame {idx + 1} of {total}: {pose}, {facing}, "
-            "same character, identical costume and colors as the reference, "
-            "identical proportions, feet planted on the same ground line")
+            "same character as the reference, identical costume, hairstyle and colors, "
+            "identical proportions, identical camera angle, "
+            "feet planted on the same ground line")
+
+
+def key_suffix(clip: str, idx: int, total: int, dir_id: str,
+               view_phrase: str = "") -> str:
+    """关键姿态的提示词尾部：比逐帧版更强调「照参考图这个人改姿势，别换人」。"""
+    poses = CLIPS.get(clip, {}).get("poses") or [""]
+    pose = poses[min(idx, len(poses) - 1)]
+    facing = view_phrase or DIRECTIONS.get(dir_id, {}).get("prompt", "")
+    return (f"key pose of the {CLIPS.get(clip, {}).get('name', clip)} cycle, "
+            f"frame {idx + 1} of {total}: {pose}, {facing}, "
+            "keep the exact same character as the reference sheet column: "
+            "same face, same hairstyle, same costume pieces, same colors, same proportions, "
+            "same camera tilt, full body, feet on the ground line")
 
 
 def _fit_scale(im: Image.Image, cell: tuple[int, int]) -> float:
@@ -94,6 +113,88 @@ def build_frames(raw: dict[str, list[Path]], cell: tuple[int, int],
     for clip, paths in raw.items():
         out[clip] = [place(Image.open(p), cell, anchor, scale) for p in paths]
     return out
+
+
+def tween_cell(im: Image.Image, dy: int) -> Image.Image:
+    """补帧：把整帧在 cell 内垂直平移 dy 像素（正=下沉，负=抬高）。
+
+    只还原「身体起伏」这一维——传统二维步态里，接触帧压低、过渡帧抬高，
+    中间那四帧本来就不是新画的一张，而是同一张的高低差。所以不做真正的
+    光学流插值（两个姿态叠化会长出两条腿），只做整帧位移，不产生重影。
+    """
+    dy = int(round(dy))
+    if not dy:
+        return im.copy()
+    w, h = im.size
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    if dy > 0:                      # 下沉：底部 dy 行被裁掉（脚底下方留白够用）
+        out.paste(im.crop((0, 0, w, h - dy)), (0, dy))
+    else:                           # 抬高：顶部 -dy 行被裁掉（头顶也留了余量）
+        out.paste(im.crop((0, -dy, w, h)), (0, 0))
+    return out
+
+
+def build_frames_from_keys(keys: dict[str, dict[int, Path]],
+                           tweens: dict[str, dict[int, tuple[int, int]]],
+                           counts: dict[str, int],
+                           cell: tuple[int, int],
+                           anchor: tuple[int, int]) -> dict[str, list[Image.Image]]:
+    """关键姿态（少量真出的图）+ 插值帧表 → 完整 cell 帧序列。
+
+    keys  = {clip: {帧号: 图路径}}，只有关键帧；
+    tweens= {clip: {帧号: (源关键帧号, dy)}}，其余帧靠源关键帧垂直位移补。
+    缩放按该向第一张关键帧统一（逐帧各算会让角色走动时一胀一缩），
+    与 12.x 的 build_frames 保持同一标尺口径。
+    """
+    scale = None
+    for clip in CLIP_ORDER:
+        kd = keys.get(clip) or {}
+        for i in sorted(kd):
+            im = Image.open(kd[i]).convert("RGBA")
+            if im.getbbox():
+                scale = _fit_scale(im, cell)
+            break
+        if scale:
+            break
+    scale = scale or 1.0
+
+    out: dict[str, list[Image.Image]] = {}
+    for clip in CLIP_ORDER:
+        kd = keys.get(clip) or {}
+        if not kd:
+            continue
+        placed = {i: place(Image.open(p), cell, anchor, scale) for i, p in kd.items()}
+        n = int(counts.get(clip) or max(kd) + 1)
+        tw = tweens.get(clip) or {}
+        frames: list[Image.Image] = []
+        for i in range(n):
+            if i in placed:
+                frames.append(placed[i])
+                continue
+            src, dy = tw.get(i, (max(placed), 0))
+            base = placed.get(src)
+            if base is None:                      # 源关键帧缺失 → 退到最近的关键帧
+                src = min(placed, key=lambda k: abs(k - i))
+                base = placed[src]
+            frames.append(tween_cell(base, dy))
+        out[clip] = frames
+    return out
+
+
+# ------------------------------------------------------------
+#  身份卡切栏（13.0）：一张多栏身份卡 → 每个朝向单独一张参考图。
+#  为什么要切：图生图（融合编辑）一次吃多张参考图时，模型会把「整张三栏」
+#  当成一张画去理解，容易把三栏的关系也画出来；切成单栏喂进去，参考图里
+#  只有一个角色、一个朝向，指向性最强。
+# ------------------------------------------------------------
+def crop_column(sheet: Path, cols: int, col: int, dst: Path) -> Path:
+    """从多栏身份卡里切出第 col 栏（cols 等分）。"""
+    im = Image.open(sheet).convert("RGB")
+    cw = im.width / max(1, cols)
+    box = (int(round(col * cw)), 0, int(round((col + 1) * cw)), im.height)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    im.crop(box).save(dst)
+    return dst
 
 
 def save_bank(frames: dict[str, list[Image.Image]], dst: Path,

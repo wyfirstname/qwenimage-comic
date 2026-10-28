@@ -156,6 +156,11 @@ async def list_presets():
                          "run": ANIM_LEVELS[k].get("run", 0),
                          "per_dir": anim_spec(k)["per_dir"],
                          "frames": anim_spec(k)["frames_total"],
+                         # 13.0 三层分布：身份卡张数 / 关键姿态张数 / 插值帧数 / 真出图次数
+                         "sheets": anim_spec(k)["turnaround"]["count"],
+                         "keys": anim_spec(k)["keys_total"],
+                         "interp": anim_spec(k)["interp_total"],
+                         "calls": anim_spec(k)["calls_total"],
                          "note": ANIM_LEVELS[k]["note"]}
                         for k in ANIM_LEVEL_ORDER],
         "anim_kinds": list(ANIM_KINDS),
@@ -680,6 +685,33 @@ async def classic_sheet(sid: str, aid: str, clip: str = "walk"):
                             detail={"code": "EMPTY",
                                     "message": f"{clip} 帧不完整，无法拼整表"})
     return {"url": exporter.export_url(png), "meta": meta}
+
+
+@router.get("/sets/{sid}/design-sheet/{aid}",
+            summary="身份卡原始图（多栏 turnaround）：三层分布的第一层，sheet 从 0 起")
+async def design_sheet(sid: str, aid: str, sheet: int = 0):
+    s = store.get_set(sid)
+    if not s:
+        raise HTTPException(status_code=404,
+                            detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    a = next((x for x in s["assets"] if x["id"] == aid), None)
+    if not a or not a.get("anim"):
+        raise HTTPException(status_code=404,
+                            detail={"code": "NO_ANIM",
+                                    "message": "该素材没有动画帧（档位为静态单帧）"})
+    sheets = ((a["anim"].get("design") or {}).get("sheets") or [])
+    if not sheets:
+        raise HTTPException(status_code=409,
+                            detail={"code": "EMPTY",
+                                    "message": "身份卡尚未生成（旧版逐帧数据没有身份卡）"})
+    if not 0 <= sheet < len(sheets):
+        raise HTTPException(status_code=400,
+                            detail={"code": "BAD_SHEET",
+                                    "message": f"sheet 越界（共 {len(sheets)} 张）"})
+    item = sheets[sheet]
+    return {"url": item.get("url") or exporter.export_url(Path(item["path"])),
+            "meta": item, "sheets": len(sheets),
+            "columns": (a["anim"].get("design") or {}).get("columns") or {}}
 
 
 @router.post("/sets/{sid}/simulate", summary="仿真测试：逐张体检 + 按场景合成模拟游戏画面（同步，秒级）")

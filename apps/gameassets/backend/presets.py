@@ -280,14 +280,101 @@ ANIM_LEVELS: dict[str, dict] = {
 ANIM_LEVEL_ORDER = ["off", "lite", "standard", "full"]
 ANIM_KINDS = ("character", "pet")          # 需要动画帧的类
 ANIM_DEFAULT_LEVEL = "lite"
+
+# ------------------------------------------------------------
+#  三层分布（13.0）：身份卡 → 关键姿态 → 插值补帧
+#
+#  12.x 是「逐帧文生图」：每帧都从零采样，模型的概率性让 40 帧像 40 个人，
+#  而守门量的是黑图/纯色/跑色这类全局统计量，量不出「不像」——所以一直
+#  「都过关但看着不对」。13.0 改成分层，把「身份」这件事从概率问题变成
+#  一次性的确定问题：
+#
+#    ① 身份卡（本段）：一张图里并排画同一角色的 3~8 个朝向。作用不是拿到
+#       能用的帧（实测模型会躲纯侧身，给的是「正面 + 微转」），而是给后面
+#       所有帧一个共享的服装 / 发型 / 配色 / 头身比锚；
+#    ② 关键姿态（每向 10 张）：站立 2 + 行走 4 + 奔跑 4，用身份卡对应那一栏
+#       + 基准图做参考图跑图生图，身份被参考图焊住，不再逐帧重新掷骰子；
+#    ③ 插值补帧（不烧显存）：关键帧之间的「下沉 / 抬起」按传统二维步态做法
+#       用整帧垂直位移补出来（contact 压低、passing 抬高）。这不是光学流插值，
+#       只是把「身体起伏」这一维还原——四拍步态的骨架仍是四拍。
+#
+#  出图次数：lite 40 帧 → 身份卡 1 + 关键姿态 20 = 21 次；
+#            full 160 帧 → 身份卡 2 + 关键姿态 80 = 82 次。
+# ------------------------------------------------------------
+TURNAROUND_CELL = 320          # 身份卡单栏宽（高 640，2:1 竖条，正好装一个全身 Q 版）
+TURNAROUND_HEIGHT = 640
+# 每个档位要出几张身份卡、每张几栏、每栏是哪个朝向。
+# 超过 4 栏就分张（一张图里塞 8 个人，每栏只剩 200px 宽，脸就糊了）。
+TURNAROUND_SETS: dict[str, list[list[str]]] = {
+    "off": [],
+    "lite": [["s", "se", "e"]],
+    "standard": [["s", "se", "e", "n"]],
+    "full": [["s", "se", "e", "ne"], ["n", "nw", "w", "sw"]],
+}
+# 档位要、身份卡却没实拍的朝向：拿哪一栏当参考 + 提示词里补的朝向词。
+# standard 的 ne（右上/斜后）最能体现「转过去」的中间态，单靠后背栏只能近似，
+# 所以这里显式写清「躯干转 45° 背对」，让图生图带着朝向词去改那 45°。
+TURNAROUND_DERIVED: dict[str, tuple[str, str]] = {
+    "ne": ("n", "three-quarter back view, torso turned 45 degrees away from the camera"),
+    "nw": ("n", "three-quarter back view, torso turned 45 degrees away from the camera"),
+}
+
+# 关键姿态：只出这几帧，其余靠插值补。
+# 步态四拍 = 左脚接触 / 右腿过渡 / 右脚接触 / 左腿过渡，本来就是「同一套
+# 两个极限姿势 + 身体起伏」，中间那四帧正是接触帧压低、过渡帧抬高。
+KEY_POSES: dict[str, list[int]] = {
+    "idle": [0, 2],                 # 中立 → 呼气回落；吸气/微调靠起伏补
+    "walk": [0, 2, 4, 6],           # 接触 / 过渡 / 接触 / 过渡
+    "run":  [0, 2, 4, 6],           # 触地 / 蹬伸 / 触地 / 蹬伸
+}
+# 插值帧：帧号 → (源关键帧号, 垂直位移 px@192cell)。正 = 整体下沉，负 = 抬高。
+TWEENS: dict[str, dict[int, tuple[int, int]]] = {
+    "idle": {1: (0, -2), 3: (2, 1)},
+    "walk": {1: (0, 3), 3: (2, -3), 5: (4, 3), 7: (6, -3)},
+    "run":  {1: (0, 4), 3: (2, -6), 5: (4, 4), 7: (6, -6)},
+}
 # 动画帧生成画幅：独立于立绘画幅。帧最终落进 192×192 cell，384² = 2 倍采样
 # 足够精细；用立绘的 512×768 逐帧生成一张要 2.7 倍像素，40 帧×3 次重试能把
 # 单个角色拖到半小时以上（用户实测主角久不出图），降到这里后单帧显著提速。
 ANIM_FRAME_SIZE = (384, 384)
 
 
+def turnaround_spec(level_id: str | None) -> dict:
+    """档位 → 身份卡规格：几张、每张几栏、每栏朝向、派生朝向、单张画幅。"""
+    lid = str(level_id or "").strip()
+    if lid not in TURNAROUND_SETS:
+        lid = ANIM_DEFAULT_LEVEL
+    sets = TURNAROUND_SETS[lid]
+    where: dict[str, dict] = {}
+    sheets = []
+    for si, cols in enumerate(sets):
+        for ci, d in enumerate(cols):
+            where.setdefault(d, {"sheet": si, "col": ci})
+        w = _align((TURNAROUND_CELL * len(cols), TURNAROUND_HEIGHT))[0]
+        sheets.append({"dirs": list(cols), "cols": len(cols),
+                       "size": [w, TURNAROUND_HEIGHT]})
+    dirs = list(ANIM_LEVELS[lid]["dirs"])
+    derived: dict[str, dict] = {}
+    for d in dirs:
+        if d in where:
+            continue
+        src = TURNAROUND_DERIVED.get(d)
+        if not src or src[0] not in where:
+            src = (list(where)[0] if where else "s", "")
+        derived[d] = {"from": src[0], "view": src[1],
+                      "sheet": where.get(src[0], {}).get("sheet", 0),
+                      "col": where.get(src[0], {}).get("col", 0)}
+    return {"level": lid, "enabled": bool(sets), "cell": TURNAROUND_CELL,
+            "height": TURNAROUND_HEIGHT, "sheets": sheets,
+            "where": where, "derived": derived, "count": len(sheets)}
+
+
 def anim_spec(level_id: str | None) -> dict:
-    """档位 id → 展开的规格（dirs/mirror/各 clip 帧数/每向帧数/总张数）。"""
+    """档位 id → 展开的规格（dirs/mirror/各 clip 帧数/每向帧数/总张数）。
+
+    13.0 起同时给出三层分布的账：每向关键姿态数（keys）、插值帧表（tweens）、
+    身份卡规格（turnaround），以及真正要烧的出图次数（calls_total）。
+    """
     lid = str(level_id or "").strip()
     if lid not in ANIM_LEVELS:
         lid = ANIM_DEFAULT_LEVEL
@@ -295,9 +382,21 @@ def anim_spec(level_id: str | None) -> dict:
     clips = {c: int(lv.get(c) or 0) for c in CLIP_ORDER}
     per_dir = sum(clips.values())
     total = len(lv["dirs"]) * per_dir
+    keys = {c: [i for i in KEY_POSES.get(c, []) if i < clips[c]]
+            for c in CLIP_ORDER if clips[c]}
+    tweens = {c: {i: t for i, t in TWEENS.get(c, {}).items() if i < clips[c]}
+              for c in CLIP_ORDER if clips[c]}
+    keys_per_dir = sum(len(v) for v in keys.values())
+    ta = turnaround_spec(lid)
     return {"id": lid, "name": lv["name"], "dirs": list(lv["dirs"]),
             "mirror": dict(lv["mirror"]), "clips": clips, "per_dir": per_dir,
-            "frames_total": total, "note": lv["note"]}
+            "frames_total": total, "note": lv["note"],
+            "keys": keys, "tweens": tweens, "keys_per_dir": keys_per_dir,
+            "keys_total": keys_per_dir * len(lv["dirs"]),
+            "interp_total": total - keys_per_dir * len(lv["dirs"]),
+            "turnaround": ta,
+            # 真·出图次数：身份卡（按张）+ 关键姿态（按向）。镜像向不出图。
+            "calls_total": ta["count"] + keys_per_dir * len(lv["dirs"])}
 
 
 def anim_level(s: dict, item: dict | None = None) -> str:

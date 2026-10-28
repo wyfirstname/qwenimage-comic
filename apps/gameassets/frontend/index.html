@@ -461,6 +461,7 @@
       </div>
     </div>
     <div class="modal-foot" style="margin-top:12px">
+      <button class="btn btn-ghost" id="animDesign" title="三层分布第一层：多栏身份卡原图（所有帧共用的身份 / 服装 / 配色锚）">身份卡</button>
       <button class="btn btn-ghost" id="animSheet" title="拼一张「行=朝向、列=步态帧」的经典整表（按当前动作：走 / 跑）">整表</button>
       <button class="btn btn-ghost" id="animClose">关闭</button>
     </div>
@@ -1082,7 +1083,8 @@
         <option value="" ${cur === '' ? 'selected' : ''}>动画：跟项目默认（${
           (state.animLevels.find(l => l.id === state.animDefault) || {}).name || '轻量 · 3 向'}）</option>
         ${(state.animLevels || []).map(l =>
-          `<option value="${l.id}" ${l.id === cur ? 'selected' : ''}>${esc(l.name)} · ${l.frames} 张</option>`).join('')}
+          `<option value="${l.id}" ${l.id === cur ? 'selected' : ''}>${esc(l.name)} · ${l.frames} 帧/${
+            l.calls != null ? l.calls + ' 次' : '—'}</option>`).join('')}
       </select>`;
   }
 
@@ -1092,8 +1094,10 @@
     if (!l) return '';
     return lid === 'off'
       ? '<b>静态单帧</b> —— 只出一张立绘，不生成动画帧'
-      : `<b>${esc(l.name)}</b> · ${l.dirs.length} 个朝向 × (站立 ${l.idle} + 行走 ${l.walk})`
-        + ` = <b>${l.frames} 张</b> — ${esc(l.note)}`;
+      : `<b>${esc(l.name)}</b> · ${l.dirs.length} 个朝向 × (站立 ${l.idle} + 行走 ${l.walk}${
+          l.run ? ' + 奔跑 ' + l.run : ''}) = <b>${l.frames} 帧</b>`
+        + ` → 身份卡 ${l.sheets} 张 + 关键姿态 ${l.keys} 张 + 插值 ${l.interp} 帧`
+        + ` = <b>实际出图 ${l.calls} 次</b> — ${esc(l.note)}`;
   }
 
   // 描述框：随内容长高，最少 3 行（原来单行 input 写不下 40 字）
@@ -1645,10 +1649,20 @@
     const clipTxt = ['idle', 'walk', 'run'].filter(c => (am.clips[c] || {}).count)
       .map(c => `${am.clips[c].name || c} ${am.clips[c].count} 帧 @${am.clips[c].fps}fps`)
       .join(' · ');
+    // 三层分布（13.0）：身份卡 → 关键姿态（真出图）→ 插值补帧
+    const sheets = ((am.design || {}).sheets || []);
+    const designTxt = sheets.length
+      ? `<br>身份卡 ${sheets.length} 张（${sheets.map(sm => (sm.dirs || []).map(d =>
+          (state.animDirs.find(x => x.id === d) || {}).short || d.toUpperCase()).join('/')).join(' + ')}）`
+        + ` · 关键姿态 ${am.key_frames || 0}/${am.key_expected || 0} 张`
+        + ` · 插值 ${am.interp_frames || 0} 帧`
+        + (am.calls_total ? ` · 总出图 ${am.calls_total} 次` : '')
+      : '';
     $('animInfo').innerHTML =
       `画布 ${am.cell[0]}×${am.cell[1]} · 脚底锚点 ${am.anchor[0]},${am.anchor[1]}<br>`
       + clipTxt
-      + (mirTxt.length ? `<br>镜像：${mirTxt.join('、')}` : '');
+      + (mirTxt.length ? `<br>镜像：${mirTxt.join('、')}` : '')
+      + designTxt;
     $('animPlay').textContent = '暂停';
     renderAnimClips(); renderAnimDirs();
     animSetDir((am.dirs || []).includes('s') ? 's' : (am.dirs || ['s'])[0]);
@@ -1664,6 +1678,17 @@
   }
 
   $('animClose').onclick = closeAnim;
+  $('animDesign').onclick = async () => {
+    if (!animState.aid) return;
+    try {
+      const r = await fetch(`/api/v1/gameassets/sets/${state.current}/design-sheet/${animState.aid}?sheet=0`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail?.message || 'HTTP ' + r.status);
+      const extra = (d.sheets > 1) ? `（共 ${d.sheets} 张，这里开第 1 张）` : '';
+      window.open(d.url, '_blank');
+      if (extra) toast(extra);
+    } catch (e) { toast(e.message); }
+  };
   $('animSheet').onclick = async () => {
     if (!animState.aid) return;
     const clip = animState.clip === 'run' ? 'run' : 'walk';   // 站立帧少，不给整表

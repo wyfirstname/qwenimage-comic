@@ -565,21 +565,109 @@ def _alpha_to_ref(path: str | Path) -> str:
     return str(dst)
 
 
+async def _gen_design_sheets(*, sid: str, s: dict, kind: str, item: dict,
+                             payload: dict, master_path: str, spec: dict,
+                             out_dir: Path, aid: str,
+                             prev_design: dict | None) -> dict:
+    """第一层：身份卡（多栏 turnaround sheet）。
+
+    这是 13.0 的地基。12.x 每帧都从零采样，40 帧是 40 次独立掷骰子，
+    模型的概率性直接把「同一个人」这件事交给了运气；守门又只量黑图/跑色，
+    量不出「不像」。身份卡把这件事变成一次性的：先画一张「同一个角色的
+    若干朝向并排」，后面每一帧都以这一栏当参考图，身份由参考图焊住。
+
+    复用：档位一致 + 栏数一致 + 文件都还在 → 直接用上次的，不再出图。
+    """
+    ta = spec["turnaround"]
+    sheets_meta: list[dict] = []
+    columns: dict[str, dict] = {}
+    if not ta.get("enabled"):
+        return {"level": spec["id"], "sheets": [], "columns": {}}
+
+    prev = prev_design or {}
+    reuse = (prev.get("level") == spec["id"]
+             and len(prev.get("sheets") or []) == ta["count"])
+
+    def _exists(p: str | None) -> bool:
+        if not p:
+            return False
+        q = Path(p)
+        if not q.is_absolute():
+            q = Path(".") / q
+        return q.is_file()
+
+    if reuse:
+        for sm in prev.get("sheets") or []:
+            if not _exists(sm.get("path")):
+                reuse = False
+                break
+    if reuse:
+        for d, cm in (prev.get("columns") or {}).items():
+            if not _exists(cm.get("path")):
+                reuse = False
+                break
+
+    if reuse:
+        store.append_log(sid, "info",
+                         f"{store.STAGE_LABELS[kind]}「{_item_tag(item, kind)}」"
+                         f"复用已有身份卡（{len(prev.get('sheets') or [])} 张）")
+        return {"level": spec["id"], "sheets": prev.get("sheets") or [],
+                "columns": prev.get("columns") or {}, "reused": True}
+
+    neg = (asset_negative(s, kind) + ", multiple different characters, "
+           "inconsistent costume between columns, inconsistent colors, "
+           "labels, arrows, numbered columns, border, frame")
+    for si, sheet in enumerate(ta["sheets"]):
+        if _canceled(sid):
+            raise _StageCanceled()
+        dirs = sheet["dirs"]
+        w, h = sheet["size"]
+        prompt = design_prompt(s, item, dirs, si, ta["count"])
+        rec = await _gen_with_gate(
+            sid=sid, kind=kind, item=item, prompt=prompt, negative=neg,
+            threshold=float(s.get("threshold") or tonecheck.DEFAULT_THRESHOLD),
+            size=(w, h), tmode="none", master_path=master_path, max_attempts=2)
+        raw = Path(rec["path"])
+        # 落到项目自己的目录里（引擎出的图在 outputs/gameassets 下按时间戳命名，
+        # 那张是「原始出图」；身份卡要按素材 id 命名，便于导出与复用校验）
+        dst = out_dir / f"{aid}_design{si}.png"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            from PIL import Image as _Im
+            _Im.open(raw).convert("RGB").save(dst)
+        except Exception:
+            dst = raw
+        sheets_meta.append({"index": si, "path": str(dst), "url": _url_of(dst),
+                            "size": [w, h], "dirs": dirs, "cols": len(dirs),
+                            "source": str(raw)})
+        for ci, d in enumerate(dirs):
+            cp = anim.crop_column(dst, len(dirs), ci,
+                                  out_dir / f"{aid}_col_{d}.png")
+            columns[d] = {"sheet": si, "col": ci, "dir": d,
+                          "path": str(cp), "url": _url_of(cp)}
+        store.append_log(
+            sid, "info",
+            f"{store.STAGE_LABELS[kind]}「{_item_tag(item, kind)}」身份卡 "
+            f"{si + 1}/{ta['count']} 完成：{'/'.join(DIRECTIONS[d]['name'] for d in dirs)}"
+            f"（{w}×{h}）")
+    return {"level": spec["id"], "sheets": sheets_meta, "columns": columns,
+            "reused": False}
+
+
 async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: dict,
                           master_path: str, tmode: str, threshold: float,
                           size: tuple[int, int], level: str,
                           prev: dict | None = None) -> dict:
-    """角色 / 宠物：按档位逐帧生成（站立 + 行走 + 奔跑 × 各朝向），对齐后拼成精灵图集。
+    """角色 / 宠物：三层分布出帧（13.0），对齐后拼成精灵图集。
 
-    一致性策略：首帧（正面站立第一帧）只用基准图定风格；其余帧都带上首帧做双参考，
-    靠图生图把「同一个角色」锁住——否则每一帧都是新角色，走起来会变形。
+    ① 身份卡：一张图并排画同一个角色的多个朝向（1~2 次出图，全朝向共用）；
+    ② 关键姿态：每个朝向只出站立 2 / 行走 4 / 奔跑 4 帧，参考图 = 基准图
+       + 身份卡对应那一栏，图生图把身份焊住；
+    ③ 插值补帧：接触帧压低、过渡帧抬高，整帧垂直位移补出中间帧，不烧显存。
 
-    分步生成（12.1）：
-      - 帧画幅用 ANIM_FRAME_SIZE（384²，cell 的 2 倍采样），不再烧立绘的 512×768；
-      - 每完成一个朝向就把半成品记录原位落库（不进版本历史），中途取消/失败
-        已完成的朝向不报废，前端立刻能看到部分帧；
-      - 重跑同条目时，档位一致且图集元数据匹配的朝向直接复用（增量续跑，
-        日志标「跳过生成」），只补缺的朝向。
+    对比 12.x 的逐帧文生图：lite 档 40 帧从 40 次出图降到 21 次，且「像不像
+    同一个人」从概率问题变成由参考图决定。分步生成与增量续跑沿用 12.1：
+    逐朝向落库，档位/方法/图集元数据都对得上就跳过。
     """
     spec, neg = anim_spec(level), asset_negative(s, kind)
     cell = tuple(VIEW_LOCK["cell"])
@@ -593,10 +681,13 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
     prev_banks: dict[str, dict] = prev_anim.get("banks") or {}
     level_same = prev_anim.get("level") == spec["id"]
     exp_clips = {c: n for c, n in spec["clips"].items() if n}
+    ta = spec["turnaround"]
 
     def _bank_ok(b: dict | None) -> bool:
-        """旧朝向图集能否直接复用：档位没变、文件还在、行列与当前规格一致。"""
+        """旧朝向图集能否直接复用：档位没变、方法一致、文件还在、行列与规格一致。"""
         if not (b and level_same):
+            return False
+        if b.get("method") != "keypose":        # 12.x 的逐帧图集不再复用
             return False
         p = Path(b.get("path") or "")
         if not p.is_absolute():
@@ -608,10 +699,16 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
 
     banks: dict[str, dict] = {}
     cover: Path | None = None
-    base_ref: str | None = None
     scores: list[float] = []
     reasons: list[str] = []
     frames_done = 0
+    keys_done = 0
+
+    # ---------- 第一层：身份卡 ----------
+    design = await _gen_design_sheets(
+        sid=sid, s=s, kind=kind, item=item, payload=payload,
+        master_path=master_path, spec=spec, out_dir=out_dir, aid=aid,
+        prev_design=prev_anim.get("design"))
 
     def _record() -> dict:
         """当前进度的素材记录（半成品 / 成品共用，anim.expected 标总数）。"""
@@ -640,6 +737,7 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
             "frame_size": [fw, fh],
             "anim": {
                 "level": spec["id"], "level_name": spec["name"],
+                "method": "turnaround",          # 三层分布（身份卡 → 关键姿态 → 插值）
                 "cell": list(cell), "anchor": list(anchor),
                 "dirs": spec["dirs"], "mirror": spec["mirror"],
                 "clips": {cid: {"name": CLIPS[cid]["name"], "fps": CLIPS[cid]["fps"],
@@ -648,6 +746,16 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
                 "banks": banks,
                 "frames_total": frames_done,
                 "expected": spec["frames_total"],
+                # 三层分布的账：身份卡 / 关键姿态 / 插值，前端与导出都用得上
+                "design": design,
+                "keys": spec["keys"],
+                "tweens": {c: {i: {"from": src, "dy": dy}
+                               for i, (src, dy) in (spec["tweens"].get(c) or {}).items()}
+                           for c in spec["tweens"]},
+                "key_frames": keys_done,
+                "key_expected": spec["keys_total"],
+                "interp_frames": frames_done - keys_done,
+                "calls_total": spec["calls_total"],
                 "view": anim.view_meta(),
             },
             "created_at": (prev or {}).get("created_at") or store.now_iso(),
@@ -657,49 +765,69 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
         if _bank_ok(prev_banks.get(dir_id)):
             banks[dir_id] = prev_banks[dir_id]
             frames_done += spec["per_dir"]
+            keys_done += spec["keys_per_dir"]
             store.append_log(sid, "info",
                              f"{tag} 朝向「{DIRECTIONS[dir_id]['name']}」已有帧图，"
                              f"跳过生成（帧 {frames_done}/{spec['frames_total']}）")
             continue
-        raw: dict[str, list[str]] = {}
+
+        # 该朝向的参考栏：身份卡实拍栏，或（standard 的 ne）从邻近栏 + 视角词派生
+        where = ta["where"].get(dir_id)
+        view_phrase = ""
+        if where:
+            cm = design["columns"].get(dir_id) or {}
+        else:
+            dv = ta["derived"].get(dir_id) or {}
+            cm = design["columns"].get(dv.get("from", "")) or {}
+            view_phrase = dv.get("view", "")
+        col_ref = cm.get("path")
+
+        keys: dict[str, dict[int, str]] = {}
         for clip in CLIP_ORDER:
             count = spec["clips"].get(clip) or 0
-            if not count:
+            idxs = spec["keys"].get(clip) or []
+            if not count or not idxs:
                 continue
-            paths: list[str] = []
-            for i in range(count):
+            keys[clip] = {}
+            for i in idxs:
                 if _canceled(sid):
                     raise _StageCanceled()
                 prompt = asset_prompt(
                     s, payload, transparent=tmode != "none",
-                    anim_tail=anim.frame_suffix(clip, i, count, dir_id))
+                    anim_tail=anim.key_suffix(clip, i, count, dir_id, view_phrase))
                 rec = await _gen_with_gate(
                     sid=sid, kind=kind, item=item, prompt=prompt, negative=neg,
                     threshold=threshold, size=(fw, fh), tmode=tmode,
                     master_path=master_path, max_attempts=2,
-                    extra_refs=[base_ref] if base_ref else None)
-                paths.append(rec["path"])
+                    extra_refs=[col_ref] if col_ref else None)
+                keys[clip][i] = rec["path"]
                 scores.append(float(rec["tone"]["score"]))
                 if not rec["quality"]["pass"]:
                     reasons += [r for r in rec["quality"]["reasons"]
                                 if r not in reasons]
-                if base_ref is None:                    # 第一帧 = 全组身份基准
-                    base_ref = _alpha_to_ref(rec["path"])
-                frames_done += 1
-            raw[clip] = paths
-        frames = anim.build_frames(raw, cell, anchor)
+                keys_done += 1
+        frames = anim.build_frames_from_keys(keys, spec["tweens"], spec["clips"],
+                                             cell, anchor)
+        n_frames = sum(len(v) for v in frames.values())
         bank_path = out_dir / f"{aid}_{dir_id}.png"
         meta = anim.save_bank(frames, bank_path, cell)
-        banks[dir_id] = {**meta, "dir": dir_id,
+        banks[dir_id] = {**meta, "dir": dir_id, "method": "keypose",
                          "dir_name": DIRECTIONS[dir_id]["name"],
+                         # 这一向真出了几张、补了几张（导出/前端直接显示）
+                         "keys": {c: len(v) for c, v in keys.items()},
+                         "interp": {c: spec["clips"][c] - len(keys.get(c) or {})
+                                    for c in keys},
                          "path": str(bank_path), "url": _url_of(bank_path)}
         if cover is None:
             cover = out_dir / f"{aid}_cover.png"
             frames["idle"][0].save(cover)
-        store.append_log(sid, "info",
-                         f"{tag} 朝向「{DIRECTIONS[dir_id]['name']}」"
-                         f"（{spec['per_dir']} 帧）完成 "
-                         f"（帧 {frames_done}/{spec['frames_total']}）")
+        frames_done += n_frames
+        store.append_log(
+            sid, "info",
+            f"{tag} 朝向「{DIRECTIONS[dir_id]['name']}」完成 "
+            f"（关键姿态 {spec['keys_per_dir']} 张 + 插值 "
+            f"{n_frames - spec['keys_per_dir']} 帧，共 {n_frames} 帧；"
+            f"整体 {frames_done}/{spec['frames_total']} 帧）")
         _upsert_anim_progress(sid, _record())          # 每朝向即落库，失败不报废
 
     if cover is None:
@@ -964,6 +1092,51 @@ def asset_prompt(s: dict, item: dict, *, transparent: bool = False,
             f"EXCLUDE: {_COMMON_NEG} cropped edges")
 
 
+def design_prompt(s: dict, item: dict, dirs: list[str], sheet_idx: int,
+                  sheet_total: int) -> str:
+    """身份卡提示词（第一层）：一张图并排画同一角色的 N 个朝向。
+
+    写法和单帧提示词不同——这里要的是「版面约束」而不是「姿势约束」：
+    逐栏点名朝向、写明等距不重叠、并反复强调 same character / identical，
+    因为 2.1 在多主体排布时最容易犯的错就是「三栏画成三个人」。
+
+    刻意不拼 VIEW_LOCK：视图锁里明确禁掉「正面平视」，而身份卡第一栏就要正面。
+    身份卡只负责身份与配色，镜头俯仰留给关键姿态那一步（那里有 VIEW_LOCK + 参考图）。
+    """
+    gender = GENDERS.get(item.get("gender"), {}).get("prompt", "")
+    who = f"{_clean(item['name'])} - {_clean(item['desc'])}"
+    n = len(dirs)
+    cols = " | ".join(
+        f"column {i + 1}: {DIRECTIONS[d]['prompt']}"
+        for i, d in enumerate(dirs))
+    ad = _artdir_block(s)
+    art_dir = ", ".join(x for x in (_style_block(s), ad) if x)
+    role = ("ROLE/PURPOSE: character turnaround model sheet, the single identity reference "
+            "for every animation frame of this character.")
+    subject = (f"SUBJECT: full body single character"
+               + (f", {gender}" if gender else "")
+               + f": {who}. The same ONE character repeated exactly {n} times. "
+               + cols + ".")
+    layout = (f"VIEW: character turnaround sheet, one row of {n} evenly spaced columns, "
+              f"equal spacing, columns never overlap, every column shows the whole body "
+              f"from head to feet, plain light neutral background in every column, "
+              f"consistent camera height across columns"
+              + (f", sheet {sheet_idx + 1} of {sheet_total}" if sheet_total > 1 else "")
+              + ".")
+    read = ("GAME-SCALE READ: chibi proportions about three heads tall, "
+            "clean silhouette readable at game sprite scale, both feet visible.")
+    tech = (f"TECHNICAL OUTPUT: {n}-column turnaround sheet, no text, no labels, "
+            "no arrows, no column borders, no numbered captions.")
+    locks = ("LOCKS: every column is the exact same character - identical face, "
+             "identical hairstyle, identical costume pieces and trims, identical color "
+             "palette, identical proportions, identical shading; only the camera angle "
+             "changes between columns.")
+    exclude = (f"EXCLUDE: {_COMMON_NEG} cropped edges, different characters in different "
+               "columns, costume changes between columns, color shifts between columns")
+    return " ".join([role, subject, layout,
+                     f"ART DIRECTION: {art_dir}.", read, tech, locks, exclude])
+
+
 def asset_negative(s: dict, kind: str) -> str:
     """负面词 = 通用 + 2.5D 视图（场景除外，它有自带取景词）+ 风格 + 时间背景 + 该类补充。"""
     style, preset = get_style(s["style"]), get_preset(s["time_preset"])
@@ -1095,7 +1268,8 @@ async def gen_variants(*, sid: str, aid: str, prompt: str | None = None,
     final_prompt = prompt or asset["prompt"]
     refs = [s["master"]["path"]]
     if use_self_ref and asset.get("path"):
-        refs.append(asset["path"])
+        # 透明帧直接当参考图，透明区会被模型当成白色 → 压到中性灰底再喂
+        refs.append(_alpha_to_ref(asset["path"]))
     variants = []
     for i in range(n):
         if _canceled(sid):
