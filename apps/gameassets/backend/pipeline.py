@@ -705,10 +705,15 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
     keys_done = 0
 
     # ---------- 第一层：身份卡 ----------
-    design = await _gen_design_sheets(
-        sid=sid, s=s, kind=kind, item=item, payload=payload,
-        master_path=master_path, spec=spec, out_dir=out_dir, aid=aid,
-        prev_design=prev_anim.get("design"))
+    # 全部朝向都已有可复用图集时连身份卡也不必再出（真续跑：零出图）
+    if all(_bank_ok(prev_banks.get(d)) for d in spec["dirs"]):
+        design = prev_anim.get("design") or {"level": spec["id"], "sheets": [],
+                                             "columns": {}}
+    else:
+        design = await _gen_design_sheets(
+            sid=sid, s=s, kind=kind, item=item, payload=payload,
+            master_path=master_path, spec=spec, out_dir=out_dir, aid=aid,
+            prev_design=prev_anim.get("design"))
 
     def _record() -> dict:
         """当前进度的素材记录（半成品 / 成品共用，anim.expected 标总数）。"""
