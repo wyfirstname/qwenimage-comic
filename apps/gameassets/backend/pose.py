@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -82,6 +83,7 @@ HEAD_RISE = 0.115
 HEAD_R = 0.125              # 头半径（卡通比例：约 3.5 头身）
 FOOT_MIN_Y = 0.045          # 脚踝离地（脚掌厚度）
 FILL = 0.86                 # 身高占画幅比例
+FILL_W = 0.92               # 横向占画幅比例（竖长画布上按宽度兜底，别把迈开的腿切了）
 
 
 # ------------------------------------------------------------
@@ -236,27 +238,50 @@ def skeleton(clip: str, idx: int) -> dict[str, tuple[float, float, float]]:
     return {k: (v[0], v[1] + dy, v[2]) for k, v in pts.items()}
 
 
-def project(pts: dict[str, tuple[float, float, float]], dir_id: str,
-            size: tuple[int, int]) -> tuple[dict[str, tuple[float, float]], int]:
-    """局部骨架 → 画布像素坐标（含朝向 yaw、相机俯角、脚底锚点）。"""
-    w, h = size
+def _flatten(pts: dict[str, tuple[float, float, float]], dir_id: str):
+    """局部三维 → 相机平面（x 横向、down 向下）。朝向 yaw + 相机俯角都在这里。"""
     yaw = math.radians(DIR_YAW.get(dir_id, 0.0))
     ca, sa = math.cos(yaw), math.sin(yaw)
     pitch = math.radians(CAM_PITCH)
     cp, sp = math.cos(pitch), math.sin(pitch)
-
-    flat: dict[str, tuple[float, float]] = {}
+    out = {}
     for k, (x, y, z) in pts.items():
         cam_x = -x * ca + z * sa          # 角色右手在 yaw=0 时落在画面左侧
         cam_z = x * sa + z * ca           # 越靠镜头越「低」→ 俯视时有纵向层次
-        down = -y * cp + cam_z * sp
-        flat[k] = (cam_x, down)
+        out[k] = (cam_x, -y * cp + cam_z * sp)
+    return out
 
-    downs = [v[1] for v in flat.values()]
-    span = max(1e-6, max(downs) - min(downs))
-    scale = (FILL * h) / span
+
+@lru_cache(maxsize=256)
+def _fit(dir_id: str, clip: str, size: tuple[int, int]) -> tuple[float, float]:
+    """整段 clip 的统一取景：(缩放, 横向中心)。
+
+    为什么按「整段 8 帧的并集」而不是逐帧算：逐帧各自铺满画幅，角色会一胀一缩
+    （走路像在呼吸膨胀）；而只按高度铺满，竖长画布上侧向奔跑会把迈开的腿切掉
+    （320×640 实测直接顶到左右边）。所以两个方向都兜底，且整段共用一套比例。
+    """
+    xs: list[float] = []
+    downs: list[float] = []
+    for i in range(8):
+        for x, d in _flatten(skeleton(clip, i), dir_id).values():
+            xs.append(x)
+            downs.append(d)
+    hspan = max(1e-6, max(xs) - min(xs))
+    vspan = max(1e-6, max(downs) - min(downs))
+    w, h = size
+    scale = min(FILL * h / vspan, FILL_W * w / hspan)
+    return scale, (max(xs) + min(xs)) / 2.0
+
+
+def project(pts: dict[str, tuple[float, float, float]], dir_id: str,
+            clip: str, size: tuple[int, int]) -> tuple[dict[str, tuple[float, float]], int]:
+    """局部骨架 → 画布像素坐标（含朝向 yaw、相机俯角、脚底锚点）。"""
+    w, h = size
+    scale, cx = _fit(dir_id, clip, size)
+    flat = _flatten(pts, dir_id)
+    bottom = max(v[1] for v in flat.values())
     base_y = 0.94 * h                     # 脚底锚点：留 6% 给脚掌与阴影
-    out = {k: (w / 2 + v[0] * scale, base_y - (max(downs) - v[1]) * scale)
+    out = {k: (w / 2 + (v[0] - cx) * scale, base_y - (bottom - v[1]) * scale)
            for k, v in flat.items()}
     return out, int(round(scale))
 
@@ -264,7 +289,7 @@ def project(pts: dict[str, tuple[float, float, float]], dir_id: str,
 def render(dir_id: str, clip: str, idx: int,
            size: tuple[int, int] = (384, 384)) -> Image.Image:
     """画一张 OpenPose 控制图（黑底、彩色骨架，尺寸 = size）。"""
-    pts, scale = project(skeleton(clip, idx), dir_id, size)
+    pts, scale = project(skeleton(clip, idx), dir_id, clip, size)
     img = Image.new("RGB", size, (0, 0, 0))
     draw = ImageDraw.Draw(img)
 
