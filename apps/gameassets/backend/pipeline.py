@@ -29,7 +29,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import threading
+import time
 import traceback
 from collections import deque
 from pathlib import Path
@@ -47,7 +49,7 @@ from .presets import (ASPECTS, get_preset, asset_size, transparent_mode,
                       MONSTER_TIERS, MONSTER_TIER_ORDER, monster_tier,
                       SCENE_USAGES, scene_usage,
                       ANIM_KINDS, ANIM_LEVELS, ANIM_FRAME_SIZE, VIEW_LOCK,
-                      anim_level, anim_spec,
+                      anim_level, anim_spec, anim_confirm,
                       CLIPS, CLIP_ORDER, DIRECTIONS)
 from .styles import get_style
 
@@ -535,6 +537,12 @@ async def _stage_assets(sid: str, kind: str, opts: dict) -> None:
             store.append_log(sid, "info",
                              f"{store.STAGE_LABELS[kind]}「{name_tag}」完成 "
                              f"色调{asset['tone']['score']:.0f} {verdict}")
+        except _StageCanceled:
+            # 取消不是失败：条目退回 pending（已出的图保留），整段停下来。
+            # 之前这里被下面的 except Exception 接住，会把「取消」记成「失败」，
+            # 阶段条红着说「1/1 张失败」——用户明明按的是取消。
+            _item_update(sid, kind, real_i, status="pending", error="")
+            raise
         except Exception as exc:
             n_fail += 1
             _item_update(sid, kind, real_i, status="failed", error=str(exc))
@@ -580,6 +588,7 @@ async def _gen_design_sheets(*, sid: str, s: dict, kind: str, item: dict,
                              payload: dict, master_path: str, spec: dict,
                              out_dir: Path, aid: str,
                              prev_design: dict | None,
+                             force: bool = False,
                              on_sheet=None) -> dict:
     """第一层：身份卡（多栏 turnaround sheet）。
 
@@ -597,7 +606,8 @@ async def _gen_design_sheets(*, sid: str, s: dict, kind: str, item: dict,
         return {"level": spec["id"], "sheets": [], "columns": {}}
 
     prev = prev_design or {}
-    reuse = (prev.get("level") == spec["id"]
+    reuse = (not force
+             and prev.get("level") == spec["id"]
              and len(prev.get("sheets") or []) == ta["count"])
 
     def _exists(p: str | None) -> bool:
@@ -625,6 +635,10 @@ async def _gen_design_sheets(*, sid: str, s: dict, kind: str, item: dict,
                          f"复用已有身份卡（{len(prev.get('sheets') or [])} 张）")
         return {"level": spec["id"], "sheets": prev.get("sheets") or [],
                 "columns": prev.get("columns") or {}, "reused": True}
+    if force:
+        store.append_log(sid, "warn",
+                         f"{store.STAGE_LABELS[kind]}「{_item_tag(item, kind)}」"
+                         f"重画身份卡（旧卡作废）")
 
     neg = (asset_negative(s, kind) + ", multiple different characters, "
            "inconsistent costume between columns, inconsistent colors, "
@@ -731,6 +745,12 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
     design: dict = {"level": spec["id"], "sheets": [], "columns": {}}
     building = {"on": True}
 
+    # 人工确认（13.2）：mode 由 presets 决定；pending/approved/notes 是这一趟的运行态，
+    # 每张图的记录都带上它，前端据此在卡片上画「待确认」面板。
+    gate_mode = anim_confirm(s, item)
+    gate: dict = {"mode": gate_mode, "pending": None, "approved": {},
+                  "rounds": {}, "notes": {}}
+
     def _record() -> dict:
         """当前进度的素材记录（半成品 / 成品共用，anim.expected 标总数）。
 
@@ -790,20 +810,73 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
                          "calls_done": len(design.get("sheets") or []) + keys_done,
                          "calls_total": spec["calls_total"]},
                 "previews": previews[-16:],
+                # 人工确认：mode + 当前挂着的那一帧 + 已通过的朝向 + 各 target 重画次数
+                "gate": {"mode": gate_mode,
+                         "pending": dict(gate["pending"]) if gate["pending"] else None,
+                         "approved": dict(gate["approved"]),
+                         "rounds": dict(gate["rounds"]),
+                         "notes": dict(gate["notes"])},
             },
             "created_at": (prev or {}).get("created_at") or store.now_iso(),
         }
 
-    # ---------- 第一层：身份卡 ----------
-    # 全部朝向都已有可复用图集时连身份卡也不必再出（真续跑：零出图）
-    if all(_bank_ok(prev_banks.get(d)) for d in spec["dirs"]):
-        design = prev_anim.get("design") or {"level": spec["id"], "sheets": [],
-                                             "columns": {}}
-    else:
-        # 先占一个位：让卡片在点下「生成」的瞬间就出现，写明正在画身份卡。
-        # 第一张身份卡往往是最久的一次等待（960×640 一次出四栏），
-        # 这段空窗期不给反馈，用户只会以为失败了。
+    async def _ask(target: str, *, dir_id: str | None = None,
+                   clip: str | None = None, idx: int | None = None,
+                   path: str | None = None) -> dict:
+        """落一张待确认帧并原地等人工判定。
+
+        为什么先落库再问：这张图就是用户在等的东西，它必须立刻出现在卡片上，
+        并带上是哪个朝向、第几次重画。等的过程里阶段条显示「待确认」。
+        """
+        key = _gate_key(aid, target)
+        rnd = int(gate["rounds"].get(target) or 0) + 1
+        gate["rounds"][target] = rnd
+        dir_name = DIRECTIONS[dir_id]["name"] if dir_id else "身份卡"
+        _gate_drop(sid, key)          # 上一轮残留的点击不能算这一轮
+        gate["pending"] = {
+            "target": target, "dir": dir_id, "dir_name": dir_name,
+            "clip": clip, "clip_name": CLIPS[clip]["name"] if clip else None,
+            "idx": idx, "round": rnd,
+            "path": str(path) if path else None,
+            "url": _url_of(path) if path else None,
+            "note": gate["notes"].get(target) or "",
+            "asked_at": store.now_iso(),
+        }
+        live.update(phase="confirm", dir=dir_id, dir_name=dir_name,
+                    clip=clip, clip_name=(CLIPS[clip]["name"] if clip else None),
+                    idx=(idx or 0), count=len(spec["keys"].get(clip) or []) if clip else 0,
+                    path=str(path) if path else None,
+                    url=_url_of(path) if path else None)
         _upsert_anim_progress(sid, _record())
+        label = f"{dir_name}首帧" if dir_id else "身份卡"
+        d = await _gate_wait(sid=sid, tag=tag, aid=aid, target=target,
+                             label=label, round_no=rnd)
+        act = d.get("action") or "timeout"
+        gate["pending"] = None
+        if act == "approve":
+            gate["approved"][target] = {"at": store.now_iso(), "round": rnd,
+                                        "path": str(path) if path else None}
+            gate["notes"].pop(target, None)
+            store.append_log(sid, "info", f"{tag} {label} 人工通过（第 {rnd} 次）")
+        elif act in ("redo", "redo_design"):
+            note = str(d.get("note") or "").strip()
+            if note:
+                # 驳回理由留着——下一次出这一帧时拼进提示词（「把剑换成直剑」这类）
+                gate["notes"][target] = note
+            store.append_log(sid, "warn",
+                             f"{tag} {label} 被驳回（{act}，第 {rnd} 次）"
+                             + (f"，修正：{note}" if note else "") + "，重画")
+        elif act == "timeout":
+            store.append_log(sid, "warn",
+                             f"{tag} {label} 等待确认超时（{_GATE_TIMEOUT / 3600:.1f} 小时），"
+                             f"本阶段停止；已出图保留，点「生成」可接着做")
+        else:
+            store.append_log(sid, "warn", f"{tag} {label} 等待确认期间被取消")
+        return {"action": act, "note": d.get("note") or ""}
+
+    async def _gen_design(force: bool) -> dict:
+        """出身份卡（第一层）。force=True 表示人工驳回后重画。"""
+        _upsert_anim_progress(sid, _record())      # 先占位：点下生成就能看见卡片
 
         def _on_sheet(sheets_meta: list[dict], cols: dict[str, dict]) -> None:
             """身份卡一出来就展示：它本身就是用户最想先看到的东西。"""
@@ -815,10 +888,51 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
                         dir=None, dir_name=None, clip=None, clip_name=None)
             _upsert_anim_progress(sid, _record())
 
-        design = await _gen_design_sheets(
+        return await _gen_design_sheets(
             sid=sid, s=s, kind=kind, item=item, payload=payload,
             master_path=master_path, spec=spec, out_dir=out_dir, aid=aid,
-            prev_design=prev_anim.get("design"), on_sheet=_on_sheet)
+            prev_design=prev_anim.get("design"), force=force, on_sheet=_on_sheet)
+
+    def _abort_wait() -> None:
+        """等确认被取消/超时：把挂着的待确认帧和「生成中」标记清掉。
+
+        不清就会出现一个点不动的「通过」按钮——用户会以为界面坏了，
+        而实际上阶段已经停了（confirm 接口也会 409）。
+        """
+        gate["pending"] = None
+        building["on"] = False
+        live["phase"] = "done"
+        try:
+            _upsert_anim_progress(sid, _record())
+        except Exception as exc:            # 收尾失败不能盖掉取消本身
+            print(f"[gameassets] 清理待确认状态失败：{exc}")
+
+    def _col_of(d: str) -> tuple[str | None, str]:
+        """该朝向的参考栏路径 + 需不需要补视角词（派生向）。"""
+        if ta["where"].get(d):
+            return (design.get("columns", {}).get(d) or {}).get("path"), ""
+        dv = ta["derived"].get(d) or {}
+        return ((design.get("columns", {}).get(dv.get("from", "")) or {}).get("path"),
+                dv.get("view", ""))
+
+    # ---------- 第一层：身份卡 ----------
+    # 全部朝向都已有可复用图集时连身份卡也不必再出（真续跑：零出图、零确认）
+    if all(_bank_ok(prev_banks.get(d)) for d in spec["dirs"]):
+        design = prev_anim.get("design") or {"level": spec["id"], "sheets": [],
+                                             "columns": {}}
+    else:
+        design = await _gen_design(False)
+        if gate_mode == "design":
+            # 身份卡是多栏共用锚，它错了后面每一张都错——先确认这一张最省
+            while True:
+                sheet = (design.get("sheets") or [{}])[-1]
+                act = (await _ask("design", path=sheet.get("path")))["action"]
+                if act == "approve":
+                    break
+                if act in ("canceled", "timeout"):
+                    _abort_wait()
+                    raise _StageCanceled()
+                design = await _gen_design(True)
 
 
     for dir_id in spec["dirs"]:
@@ -832,17 +946,12 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
             continue
 
         # 该朝向的参考栏：身份卡实拍栏，或（standard 的 ne）从邻近栏 + 视角词派生
-        where = ta["where"].get(dir_id)
-        view_phrase = ""
-        if where:
-            cm = design["columns"].get(dir_id) or {}
-        else:
-            dv = ta["derived"].get(dir_id) or {}
-            cm = design["columns"].get(dv.get("from", "")) or {}
-            view_phrase = dv.get("view", "")
-        col_ref = cm.get("path")
+        col_ref, view_phrase = _col_of(dir_id)
 
         keys: dict[str, dict[int, str]] = {}
+        # 每朝向只在首帧停一次：首帧对了，后面 9 张都以它为参考，错不了多少；
+        # 首帧就歪，那 9 张全是浪费。
+        need_confirm = gate_mode != "off"
         for clip in CLIP_ORDER:
             count = spec["clips"].get(clip) or 0
             idxs = spec["keys"].get(clip) or []
@@ -850,34 +959,53 @@ async def _gen_anim_asset(*, sid: str, s: dict, kind: str, item: dict, payload: 
                 continue
             keys[clip] = {}
             for i in idxs:
-                if _canceled(sid):
-                    raise _StageCanceled()
-                prompt = asset_prompt(
-                    s, payload, transparent=tmode != "none",
-                    anim_tail=anim.key_suffix(clip, i, count, dir_id, view_phrase))
-                rec = await _gen_with_gate(
-                    sid=sid, kind=kind, item=item, prompt=prompt, negative=neg,
-                    threshold=threshold, size=(fw, fh), tmode=tmode,
-                    master_path=master_path, max_attempts=2,
-                    extra_refs=[col_ref] if col_ref else None)
+                rec: dict | None = None
+                while True:                      # 驳回就地重画这一帧，不重跑整向
+                    if _canceled(sid):
+                        raise _StageCanceled()
+                    hint = gate["notes"].get(dir_id) or ""
+                    prompt = asset_prompt(
+                        s, payload, transparent=tmode != "none",
+                        anim_tail=anim.key_suffix(clip, i, count, dir_id, view_phrase)
+                        + (f", art director's correction: {hint}" if hint else ""))
+                    rec = await _gen_with_gate(
+                        sid=sid, kind=kind, item=item, prompt=prompt, negative=neg,
+                        threshold=threshold, size=(fw, fh), tmode=tmode,
+                        master_path=master_path, max_attempts=2,
+                        extra_refs=[col_ref] if col_ref else None)
+                    # 出一张显示一张：这一张连同「正在画哪一帧」立刻落库。
+                    # idx/count 用「第几张关键姿态 / 共几张」而不是帧序号——用户看到的
+                    # 应该是「行走 2/4」，不是「行走第 4 帧 / 共 8 帧」这种内部编号。
+                    live.update(phase="keypose", dir=dir_id,
+                                dir_name=DIRECTIONS[dir_id]["name"],
+                                clip=clip, clip_name=CLIPS[clip]["name"],
+                                idx=idxs.index(i) + 1, count=len(idxs),
+                                path=rec["path"], url=_url_of(rec["path"]))
+                    previews.append({"dir": dir_id, "clip": clip, "idx": i,
+                                     "url": live["url"]})
+                    del previews[:-16]
+                    _upsert_anim_progress(sid, _record())
+                    if not need_confirm:
+                        break
+                    act = (await _ask(dir_id, dir_id=dir_id, clip=clip, idx=i,
+                                      path=rec["path"]))["action"]
+                    if act == "approve":
+                        need_confirm = False
+                        break
+                    if act in ("canceled", "timeout"):
+                        _abort_wait()
+                        raise _StageCanceled()
+                    if act == "redo_design":
+                        # 身份卡本身不对 → 换卡重画这一帧（已通过的朝向不回头，
+                        # 它们已经存成图集了；要一起换就在卡片上对它们重跑）
+                        design = await _gen_design(True)
+                        col_ref, view_phrase = _col_of(dir_id)
                 keys[clip][i] = rec["path"]
                 scores.append(float(rec["tone"]["score"]))
                 if not rec["quality"]["pass"]:
                     reasons += [r for r in rec["quality"]["reasons"]
                                 if r not in reasons]
                 keys_done += 1
-                # 出一张显示一张：这一张连同「正在画哪一帧」立刻落库。
-                # idx/count 用「第几张关键姿态 / 共几张」而不是帧序号——用户看到的
-                # 应该是「行走 2/4」，不是「行走第 4 帧 / 共 8 帧」这种内部编号。
-                live.update(phase="keypose", dir=dir_id,
-                            dir_name=DIRECTIONS[dir_id]["name"],
-                            clip=clip, clip_name=CLIPS[clip]["name"],
-                            idx=idxs.index(i) + 1, count=len(idxs),
-                            path=rec["path"], url=_url_of(rec["path"]))
-                previews.append({"dir": dir_id, "clip": clip, "idx": i,
-                                 "url": live["url"]})
-                del previews[:-16]
-                _upsert_anim_progress(sid, _record())
         frames = anim.build_frames_from_keys(keys, spec["tweens"], spec["clips"],
                                              cell, anchor)
         n_frames = sum(len(v) for v in frames.values())
@@ -942,10 +1070,110 @@ def _upsert_anim_progress(sid: str, asset: dict) -> None:
                           "label": lv.get("dir_name") or
                                    ("身份卡" if lv.get("phase") == "design" else ""),
                           "done": int(lv.get("calls_done") or 0),
-                          "total": int(lv.get("calls_total") or 0)}
+                          "total": int(lv.get("calls_total") or 0),
+                          # 停在闸门上：阶段条要显示「待确认」而不是继续假装在转
+                          "waiting": bool(lv.get("phase") == "confirm")}
         else:
             st.pop("live", None)      # 收尾清掉，别把上一项的残留挂成「当前」
     store.mutate(sid, _apply)
+
+
+# ------------------------------------------------------------
+#  人工确认闸门（13.2）
+#
+#  全自动的毛病不是「慢」，是「错得没机会刹车」：一个朝向 10 张关键姿态，
+#  首帧人物就歪了，后面 9 张都以它为参考，只会沿着歪的那张继续歪。
+#  所以每个朝向只先出 1 张确认帧，人工点通过之后才继续——错的成本从 10 张
+#  降到 1 张，而且驳回时可以把「哪里不对」写进下一张的提示词。
+#
+#  实现上不另起任务、不落半成品状态机：流水线在这里原地等（每秒查一次库），
+#  消费一条前端写下的判定。理由是这本来就是串行队列（一张显卡），等的时候
+#  没有别的活可干；而等待超时/取消就走既有的 _StageCanceled，已出素材照旧保留。
+# ------------------------------------------------------------
+_GATE_TIMEOUT = float(os.environ.get("ANIM_GATE_TIMEOUT_H", "6")) * 3600
+_GATE_POLL = 1.0
+
+
+def _gate_key(aid: str, target: str) -> str:
+    return f"{aid}:{target}"
+
+
+def _gate_take(sid: str, key: str) -> dict | None:
+    """取走一条判定（取走即删：否则下一张会立刻吃掉上一次的点击）。"""
+    box: dict = {}
+
+    def _apply(t: dict) -> None:
+        gates = (t.get("pipeline") or {}).get("gates")
+        if isinstance(gates, dict):
+            d = gates.pop(key, None)
+            if isinstance(d, dict):
+                box.update(d)
+    store.mutate(sid, _apply)
+    return box or None
+
+
+def _gate_drop(sid: str, key: str) -> None:
+    def _apply(t: dict) -> None:
+        gates = (t.get("pipeline") or {}).get("gates")
+        if isinstance(gates, dict):
+            gates.pop(key, None)
+    store.mutate(sid, _apply)
+
+
+async def _gate_wait(*, sid: str, tag: str, aid: str, target: str,
+                     label: str, round_no: int,
+                     timeout: float | None = None) -> dict:
+    """原地等人工判定。返回判定字典；超时/取消返回 {"action": "timeout"|"canceled"}。"""
+    key = _gate_key(aid, target)
+    store.append_log(sid, "info",
+                     f"{tag} 等待人工确认：{label}（第 {round_no} 次）"
+                     f"——点「通过」才继续，也可驳回重画")
+    t0 = time.monotonic()
+    limit = _GATE_TIMEOUT if timeout is None else timeout
+    while True:
+        if _canceled(sid):
+            return {"action": "canceled"}
+        d = _gate_take(sid, key)
+        if d:
+            act = str(d.get("action") or "")
+            if act in ("approve", "redo", "redo_design"):
+                return d
+            store.append_log(sid, "warn", f"{tag} 收到未知判定「{act}」，忽略继续等")
+        if time.monotonic() - t0 > limit:
+            return {"action": "timeout"}
+        await asyncio.sleep(_GATE_POLL)
+
+
+def confirm_anim(sid: str, asset_id: str, target: str, action: str = "approve",
+                 note: str = "") -> dict:
+    """前端点「通过 / 重画这一帧 / 重画身份卡」→ 写一条判定给流水线消费。
+
+    三个校验缺一不可：这条素材还在等这个 target、pending 就挂在记录上、
+    阶段确实还在跑（否则点了按钮没人接，用户只会以为按钮坏了）。
+    """
+    action = (action or "approve").strip()
+    if action not in ("approve", "redo", "redo_design"):
+        raise ValueError(f"未知动作：{action}（可选 approve / redo / redo_design）")
+    s = store.get_set(sid)
+    if not s:
+        raise ValueError("项目不存在")
+    a = next((x for x in (s.get("assets") or []) if x.get("id") == asset_id), None)
+    if not a:
+        raise ValueError("素材不存在（可能已被重跑替换）")
+    pend = (((a.get("anim") or {}).get("gate") or {}).get("pending")) or {}
+    if pend.get("target") != target:
+        raise ValueError("这一帧不在等待确认（可能已处理过）")
+    if not is_busy(sid):
+        raise ValueError("阶段已停止，没人接收这条确认；对「角色」点「生成」会接着做")
+
+    def _apply(t: dict) -> None:
+        gates = t.setdefault("pipeline", {}).setdefault("gates", {})
+        gates[_gate_key(asset_id, target)] = {
+            "action": action, "note": (note or "").strip()[:200],
+            "at": store.now_iso(), "round": int(pend.get("round") or 1)}
+    store.mutate(sid, _apply)
+    return {"ok": True, "action": action, "target": target,
+            "round": int(pend.get("round") or 1)}
 
 
 async def _gen_with_gate(*, sid: str, kind: str, item: dict, prompt: str,

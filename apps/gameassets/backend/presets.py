@@ -338,6 +338,25 @@ TWEENS: dict[str, dict[int, tuple[int, int]]] = {
 # 单个角色拖到半小时以上（用户实测主角久不出图），降到这里后单帧显著提速。
 ANIM_FRAME_SIZE = (384, 384)
 
+# ------------------------------------------------------------
+#  人工确认（13.2）
+#
+#  全自动的问题不是「慢」，是「错得没机会刹车」：一个朝向 10 张关键姿态，
+#  首帧人物就歪了，后面 9 张只会沿着歪的那张继续歪（它们都以它为参考）。
+#  所以每个朝向只先出 1 张确认帧，人工点通过后才继续——错的成本从 10 张降到 1 张。
+#
+#  off    全自动（批量跑老项目、mock 测试用）
+#  dir    每个朝向首帧确认（默认）
+#  design 身份卡也确认：身份卡是多栏共用锚，它错了后面全错
+# ------------------------------------------------------------
+ANIM_CONFIRM_MODES: dict[str, dict] = {
+    "off": {"name": "全自动", "note": "中途不停，一路跑完（错了也会把整组跑完）"},
+    "dir": {"name": "每朝向确认", "note": "每个朝向先出 1 张确认帧，通过后才继续该朝向"},
+    "design": {"name": "身份卡 + 每朝向确认", "note": "身份卡先确认，再逐朝向确认（错得最省）"},
+}
+ANIM_CONFIRM_ORDER = ["off", "dir", "design"]
+ANIM_CONFIRM_DEFAULT = "dir"
+
 
 def turnaround_spec(level_id: str | None) -> dict:
     """档位 → 身份卡规格：几张、每张几栏、每栏朝向、派生朝向、单张画幅。"""
@@ -397,6 +416,15 @@ def anim_spec(level_id: str | None) -> dict:
             "turnaround": ta,
             # 真·出图次数：身份卡（按张）+ 关键姿态（按向）。镜像向不出图。
             "calls_total": ta["count"] + keys_per_dir * len(lv["dirs"])}
+
+
+def anim_confirm(s: dict, item: dict | None = None) -> str:
+    """人工确认模式：条目覆盖 > 项目设置 > 默认（每朝向确认）。"""
+    for src in ((item or {}), (s or {}).get("anim") or {}, (s or {})):
+        mid = str((src or {}).get("anim_confirm") or "").strip()
+        if mid in ANIM_CONFIRM_MODES:
+            return mid
+    return ANIM_CONFIRM_DEFAULT
 
 
 def anim_level(s: dict, item: dict | None = None) -> str:

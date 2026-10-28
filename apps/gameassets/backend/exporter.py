@@ -229,6 +229,9 @@ def build_zip(s: dict, engine_tpl: str | None = None) -> Path:
                 "key_frames": am.get("key_frames"),
                 "interp_frames": am.get("interp_frames"),
                 "design": design_names,
+                # 人工确认（13.2）：走的哪种模式、哪些朝向是你点过头的
+                "confirm": (am.get("gate") or {}).get("mode"),
+                "confirmed_dirs": list(((am.get("gate") or {}).get("approved") or {})),
                 "banks": banks, "classic_sheet": classic_names})
         if anim_index:
             zf.writestr(f"{root}/anim/anim.json",

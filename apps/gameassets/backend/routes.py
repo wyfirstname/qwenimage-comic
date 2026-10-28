@@ -37,6 +37,7 @@ from .presets import (ASSET_KINDS, SEASONS, SEASON_ORDER, TIER_ORDER,
                       MONSTER_TIERS, MONSTER_TIER_ORDER,
                       SCENE_USAGES, SCENE_USAGE_ORDER, transparent_mode,
                       ANIM_LEVELS, ANIM_LEVEL_ORDER, ANIM_KINDS, ANIM_DEFAULT_LEVEL,
+                      ANIM_CONFIRM_MODES, ANIM_CONFIRM_ORDER, ANIM_CONFIRM_DEFAULT,
                       VIEW_LOCK, DIRECTIONS, CLIPS, anim_spec, anim_frames_of)
 from .styles import STYLE_PRESETS
 
@@ -53,6 +54,15 @@ class GenerateIn(BaseModel):
     scale: str = Field("standard", description="规模档：lite | standard | deluxe")
     desc: str = Field("", max_length=300, description="美术风格补充（可选）")
     threshold: float = Field(tonecheck.DEFAULT_THRESHOLD, ge=10, le=120)
+
+
+class AnimConfirmIn(BaseModel):
+    """人工确认一次：哪张素材、哪个确认点、通过还是重画。"""
+    asset_id: str = Field(..., description="素材 id")
+    target: str = Field(..., description="确认点：朝向 id（s/se/e/…）或 design（身份卡）")
+    action: str = Field("approve", description="approve 通过 | redo 重画这一帧 | redo_design 重画身份卡")
+    note: str = Field("", max_length=200,
+                      description="驳回理由（可选）：会拼进下一次出这张图的提示词")
 
 
 class RunIn(BaseModel):
@@ -111,6 +121,8 @@ class SettingsIn(BaseModel):
         None, description='按类提示词补充：{"character": {"extra": "...", "negative": "..."}}')
     anim_level: str | None = Field(
         None, description="项目默认动画档位：off|lite|standard|full（角色/宠物）")
+    anim_confirm: str | None = Field(
+        None, description="人工确认模式：off（全自动）|dir（每朝向首帧）|design（身份卡+每朝向）")
     artdir: dict[str, str] | None = Field(
         None, description="美术方向契约（八轴，见 /presets 的 artdir_axes）；传空对象恢复自动推导")
 
@@ -165,6 +177,11 @@ async def list_presets():
                         for k in ANIM_LEVEL_ORDER],
         "anim_kinds": list(ANIM_KINDS),
         "anim_default": ANIM_DEFAULT_LEVEL,
+        # 13.2 人工确认：每朝向首帧停下来等人点头，错了只亏 1 张
+        "anim_confirm_modes": [{"id": k, "name": ANIM_CONFIRM_MODES[k]["name"],
+                                "note": ANIM_CONFIRM_MODES[k]["note"]}
+                               for k in ANIM_CONFIRM_ORDER],
+        "anim_confirm_default": ANIM_CONFIRM_DEFAULT,
         "anim_dirs": [{"id": k, "name": DIRECTIONS[k]["name"],
                        "short": DIRECTIONS[k]["short"]} for k in DIRECTIONS],
         "clips": [{"id": k, "name": CLIPS[k]["name"], "fps": CLIPS[k]["fps"],
@@ -584,6 +601,11 @@ async def edit_settings(sid: str, body: SettingsIn):
                 raise ValueError(f"未知动画档位：{body.anim_level}"
                                  f"（可选：{', '.join(ANIM_LEVEL_ORDER)}）")
             t["anim"] = {**(t.get("anim") or {}), "anim_level": body.anim_level}
+        if body.anim_confirm is not None:
+            if body.anim_confirm not in ANIM_CONFIRM_MODES:
+                raise ValueError(f"未知确认模式：{body.anim_confirm}"
+                                 f"（可选：{', '.join(ANIM_CONFIRM_ORDER)}）")
+            t["anim"] = {**(t.get("anim") or {}), "anim_confirm": body.anim_confirm}
         if body.prompts is not None:
             from .presets import CLASS_LABELS
             bad = set(body.prompts) - set(ASSET_KINDS)
@@ -712,6 +734,19 @@ async def design_sheet(sid: str, aid: str, sheet: int = 0):
     return {"url": item.get("url") or exporter.export_url(Path(item["path"])),
             "meta": item, "sheets": len(sheets),
             "columns": (a["anim"].get("design") or {}).get("columns") or {}}
+
+
+@router.post("/sets/{sid}/anim/confirm",
+             summary="人工确认：通过 / 重画这一帧 / 重画身份卡（每朝向首帧停下等这一步）")
+async def anim_confirm(sid: str, body: AnimConfirmIn):
+    if not store.get_set(sid):
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "项目不存在"})
+    try:
+        return pipeline.confirm_anim(sid, body.asset_id, body.target,
+                                     body.action, body.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=409,
+                            detail={"code": "NO_PENDING", "message": str(exc)})
 
 
 @router.post("/sets/{sid}/simulate", summary="仿真测试：逐张体检 + 按场景合成模拟游戏画面（同步，秒级）")

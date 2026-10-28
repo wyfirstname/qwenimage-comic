@@ -170,6 +170,7 @@ def _write(data: dict) -> None:
 
 def make_set(*, name: str, idea: str, style: str, style_name: str, time_preset: str,
              time_name: str, desc: str, threshold: float, scale: str) -> dict:
+    from .presets import ANIM_CONFIRM_DEFAULT      # 单一出处，避免两处默认值漂移
     return {
         "id": new_id("gas"),
         "name": name,
@@ -181,7 +182,9 @@ def make_set(*, name: str, idea: str, style: str, style_name: str, time_preset: 
         "desc": desc,
         "threshold": threshold,
         "scale": scale,
-        "anim": {"anim_level": "lite"},   # 角色/宠物动画档位（2.5D 45° 帧集）
+        "anim": {"anim_level": "lite",        # 角色/宠物动画档位（2.5D 45° 帧集）
+                 # 人工确认：每个朝向先出 1 张确认帧，通过后才继续（13.2）
+                 "anim_confirm": ANIM_CONFIRM_DEFAULT},
         "artdir": None,          # 美术方向契约（八轴，规则推导/用户手填）
         "artdir_edited": False,  # 用户手填过 → 自动推导不再覆盖
         "plan": None,            # 策划方案（plan 阶段产出）
